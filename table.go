@@ -32,7 +32,7 @@ func (c Column[T]) Secret() Column[T] { c.secret = true; return c }
 // TableSpec declares one table of rows T keyed by K: the qualified
 // name, the default order of List, optional SoftDelete config, and the row
 // type's db tags, read once by Define.
-// Tag options: key, serial, tenant, deleted, version, once, json, zero, array, secret.
+// Tag options: key, serial, scope, deleted, version, once, json, zero, array, secret.
 type TableSpec[T, K any] struct {
 	Name, Order string
 	Columns     []Column[T]
@@ -49,23 +49,23 @@ type TableSpec[T, K any] struct {
 // access modes are fixed by Define.
 type Table[T, K, S any] struct {
 	descriptor[T, S]
-	order                    string
-	readOnly, allowDelete    bool
-	keys                     []int
-	keyBinders               []func(*K) any
-	keyBuilder               func(*T) K
-	tenant, deleted, version int // column index, -1 when absent
-	del                      deleteSpec
-	serial                   bool
-	stmt                     statements
+	order                   string
+	readOnly, allowDelete   bool
+	keys                    []int
+	keyBinders              []func(*K) any
+	keyBuilder              func(*T) K
+	scope, deleted, version int // column index, -1 when absent
+	del                     deleteSpec
+	serial                  bool
+	stmt                    statements
 }
 
 type statements struct {
 	columns, get, lock, insert, update, count, list string
 	values, insertPrefix                            string
-	keyWhere, platformKeyWhere                      string
-	deleteStmt, platformDelete                      string
-	platformGet, platformLock                       string
+	keyWhere, unscopedKeyWhere                      string
+	deleteStmt, unscopedDelete                      string
+	unscopedGet, unscopedLock                       string
 	insertColumns, setColumns, onceColumns          []int
 }
 
@@ -74,7 +74,7 @@ type role string
 const (
 	plain       role = ""
 	keyRole     role = "key"
-	tenantRole  role = "tenant"
+	scopeRole   role = "scope"
 	deletedRole role = "deleted"
 	versionRole role = "version"
 )
@@ -128,16 +128,16 @@ func Define[T, K, S any](r *Registry[S], spec TableSpec[T, K]) *Table[T, K, S] {
 		stmts["insert"] = d.stmt.insert
 		stmts["update"] = d.stmt.update
 	}
-	if d.stmt.platformGet != d.stmt.get {
-		stmts["platform_get"] = d.stmt.platformGet
+	if d.stmt.unscopedGet != d.stmt.get {
+		stmts["unscoped_get"] = d.stmt.unscopedGet
 		if !d.readOnly {
-			stmts["platform_lock"] = d.stmt.platformLock
+			stmts["unscoped_lock"] = d.stmt.unscopedLock
 		}
 	}
 	if d.allowDelete {
 		stmts["delete"] = d.stmt.deleteStmt
-		if d.stmt.platformDelete != d.stmt.deleteStmt {
-			stmts["platform_delete"] = d.stmt.platformDelete
+		if d.stmt.unscopedDelete != d.stmt.deleteStmt {
+			stmts["unscoped_delete"] = d.stmt.unscopedDelete
 		}
 	}
 	d.entry = r.record(Definition{
@@ -168,7 +168,7 @@ func TryDefine[T, K, S any](r *Registry[S], spec TableSpec[T, K]) (*Table[T, K, 
 	t := &Table[T, K, S]{
 		descriptor: newDescriptor[T](r, spec.Name),
 		order:      spec.Order, readOnly: spec.ReadOnly, allowDelete: spec.AllowDelete,
-		tenant: -1, deleted: -1, version: -1,
+		scope: -1, deleted: -1, version: -1,
 	}
 	if err := walkFields(rt, nil, "", nil, func(f reflect.StructField, idx []int, _, tag string) error { return t.tagged(f, idx, tag, fail) }, fail); err != nil {
 		return nil, err
@@ -204,7 +204,7 @@ func parseColumnTag(tag string) (parsedTag, error) {
 	options := map[string]bool{}
 	for _, option := range parts[1:] {
 		switch option {
-		case "key", "tenant", "deleted", "version":
+		case "key", "scope", "deleted", "version":
 			roles = append(roles, role(option))
 		case "serial", "once", "json", "zero", "array", "secret":
 		default:
@@ -249,8 +249,8 @@ func (t *Table[T, K, S]) tagged(f reflect.StructField, index []int, tag string, 
 	if err := t.role(name, r, f.Type, fail); err != nil {
 		return err
 	}
-	if t.reg.tenantType != nil && f.Type == t.reg.tenantType && r != tenantRole {
-		return fail("column %s: %s maps only the tenant column", name, t.reg.tenantType)
+	if t.reg.scopeType != nil && f.Type == t.reg.scopeType && r != scopeRole {
+		return fail("column %s: %s maps only the scope column", name, t.reg.scopeType)
 	}
 	wrap, err := t.reg.resolve(f.Type, options["json"], options["zero"], options["array"])
 	if err != nil {
@@ -273,11 +273,11 @@ func (t *Table[T, K, S]) role(name string, r role, ft reflect.Type, fail func(st
 	case keyRole:
 		t.keys = append(t.keys, len(t.cols))
 		return nil
-	case tenantRole:
-		if ft != t.reg.tenantType {
-			return fail("tenant column %s must be %s", name, t.reg.tenantType)
+	case scopeRole:
+		if ft != t.reg.scopeType {
+			return fail("scope column %s must be %s", name, t.reg.scopeType)
 		}
-		slot = &t.tenant
+		slot = &t.scope
 	case deletedRole:
 		slot = &t.deleted
 	case versionRole:
@@ -306,7 +306,7 @@ func (t *Table[T, K, S]) derive() {
 	names := make([]string, len(t.cols))
 	for i, c := range t.cols {
 		names[i] = c.name
-		if c.role != keyRole && c.role != tenantRole && !c.once {
+		if c.role != keyRole && c.role != scopeRole && !c.once {
 			t.stmt.setColumns = append(t.stmt.setColumns, i)
 		}
 		if c.once {
@@ -331,15 +331,15 @@ func (t *Table[T, K, S]) derive() {
 	}
 	next := len(t.keys) + 1
 	where := byKey + alive
-	if t.tenant >= 0 {
-		where = byKey + " AND " + names[t.tenant] + " = $" + strconv.Itoa(next) + alive
+	if t.scope >= 0 {
+		where = byKey + " AND " + names[t.scope] + " = $" + strconv.Itoa(next) + alive
 		next++
 	}
-	t.stmt.keyWhere, t.stmt.platformKeyWhere = where, byKey+alive
+	t.stmt.keyWhere, t.stmt.unscopedKeyWhere = where, byKey+alive
 	t.stmt.get = "SELECT " + t.stmt.columns + " FROM " + t.name + where
 	t.stmt.lock = t.stmt.get + " FOR UPDATE"
-	t.stmt.platformGet = "SELECT " + t.stmt.columns + " FROM " + t.name + byKey + alive
-	t.stmt.platformLock = t.stmt.platformGet + " FOR UPDATE"
+	t.stmt.unscopedGet = "SELECT " + t.stmt.columns + " FROM " + t.name + byKey + alive
+	t.stmt.unscopedLock = t.stmt.unscopedGet + " FOR UPDATE"
 
 	insertNames, holders := make([]string, 0, len(names)), make([]string, 0, len(names))
 	for _, i := range t.stmt.insertColumns {
@@ -368,7 +368,7 @@ func (t *Table[T, K, S]) derive() {
 	}
 	t.stmt.update = "UPDATE " + t.name + " SET " + strings.Join(sets, ", ") + where + cas
 	t.stmt.deleteStmt = "DELETE FROM " + t.name + where
-	t.stmt.platformDelete = "DELETE FROM " + t.name + byKey + alive
+	t.stmt.unscopedDelete = "DELETE FROM " + t.name + byKey + alive
 	t.stmt.count = "SELECT count(*) FROM " + t.name + " WHERE true"
 	t.stmt.list = "SELECT " + t.stmt.columns + " FROM " + t.name + " WHERE true"
 }

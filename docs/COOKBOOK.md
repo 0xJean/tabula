@@ -2,13 +2,13 @@
 
 Practical recipes showing how applications bind and use Tabula without an ORM.
 
-## 1. Setup with `stdsql` and a tenant/RLS scope plug-in
+## 1. Setup with `stdsql` and a row-scope / RLS plug-in
 
 ```go
 type TenantID string
 
 var reg = tabula.NewRegistry(tabula.RegistryConfig[TenantID]{
-    TenantID:    func(t TenantID) any { return string(t) },
+    ScopeID:     func(t TenantID) any { return string(t) },
     ScopeLog:    func(t TenantID) string { return string(t) },
     ArrayArg:    pqdriver.Array,
     ArrayColumn: pqdriver.ArrayColumn,
@@ -31,14 +31,14 @@ runner := stdsql.NewRunner(db, stdsql.ScopePolicy[TenantID]{
 })
 ```
 
-For single-tenant applications, pass `stdsql.NoScopePolicy()` with scope type `struct{}`.
+For single-scope applications, pass `stdsql.NoScopePolicy()` with scope type `struct{}`.
 
 ## 2. Single-table CRUD with optimistic locking and `once` protection
 
 ```go
-type Account struct {
+type Record struct {
     ID           int64      `db:"id,key,serial"`
-    Tenant       TenantID   `db:"tenant_id,tenant"`
+    Tenant       TenantID   `db:"tenant_id,scope"`
     Code         string     `db:"code"`
     PasswordHash string     `db:"password_hash,secret"`
     CreatedBy    string     `db:"created_by,once"`
@@ -46,8 +46,8 @@ type Account struct {
     DeletedAt    *time.Time `db:"deleted_at,deleted"`
 }
 
-var accounts = tabula.Define(reg, tabula.TableSpec[Account, int64]{
-    Name:  "public.accounts",
+var records = tabula.Define(reg, tabula.TableSpec[Record, int64]{
+    Name:  "public.records",
     Order: "id ASC",
 })
 ```
@@ -55,20 +55,20 @@ var accounts = tabula.Define(reg, tabula.TableSpec[Account, int64]{
 Inside `runner.Within(ctx, tenant, ...)`:
 
 ```go
-r := accounts.Bind(sess)
+r := records.Bind(sess)
 row, err := r.Lock(ctx, id) // FOR UPDATE; remembers once columns
 if err != nil { return err }
-if row == nil { return ErrAccountMissing } // application error
+if row == nil { return ErrRecordMissing } // application error
 row.Code = "updated"
 row.Version++
-err = r.Save(ctx, *row)             // checks version CAS and once columns
+err = r.Save(ctx, *row) // checks version CAS and once columns
 ```
 
 ## 3. Conditional state transitions (`UpdateWhere` / `SetWhere`)
 
 ```go
-row.Status = "settled"
-matched, err := r.SetWhere(ctx, row, []string{"status"}, "status = ?", "pending")
+row.Status = "published"
+matched, err := r.SetWhere(ctx, row, []string{"status"}, "status = ?", "draft")
 if err != nil {
     return err
 }
@@ -89,7 +89,7 @@ var upsertConfig = configs.DefineUpsert("upsert_key", tabula.UpsertSpec{
 changed, err := configs.Bind(sess).Upsert(ctx, upsertConfig, &row)
 ```
 
-`DefineUpsert` refuses `key`, `tenant`, and `once` columns in `Update` at start-up and
+`DefineUpsert` refuses `key`, `scope`, and `once` columns in `Update` at start-up and
 registers the SQL into `Definition.Statements` so `sqlcheck` verifies it against PostgreSQL.
 
 ## 5. JOIN projection with nested `View` prefixes
@@ -148,7 +148,7 @@ For thousands of rows in one batch, `pgxdriver.CopyFrom` streams directly over P
 binary `COPY` protocol while reusing your `Table` descriptor and codecs:
 
 ```go
-n, err := pgxdriver.CopyFrom(ctx, pgxSession, accounts, batch)
+n, err := pgxdriver.CopyFrom(ctx, pgxSession, records, batch)
 ```
 
 ## 9. CI verification with `tabula check`

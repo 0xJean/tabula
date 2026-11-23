@@ -16,17 +16,17 @@ type Reader interface {
 // Pool owns connections opened with default_transaction_read_only=on.
 type Pool[S any] struct {
 	reader   Reader
-	platform func(S) bool
+	unscoped func(S) bool
 	close    func() error
 }
 
-func NewPool[S any](r Reader, platform func(S) bool, close func() error) *Pool[S] {
-	return &Pool[S]{reader: r, platform: platform, close: close}
+func NewPool[S any](r Reader, unscoped func(S) bool, close func() error) *Pool[S] {
+	return &Pool[S]{reader: r, unscoped: unscoped, close: close}
 }
 
 // Session binds a scope without acquiring a connection or starting a transaction.
 func (p *Pool[S]) Session(scope S) tabula.Session[S] {
-	return &session[S]{reader: p.reader, scope: scope, platform: p.platform != nil && p.platform(scope)}
+	return &session[S]{reader: p.reader, scope: scope, unscoped: p.unscoped != nil && p.unscoped(scope)}
 }
 
 // Close releases the owned connection pool.
@@ -35,11 +35,11 @@ func (p *Pool[S]) Close() error { return p.close() }
 type session[S any] struct {
 	reader   Reader
 	scope    S
-	platform bool
+	unscoped bool
 }
 
-func (s *session[S]) Tenant() S      { return s.scope }
-func (s *session[S]) Platform() bool { return s.platform }
+func (s *session[S]) Scope() S       { return s.scope }
+func (s *session[S]) Unscoped() bool { return s.unscoped }
 func (s *session[S]) ReadOnly() bool { return true }
 func (s *session[S]) Exec(context.Context, string, ...any) (int64, error) {
 	return 0, tabula.ErrReadOnly

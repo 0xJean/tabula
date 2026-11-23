@@ -12,7 +12,7 @@ type customTenant string
 
 type customRow struct {
 	ID        int64        `db:"id,key,serial"`
-	Tenant    customTenant `db:"tenant_id,tenant"`
+	Tenant    customTenant `db:"tenant_id,scope"`
 	Code      string       `db:"code"`
 	CreatedBy string       `db:"created_by,once"`
 	Version   int          `db:"version,version"`
@@ -21,7 +21,7 @@ type customRow struct {
 
 type fakeSession struct {
 	tenant   customTenant
-	platform bool
+	unscoped bool
 
 	lastQuery string
 	lastArgs  []any
@@ -30,8 +30,8 @@ type fakeSession struct {
 	eachRows  [][]any
 }
 
-func (f *fakeSession) Tenant() customTenant { return f.tenant }
-func (f *fakeSession) Platform() bool       { return f.platform }
+func (f *fakeSession) Scope() customTenant { return f.tenant }
+func (f *fakeSession) Unscoped() bool      { return f.unscoped }
 func (f *fakeSession) Exec(_ context.Context, query string, args ...any) (int64, error) {
 	f.lastQuery, f.lastArgs = query, args
 	return f.execRows, nil
@@ -80,7 +80,7 @@ func (f *fakeSession) Each(_ context.Context, query string, args []any, decode f
 
 func TestStandaloneRegistryAndRowsFlow(t *testing.T) {
 	reg := NewRegistry(RegistryConfig[customTenant]{
-		TenantID: func(s customTenant) any { return string(s) },
+		ScopeID: func(s customTenant) any { return string(s) },
 	})
 	tbl := Define(reg, TableSpec[customRow, int64]{
 		Name:  "public.custom_items",

@@ -41,11 +41,11 @@ func TestRunnerScopeSavepointAndRetry(t *testing.T) {
 	type tenant string
 	type note struct {
 		ID     int64  `db:"id,key,serial"`
-		Tenant tenant `db:"tenant_id,tenant"`
+		Tenant tenant `db:"tenant_id,scope"`
 		Body   string `db:"body"`
 	}
 	reg := tabula.NewRegistry(tabula.RegistryConfig[tenant]{
-		TenantID: func(s tenant) any { return string(s) },
+		ScopeID: func(s tenant) any { return string(s) },
 	})
 	notes := tabula.Define(reg, tabula.TableSpec[note, int64]{Name: schema + ".notes", Order: "id ASC"})
 
@@ -90,11 +90,15 @@ func TestRunnerScopeSavepointAndRetry(t *testing.T) {
 		return nil
 	}))
 
-	// WithinReadOnly rejects writes in PostgreSQL.
+	// WithinReadOnly rejects derived writes immediately and maps PG 25006 to ErrReadOnly.
 	err = runner.WithinReadOnly(ctx, "t-1", func(ctx context.Context, s *stdsql.Session[tenant]) error {
+		require.True(t, s.ReadOnly())
 		row := note{Tenant: "t-1", Body: "nope"}
-		return notes.Bind(s).Insert(ctx, &row)
+		require.ErrorIs(t, notes.Bind(s).Insert(ctx, &row), tabula.ErrReadOnly)
+		_, rawErr := s.Exec(ctx, "INSERT INTO "+schema+".notes (tenant_id, body) VALUES ($1, $2)", "t-1", "nope")
+		return rawErr
 	})
+	require.ErrorIs(t, err, tabula.ErrReadOnly)
 	require.Equal(t, "25006", tabula.SQLState(err))
 
 	// WithinIsolation works with Serializable + Retry helper.

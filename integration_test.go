@@ -19,12 +19,12 @@ import (
 
 type pgTxSession[S any] struct {
 	tx       *sql.Tx
-	tenant   S
-	platform bool
+	scope    S
+	unscoped bool
 }
 
-func (s *pgTxSession[S]) Tenant() S      { return s.tenant }
-func (s *pgTxSession[S]) Platform() bool { return s.platform }
+func (s *pgTxSession[S]) Scope() S       { return s.scope }
+func (s *pgTxSession[S]) Unscoped() bool { return s.unscoped }
 func (s *pgTxSession[S]) Exec(ctx context.Context, query string, args ...any) (int64, error) {
 	res, err := s.tx.ExecContext(ctx, query, args...)
 	if err != nil {
@@ -88,11 +88,11 @@ func TestV03AgainstRealPostgres(t *testing.T) {
 			UNIQUE (tenant_id, code)
 		)`,
 		`CREATE TABLE ` + schema + `.pairs (
-			chain_code text NOT NULL,
-			symbol text NOT NULL,
-			decimals integer NOT NULL,
+			region_code text NOT NULL,
+			sku text NOT NULL,
+			priority integer NOT NULL,
 			created_by text NOT NULL,
-			PRIMARY KEY (chain_code, symbol)
+			PRIMARY KEY (region_code, sku)
 		)`,
 		`CREATE TABLE ` + schema + `.flags (
 			id bigserial PRIMARY KEY,
@@ -112,7 +112,7 @@ func TestV03AgainstRealPostgres(t *testing.T) {
 	type tenantScope string
 	type itemRow struct {
 		ID        int64       `db:"id,key,serial"`
-		Tenant    tenantScope `db:"tenant_id,tenant"`
+		Tenant    tenantScope `db:"tenant_id,scope"`
 		ParentID  *int64      `db:"parent_id"`
 		Code      string      `db:"code"`
 		Amount    int         `db:"amount"`
@@ -125,7 +125,7 @@ func TestV03AgainstRealPostgres(t *testing.T) {
 	}
 
 	reg := tabula.NewRegistry(tabula.RegistryConfig[tenantScope]{
-		TenantID:    func(s tenantScope) any { return string(s) },
+		ScopeID:     func(s tenantScope) any { return string(s) },
 		ArrayArg:    pqdriver.Array,
 		ArrayColumn: pqdriver.ArrayColumn,
 	})
@@ -148,11 +148,11 @@ func TestV03AgainstRealPostgres(t *testing.T) {
 		require.NoError(t, err)
 		defer func() { _ = tx.Rollback() }()
 
-		sess := &pgTxSession[tenantScope]{tx: tx, tenant: "t1"}
+		sess := &pgTxSession[tenantScope]{tx: tx, scope: "t1"}
 		r := items.Bind(sess)
 
 		// InsertReturning populates serial id and DB-generated created_at.
-		row := itemRow{Tenant: "t1", Code: "btc", Amount: 100, Tags: []string{"l1", "pow"}, CreatedBy: "alice", Version: 1, CreatedAt: time.Now().UTC()}
+		row := itemRow{Tenant: "t1", Code: "alpha", Amount: 100, Tags: []string{"core", "featured"}, CreatedBy: "alice", Version: 1, CreatedAt: time.Now().UTC()}
 		require.NoError(t, r.InsertReturning(ctx, &row, "id", "created_at"))
 		require.NotZero(t, row.ID)
 		require.False(t, row.CreatedAt.IsZero())
@@ -177,18 +177,18 @@ func TestV03AgainstRealPostgres(t *testing.T) {
 
 		// SetWhere: conditional partial update.
 		row.Note = "verified"
-		matched, err = r.SetWhere(ctx, row, []string{"note"}, "code = ?", "btc")
+		matched, err = r.SetWhere(ctx, row, []string{"note"}, "code = ?", "alpha")
 		require.NoError(t, err)
 		require.True(t, matched)
 
 		// Upsert DO NOTHING returns false on duplicate.
-		dup := itemRow{Tenant: "t1", Code: "btc", Amount: 1, CreatedBy: "bob", Version: 1, CreatedAt: time.Now().UTC()}
+		dup := itemRow{Tenant: "t1", Code: "alpha", Amount: 1, CreatedBy: "bob", Version: 1, CreatedAt: time.Now().UTC()}
 		ok, err := r.Upsert(ctx, ignoreItem, &dup)
 		require.NoError(t, err)
 		require.False(t, ok)
 
 		// Upsert DO UPDATE updates amount/note/version and returns id.
-		up := itemRow{Tenant: "t1", Code: "btc", Amount: 500, Note: "upserted", CreatedBy: "ignored_once", Version: 4, CreatedAt: time.Now().UTC()}
+		up := itemRow{Tenant: "t1", Code: "alpha", Amount: 500, Note: "upserted", CreatedBy: "ignored_once", Version: 4, CreatedAt: time.Now().UTC()}
 		ok, err = r.Upsert(ctx, upsertItem, &up)
 		require.NoError(t, err)
 		require.True(t, ok)
@@ -198,12 +198,12 @@ func TestV03AgainstRealPostgres(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "alice", got.CreatedBy, "once column was not overwritten by upsert")
 		require.Equal(t, 500, got.Amount)
-		require.Equal(t, []string{"l1", "pow"}, got.Tags)
+		require.Equal(t, []string{"core", "featured"}, got.Tags)
 
 		// InsertMany writes multiple rows in one statement.
 		require.NoError(t, r.InsertMany(ctx, []itemRow{
-			{Tenant: "t1", Code: "eth", Amount: 10, CreatedBy: "alice", Version: 1, CreatedAt: time.Now().UTC()},
-			{Tenant: "t1", Code: "sol", Amount: 20, CreatedBy: "alice", Version: 1, CreatedAt: time.Now().UTC()},
+			{Tenant: "t1", Code: "beta", Amount: 10, CreatedBy: "alice", Version: 1, CreatedAt: time.Now().UTC()},
+			{Tenant: "t1", Code: "gamma", Amount: 20, CreatedBy: "alice", Version: 1, CreatedAt: time.Now().UTC()},
 		}))
 		all, err := r.Find(ctx, nil, tabula.Listing{})
 		require.NoError(t, err)
@@ -212,7 +212,7 @@ func TestV03AgainstRealPostgres(t *testing.T) {
 		// Real PostgreSQL constraint errors map to distinct sentinels.
 		_, err = tx.ExecContext(ctx, "SAVEPOINT sp_err")
 		require.NoError(t, err)
-		err = r.Insert(ctx, &itemRow{Tenant: "t1", Code: "eth", Amount: 1, CreatedBy: "a", Version: 1, CreatedAt: time.Now().UTC()})
+		err = r.Insert(ctx, &itemRow{Tenant: "t1", Code: "beta", Amount: 1, CreatedBy: "a", Version: 1, CreatedAt: time.Now().UTC()})
 		require.ErrorIs(t, err, tabula.ErrUnique)
 		_, _ = tx.ExecContext(ctx, "ROLLBACK TO SAVEPOINT sp_err")
 
@@ -227,21 +227,21 @@ func TestV03AgainstRealPostgres(t *testing.T) {
 	})
 
 	t.Run("composite_keys_and_configurable_soft_delete", func(t *testing.T) {
-		noTenantReg := tabula.NewRegistry(tabula.RegistryConfig[struct{}]{})
+		unscopedReg := tabula.NewRegistry(tabula.RegistryConfig[struct{}]{})
 
 		type pairKey struct {
-			Chain  string `db:"chain_code"`
-			Symbol string `db:"symbol"`
+			Region string `db:"region_code"`
+			SKU    string `db:"sku"`
 		}
 		type pairRow struct {
-			Chain     string `db:"chain_code,key"`
-			Symbol    string `db:"symbol,key"`
-			Decimals  int    `db:"decimals"`
+			Region    string `db:"region_code,key"`
+			SKU       string `db:"sku,key"`
+			Priority  int    `db:"priority"`
 			CreatedBy string `db:"created_by,once"`
 		}
-		pairs := tabula.Define(noTenantReg, tabula.TableSpec[pairRow, pairKey]{
+		pairs := tabula.Define(unscopedReg, tabula.TableSpec[pairRow, pairKey]{
 			Name:  schema + ".pairs",
-			Order: "chain_code ASC, symbol ASC",
+			Order: "region_code ASC, sku ASC",
 		})
 
 		type flagRow struct {
@@ -249,7 +249,7 @@ func TestV03AgainstRealPostgres(t *testing.T) {
 			Name      string `db:"name"`
 			IsDeleted bool   `db:"is_deleted,deleted"`
 		}
-		flags := tabula.Define(noTenantReg, tabula.TableSpec[flagRow, int64]{
+		flags := tabula.Define(unscopedReg, tabula.TableSpec[flagRow, int64]{
 			Name: schema + ".flags",
 		})
 
@@ -258,7 +258,7 @@ func TestV03AgainstRealPostgres(t *testing.T) {
 			Code   string `db:"code"`
 			Status string `db:"status,deleted"`
 		}
-		orders := tabula.Define(noTenantReg, tabula.TableSpec[orderRow, int64]{
+		orders := tabula.Define(unscopedReg, tabula.TableSpec[orderRow, int64]{
 			Name:       schema + ".orders",
 			SoftDelete: &tabula.SoftDelete{DeletedValue: "deleted"},
 		})
@@ -270,21 +270,21 @@ func TestV03AgainstRealPostgres(t *testing.T) {
 
 		pr := pairs.Bind(sess)
 		require.NoError(t, pr.InsertMany(ctx, []pairRow{
-			{Chain: "ETH", Symbol: "USDC", Decimals: 6, CreatedBy: "sys"},
-			{Chain: "SOL", Symbol: "USDT", Decimals: 6, CreatedBy: "sys"},
+			{Region: "US", SKU: "WIDGET", Priority: 6, CreatedBy: "sys"},
+			{Region: "EU", SKU: "GADGET", Priority: 6, CreatedBy: "sys"},
 		}))
 		locked, err := pr.LockMany(ctx, []pairKey{
-			{Chain: "SOL", Symbol: "USDT"},
-			{Chain: "ETH", Symbol: "USDC"},
+			{Region: "US", SKU: "WIDGET"},
+			{Region: "EU", SKU: "GADGET"},
 		})
 		require.NoError(t, err)
 		require.Len(t, locked, 2)
-		require.Equal(t, "ETH", locked[0].Chain)
-		locked[0].Decimals = 18
+		require.Equal(t, "EU", locked[0].Region)
+		locked[0].Priority = 18
 		require.NoError(t, pr.Save(ctx, locked[0]))
-		gotPair, err := pr.Get(ctx, pairKey{Chain: "ETH", Symbol: "USDC"})
+		gotPair, err := pr.Get(ctx, pairKey{Region: "EU", SKU: "GADGET"})
 		require.NoError(t, err)
-		require.Equal(t, 18, gotPair.Decimals)
+		require.Equal(t, 18, gotPair.Priority)
 
 		// Boolean soft delete.
 		fr := flags.Bind(sess)
@@ -314,7 +314,7 @@ func TestV03AgainstRealPostgres(t *testing.T) {
 		tx, err := db.BeginTx(ctx, nil)
 		require.NoError(t, err)
 		defer func() { _ = tx.Rollback() }()
-		sess := &pgTxSession[tenantScope]{tx: tx, tenant: "tk"}
+		sess := &pgTxSession[tenantScope]{tx: tx, scope: "tk"}
 
 		var parentID int64
 		require.NoError(t, tx.QueryRowContext(ctx, `INSERT INTO `+schema+`.parents (name) VALUES ('primary') RETURNING id`).Scan(&parentID))
@@ -385,46 +385,46 @@ func TestV03AgainstRealPostgres(t *testing.T) {
 	})
 
 	t.Run("physical_delete_and_readonly_table", func(t *testing.T) {
-		_, err := db.ExecContext(ctx, `CREATE TABLE `+schema+`.tokens (id bigserial PRIMARY KEY, tenant_id text NOT NULL, code text NOT NULL)`)
+		_, err := db.ExecContext(ctx, `CREATE TABLE `+schema+`.entries (id bigserial PRIMARY KEY, tenant_id text NOT NULL, code text NOT NULL)`)
 		require.NoError(t, err)
-		type tokenRow struct {
+		type entryRow struct {
 			ID     int64       `db:"id,key,serial"`
-			Tenant tenantScope `db:"tenant_id,tenant"`
+			Tenant tenantScope `db:"tenant_id,scope"`
 			Code   string      `db:"code"`
 		}
-		tokTbl := tabula.Define(reg, tabula.TableSpec[tokenRow, int64]{
-			Name:        schema + ".tokens",
+		entryTbl := tabula.Define(reg, tabula.TableSpec[entryRow, int64]{
+			Name:        schema + ".entries",
 			AllowDelete: true,
 		})
-		roTbl := tabula.Define(reg, tabula.TableSpec[tokenRow, int64]{
-			Name:     schema + ".tokens",
+		roTbl := tabula.Define(reg, tabula.TableSpec[entryRow, int64]{
+			Name:     schema + ".entries",
 			ReadOnly: true,
 		})
 
 		tx, err := db.BeginTx(ctx, nil)
 		require.NoError(t, err)
 		defer func() { _ = tx.Rollback() }()
-		sess := &pgTxSession[tenantScope]{tx: tx, tenant: "td"}
-		tr := tokTbl.Bind(sess)
+		sess := &pgTxSession[tenantScope]{tx: tx, scope: "td"}
+		er := entryTbl.Bind(sess)
 
-		t1 := tokenRow{Tenant: "td", Code: "k1"}
-		t2 := tokenRow{Tenant: "td", Code: "k2"}
-		t3 := tokenRow{Tenant: "td", Code: "k2"}
-		require.NoError(t, tr.Insert(ctx, &t1))
-		require.NoError(t, tr.Insert(ctx, &t2))
-		require.NoError(t, tr.Insert(ctx, &t3))
+		e1 := entryRow{Tenant: "td", Code: "k1"}
+		e2 := entryRow{Tenant: "td", Code: "k2"}
+		e3 := entryRow{Tenant: "td", Code: "k2"}
+		require.NoError(t, er.Insert(ctx, &e1))
+		require.NoError(t, er.Insert(ctx, &e2))
+		require.NoError(t, er.Insert(ctx, &e3))
 
 		// ReadOnly table can read but refuses writes.
-		got, err := roTbl.Bind(sess).Get(ctx, t1.ID)
+		got, err := roTbl.Bind(sess).Get(ctx, e1.ID)
 		require.NoError(t, err)
 		require.Equal(t, "k1", got.Code)
-		require.ErrorIs(t, roTbl.Bind(sess).Delete(ctx, t1.ID), tabula.ErrReadOnly)
+		require.ErrorIs(t, roTbl.Bind(sess).Delete(ctx, e1.ID), tabula.ErrReadOnly)
 
 		// Physical Delete by key and DeleteWhere.
-		require.NoError(t, tr.Delete(ctx, t1.ID))
-		require.ErrorIs(t, tr.Delete(ctx, t1.ID), tabula.ErrConflict)
+		require.NoError(t, er.Delete(ctx, e1.ID))
+		require.ErrorIs(t, er.Delete(ctx, e1.ID), tabula.ErrConflict)
 
-		deleted, err := tr.DeleteWhere(ctx, "code = ?", "k2")
+		deleted, err := er.DeleteWhere(ctx, "code = ?", "k2")
 		require.NoError(t, err)
 		require.Equal(t, int64(2), deleted)
 	})

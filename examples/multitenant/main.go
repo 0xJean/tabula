@@ -18,7 +18,7 @@ import (
 type tenant string
 type note struct {
 	ID     int64  `db:"id,key,serial"`
-	Tenant tenant `db:"tenant_id,tenant"`
+	Tenant tenant `db:"tenant_id,scope"`
 	Body   string `db:"body"`
 }
 

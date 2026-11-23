@@ -40,8 +40,8 @@ pull request.
   check and not-null violations, serialization failures, deadlocks and cancellation as
   distinct errors; the application maps them to its own error model through an
   `ErrorPolicy`.
-- **Scope is generic.** The scope type `S` (for example a tenant) is opaque to the engine.
-  Tenant predicates, row-level security variables and similar policies are supplied by the
+- **Scope is generic.** The scope type `S` (for example a tenant, workspace, or org ID) is opaque to the engine.
+  Row-scope predicates, row-level security variables and similar policies are supplied by the
   application binding.
 - **The core depends on the standard library only.** Drivers (`lib/pq`, `pgx`),
   adapters and integrations live in separate packages or modules so that users import only

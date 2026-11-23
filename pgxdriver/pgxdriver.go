@@ -34,15 +34,15 @@ func ArrayColumn(ft reflect.Type) (func(any) any, error) {
 	}
 }
 
-// ScopePolicy plugs application-specific isolation rules (tenant GUC variables,
+// ScopePolicy plugs application-specific isolation rules (scope GUC variables,
 // SET LOCAL ROLE, or SQL guards) into a pgx Runner and its Sessions.
 type ScopePolicy[S any] struct {
 	SetupTx    func(ctx context.Context, tx pgx.Tx, scope S) error
 	GuardQuery func(query string) error
-	IsPlatform func(scope S) bool
+	IsUnscoped func(scope S) bool
 }
 
-// NoScopePolicy returns an empty ScopePolicy for applications without tenant scoping.
+// NoScopePolicy returns an empty ScopePolicy for applications without row-level scoping.
 func NoScopePolicy() ScopePolicy[struct{}] { return ScopePolicy[struct{}]{} }
 
 // SetLocalConfig sets a PostgreSQL transaction-local GUC via set_config(..., true).
@@ -72,7 +72,8 @@ type Session[S any] struct {
 	readQueries
 	tx       pgx.Tx
 	scope    S
-	platform bool
+	unscoped bool
+	readOnly bool
 }
 
 // NewSession wraps an existing pgx.Tx with scope and policy.
@@ -80,14 +81,14 @@ func NewSession[S any](tx pgx.Tx, scope S, policy ScopePolicy[S]) *Session[S] {
 	if tx == nil {
 		panic("pgxdriver.NewSession: tx is required")
 	}
-	platform := false
-	if policy.IsPlatform != nil {
-		platform = policy.IsPlatform(scope)
+	unscoped := false
+	if policy.IsUnscoped != nil {
+		unscoped = policy.IsUnscoped(scope)
 	}
 	return &Session[S]{
 		tx:          tx,
 		scope:       scope,
-		platform:    platform,
+		unscoped:    unscoped,
 		readQueries: readQueries{db: tx, guard: policy.GuardQuery},
 	}
 }
@@ -95,11 +96,14 @@ func NewSession[S any](tx pgx.Tx, scope S, policy ScopePolicy[S]) *Session[S] {
 // Tx returns the underlying pgx.Tx for low-level escape hatches.
 func (s *Session[S]) Tx() pgx.Tx { return s.tx }
 
-// Tenant returns the session's bound scope value.
-func (s *Session[S]) Tenant() S { return s.scope }
+// Scope returns the session's bound scope value.
+func (s *Session[S]) Scope() S { return s.scope }
 
-// Platform reports whether this session runs in platform/cross-tenant mode.
-func (s *Session[S]) Platform() bool { return s.platform }
+// Unscoped reports whether this session bypasses row-level scope predicates.
+func (s *Session[S]) Unscoped() bool { return s.unscoped }
+
+// ReadOnly reports whether this session was opened as a READ ONLY transaction.
+func (s *Session[S]) ReadOnly() bool { return s.readOnly }
 
 func (s readQueries) check(query string) error {
 	if s.guard != nil {
@@ -115,7 +119,7 @@ func (s *Session[S]) Exec(ctx context.Context, query string, args ...any) (int64
 	}
 	tag, err := s.tx.Exec(ctx, query, args...)
 	if err != nil {
-		return 0, err
+		return 0, directReadError(err)
 	}
 	return tag.RowsAffected(), nil
 }
@@ -129,7 +133,7 @@ func (s readQueries) Scan(ctx context.Context, query string, args []any, dest ..
 	if errors.Is(err, pgx.ErrNoRows) {
 		return sql.ErrNoRows
 	}
-	return err
+	return directReadError(err)
 }
 
 // Returning executes a write with RETURNING and maps pgx.ErrNoRows to sql.ErrNoRows.
@@ -144,7 +148,7 @@ func (s readQueries) Each(ctx context.Context, query string, args []any, decode 
 	}
 	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {
-		return err
+		return directReadError(err)
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -152,7 +156,7 @@ func (s readQueries) Each(ctx context.Context, query string, args []any, decode 
 			return err
 		}
 	}
-	return rows.Err()
+	return directReadError(rows.Err())
 }
 
 // Savepoint runs fn inside a nested pgx transaction (PostgreSQL SAVEPOINT).
@@ -167,7 +171,7 @@ func (s *Session[S]) Savepoint(ctx context.Context, fn func(context.Context, *Se
 			_ = nested.Rollback(context.WithoutCancel(ctx))
 		}
 	}()
-	child := &Session[S]{tx: nested, scope: s.scope, platform: s.platform, readQueries: readQueries{db: nested, guard: s.guard}}
+	child := &Session[S]{tx: nested, scope: s.scope, unscoped: s.unscoped, readOnly: s.readOnly, readQueries: readQueries{db: nested, guard: s.guard}}
 	if err := fn(ctx, child); err != nil {
 		return err
 	}
@@ -220,6 +224,9 @@ func (r *Runner[S]) WithinTxOptions(ctx context.Context, scope S, opts pgx.TxOpt
 		}
 	}
 	sess := NewSession(tx, scope, r.policy)
+	if opts.AccessMode == pgx.ReadOnly {
+		sess.readOnly = true
+	}
 	if err := fn(ctx, sess); err != nil {
 		return err
 	}

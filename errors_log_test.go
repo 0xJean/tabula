@@ -99,7 +99,7 @@ func (h *captureHandler) snapshot() []capturedRecord {
 
 type secretRow struct {
 	ID           int64        `db:"id,key"`
-	Tenant       customTenant `db:"tenant_id,tenant"`
+	Tenant       customTenant `db:"tenant_id,scope"`
 	Username     string       `db:"username"`
 	PasswordHash string       `db:"password_hash,secret"`
 }
@@ -140,7 +140,7 @@ func TestLoggingSpec(t *testing.T) {
 	levelVar := NewLogLevelVar(LogOff)
 
 	reg := NewRegistry(RegistryConfig[customTenant]{
-		TenantID: func(s customTenant) any { return string(s) },
+		ScopeID:  func(s customTenant) any { return string(s) },
 		ScopeLog: func(s customTenant) string { return string(s) },
 		Errors: ErrorPolicy{
 			Sanitize: func(err error) string { return "sanitized:" + SQLState(err) },
@@ -223,7 +223,7 @@ func TestLoggingSpec(t *testing.T) {
 	handler.reset()
 	step = 5 * time.Millisecond
 	regAllowed := NewRegistry(RegistryConfig[customTenant]{
-		TenantID: func(s customTenant) any { return string(s) },
+		ScopeID: func(s customTenant) any { return string(s) },
 		Log: LogConfig{
 			Logger: logger,
 			Level:  LogAll,
@@ -255,7 +255,7 @@ func TestLoggingSpec(t *testing.T) {
 	// 5. ValuesRedacted: logs only Go type and length.
 	handler.reset()
 	regRedacted := NewRegistry(RegistryConfig[customTenant]{
-		TenantID: func(s customTenant) any { return string(s) },
+		ScopeID: func(s customTenant) any { return string(s) },
 		Log: LogConfig{
 			Logger: logger,
 			Level:  LogAll,
@@ -272,7 +272,7 @@ func TestLoggingSpec(t *testing.T) {
 	// 6. Sampling on LogAll (0.5 logs half) and per-binding WithLogger override.
 	overrideHandler := &captureHandler{}
 	regSample := NewRegistry(RegistryConfig[customTenant]{
-		TenantID: func(s customTenant) any { return string(s) },
+		ScopeID: func(s customTenant) any { return string(s) },
 		Log: LogConfig{
 			Logger: nil, // disabled on registry, enabled via WithLogger
 			Level:  LogAll,

@@ -11,7 +11,7 @@ func FuzzParseColumnTag(f *testing.F) {
 		"",
 		"id,key",
 		"id,key,serial",
-		"tenant_id,tenant",
+		"tenant_id,scope",
 		"deleted_at,deleted",
 		"version,version",
 		"created_by,once",
@@ -55,7 +55,7 @@ func FuzzParseColumnTag(f *testing.F) {
 }
 
 func FuzzFilterAnd(f *testing.F) {
-	f.Add("code = ?", "btc", "eth")
+	f.Add("code = ?", "alpha", "beta")
 	f.Add("payload ?? ? AND code = ?", "k", "v")
 	f.Add("a = ? AND b = ? AND c = ?", "1", "2")
 	f.Add("?????", "x", "y")
@@ -112,7 +112,10 @@ func FuzzGuardNoSessionEscape(f *testing.F) {
 	f.Add("SELECT set_config('app.x', '1', true)")
 	f.Add("SELECT 'SET ROLE admin' /* RESET ROLE */")
 	f.Add("/* nested /* comment */ still comment */ SET ROLE x")
+	f.Add(`SELECT E'\''; SET ROLE postgres`)
+	f.Add(`SELECT e'\''; RESET ALL`)
 	f.Fuzz(func(t *testing.T, query string) {
 		_ = GuardNoSessionEscape(query)
+		_ = GuardReadOnly(query)
 	})
 }

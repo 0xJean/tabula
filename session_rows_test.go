@@ -59,10 +59,10 @@ func (s *batchSession) Exec(_ context.Context, q string, args ...any) (int64, er
 func TestUpsertManyParameterBoundaryAndScope(t *testing.T) {
 	type row struct {
 		ID     int64        `db:"id,key"`
-		Tenant customTenant `db:"tenant_id,tenant"`
+		Tenant customTenant `db:"tenant_id,scope"`
 		Value  int          `db:"v"`
 	}
-	reg := NewRegistry(RegistryConfig[customTenant]{TenantID: func(s customTenant) any { return []byte(s) }})
+	reg := NewRegistry(RegistryConfig[customTenant]{ScopeID: func(s customTenant) any { return []byte(s) }})
 	tbl := Define(reg, TableSpec[row, int64]{Name: "items"})
 	p := tbl.DefineUpsert("up", UpsertSpec{Conflict: []string{"id"}, Update: []string{"v"}, Returning: []string{"v"}})
 	require.Contains(t, p.SQL(), "WHERE items.tenant_id = EXCLUDED.tenant_id")

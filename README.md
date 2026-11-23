@@ -28,7 +28,7 @@ The example verifies the schema, executes scoped writes and shows what each tena
 
 | Need | Tabula |
 | --- | --- |
-| Single-table CRUD | `Define(reg, TableSpec[T, K]{…})` derives get, lock, insert, save, set, soft/physical delete, count and list from `db` tags (`key`, `serial`, `tenant`, `deleted`, `version`, `once`, `json`, `zero`, `array`, `secret`), including composite struct keys and timestamp/bool/status soft delete |
+| Single-table CRUD | `Define(reg, TableSpec[T, K]{…})` derives get, lock, insert, save, set, soft/physical delete, count and list from `db` tags (`key`, `serial`, `scope`, `deleted`, `version`, `once`, `json`, `zero`, `array`, `secret`), including composite struct keys and timestamp/bool/status soft delete |
 | Conditional, upsert, delete & batch writes | `UpdateWhere`, `SetWhere`, `DefineUpsert`/`Upsert`, `Delete`/`DeleteWhere`, `InsertReturning`, `SaveReturning`, `InsertMany`, `UpsertMany`, `SetExpr` |
 | Rows of hand-written SQL (joins, views, materialized views) | `DefineView(reg, ViewSpec[T]{…})` with nested struct prefixes, `SelectAs`, `Requires`, and `RequiresFunction`: you write the SQL, Tabula decodes the rows |
 | Batch, locked & keyset reads | `GetMany`, `LockMany` (fixed key order), `Iter`, `LockBy`, `LockMode` (including `SKIP LOCKED` and `NOWAIT`), `ListKeyset`, `CountExact`/`CountNone`/`CountEstimate` |

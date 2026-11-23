@@ -10,7 +10,7 @@ import (
 
 func TestUpdateWhereAndSetWhere(t *testing.T) {
 	reg := NewRegistry(RegistryConfig[customTenant]{
-		TenantID: func(s customTenant) any { return string(s) },
+		ScopeID: func(s customTenant) any { return string(s) },
 	})
 	tbl := Define(reg, TableSpec[customRow, int64]{Name: "public.custom_items", Order: "id ASC"})
 	sess := &fakeSession{
@@ -70,11 +70,11 @@ func TestUpdateWhereAndSetWhere(t *testing.T) {
 
 func TestControlledUpsert(t *testing.T) {
 	reg := NewRegistry(RegistryConfig[customTenant]{
-		TenantID: func(s customTenant) any { return string(s) },
+		ScopeID: func(s customTenant) any { return string(s) },
 	})
 	tbl := Define(reg, TableSpec[customRow, int64]{Name: "public.custom_items"})
 
-	// Validation rejects key, tenant, once, empty conflict, unknown cols, Where on DO NOTHING.
+	// Validation rejects key, scope, once, empty conflict, unknown cols, Where on DO NOTHING.
 	for _, tc := range []struct {
 		name string
 		spec UpsertSpec
@@ -85,7 +85,7 @@ func TestControlledUpsert(t *testing.T) {
 		{"dup_conflict", UpsertSpec{Conflict: []string{"code", "code"}}, "conflict column code declared twice"},
 		{"where_do_nothing", UpsertSpec{Conflict: []string{"code"}, Where: "true"}, "Where requires at least one Update column"},
 		{"update_key", UpsertSpec{Conflict: []string{"code"}, Update: []string{"id"}}, "column id (key) cannot be updated on conflict"},
-		{"update_tenant", UpsertSpec{Conflict: []string{"code"}, Update: []string{"tenant_id"}}, "column tenant_id (tenant) cannot be updated on conflict"},
+		{"update_scope", UpsertSpec{Conflict: []string{"code"}, Update: []string{"tenant_id"}}, "column tenant_id (scope) cannot be updated on conflict"},
 		{"update_once", UpsertSpec{Conflict: []string{"code"}, Update: []string{"created_by"}}, "insert-only column created_by cannot be updated on conflict"},
 		{"unknown_returning", UpsertSpec{Conflict: []string{"code"}, Returning: []string{"ghost"}}, "returning column ghost is not declared"},
 	} {
@@ -118,7 +118,7 @@ func TestControlledUpsert(t *testing.T) {
 
 	sess := &fakeSession{tenant: "t-1", execRows: 0}
 	rows := tbl.Bind(sess)
-	row := customRow{Tenant: "t-1", Code: "btc", CreatedBy: "alice", Version: 1}
+	row := customRow{Tenant: "t-1", Code: "alpha", CreatedBy: "alice", Version: 1}
 
 	// DO NOTHING returns false when skipped.
 	ok, err := rows.Upsert(t.Context(), doNothing, &row)
@@ -146,7 +146,7 @@ func TestControlledUpsert(t *testing.T) {
 
 func TestInsertReturningSaveReturningAndInsertMany(t *testing.T) {
 	reg := NewRegistry(RegistryConfig[customTenant]{
-		TenantID: func(s customTenant) any { return string(s) },
+		ScopeID: func(s customTenant) any { return string(s) },
 	})
 	tbl := Define(reg, TableSpec[customRow, int64]{Name: "public.custom_items"})
 	sess := &fakeSession{
@@ -160,7 +160,7 @@ func TestInsertReturningSaveReturningAndInsertMany(t *testing.T) {
 	}
 	rows := tbl.Bind(sess)
 
-	row := customRow{Tenant: "t-1", Code: "eth", CreatedBy: "bob", Version: 1}
+	row := customRow{Tenant: "t-1", Code: "beta", CreatedBy: "bob", Version: 1}
 	require.NoError(t, rows.InsertReturning(t.Context(), &row, "id", "version"))
 	require.Equal(t, int64(77), row.ID)
 	require.Equal(t, 3, row.Version)
@@ -199,73 +199,73 @@ func TestInsertReturningSaveReturningAndInsertMany(t *testing.T) {
 }
 
 type pairKey struct {
-	Chain  string `db:"chain_code"`
-	Symbol string `db:"symbol"`
+	Region string `db:"region_code"`
+	SKU    string `db:"sku"`
 }
 
 type pairRow struct {
-	Chain     string       `db:"chain_code,key"`
-	Symbol    string       `db:"symbol,key"`
-	Tenant    customTenant `db:"tenant_id,tenant"`
-	Decimals  int          `db:"decimals"`
+	Region    string       `db:"region_code,key"`
+	SKU       string       `db:"sku,key"`
+	Tenant    customTenant `db:"tenant_id,scope"`
+	Priority  int          `db:"priority"`
 	CreatedBy string       `db:"created_by,once"`
 }
 
 func TestCompositeKeyTable(t *testing.T) {
 	reg := NewRegistry(RegistryConfig[customTenant]{
-		TenantID: func(s customTenant) any { return string(s) },
+		ScopeID: func(s customTenant) any { return string(s) },
 	})
 	tbl := Define(reg, TableSpec[pairRow, pairKey]{
-		Name:  "public.chain_assets",
-		Order: "chain_code ASC, symbol ASC",
+		Name:  "public.region_items",
+		Order: "region_code ASC, sku ASC",
 	})
 	def := tbl.Definition()
-	require.Equal(t, "SELECT chain_code, symbol, tenant_id, decimals, created_by FROM public.chain_assets WHERE chain_code = $1 AND symbol = $2 AND tenant_id = $3", def.Statements["get"])
-	require.Equal(t, "UPDATE public.chain_assets SET decimals = $4 WHERE chain_code = $1 AND symbol = $2 AND tenant_id = $3", def.Statements["update"])
+	require.Equal(t, "SELECT region_code, sku, tenant_id, priority, created_by FROM public.region_items WHERE region_code = $1 AND sku = $2 AND tenant_id = $3", def.Statements["get"])
+	require.Equal(t, "UPDATE public.region_items SET priority = $4 WHERE region_code = $1 AND sku = $2 AND tenant_id = $3", def.Statements["update"])
 
 	sess := &fakeSession{
 		tenant:   "t-1",
 		execRows: 1,
 		scanFn: func(dest ...any) error {
-			*dest[0].(*string) = "ETH"
-			*dest[1].(*string) = "USDC"
+			*dest[0].(*string) = "US"
+			*dest[1].(*string) = "WIDGET"
 			*dest[2].(*customTenant) = "t-1"
 			*dest[3].(*int) = 6
 			*dest[4].(*string) = "alice"
 			return nil
 		},
 		eachRows: [][]any{
-			{"ETH", "USDC", customTenant("t-1"), 6, "alice"},
+			{"US", "WIDGET", customTenant("t-1"), 6, "alice"},
 		},
 	}
 	rows := tbl.Bind(sess)
 
 	// Lock + once tracking works with composite struct key.
-	locked, err := rows.Lock(t.Context(), pairKey{Chain: "ETH", Symbol: "USDC"})
+	locked, err := rows.Lock(t.Context(), pairKey{Region: "US", SKU: "WIDGET"})
 	require.NoError(t, err)
-	require.Equal(t, "ETH", locked.Chain)
-	require.Equal(t, "USDC", locked.Symbol)
+	require.Equal(t, "US", locked.Region)
+	require.Equal(t, "WIDGET", locked.SKU)
 	locked.CreatedBy = "tampered"
 	require.ErrorIs(t, rows.Save(t.Context(), *locked), ErrOnce)
 
 	// GetMany & LockMany use PostgreSQL tuple IN and composite ORDER BY ASC.
 	_, err = rows.GetMany(t.Context(), []pairKey{
-		{Chain: "ETH", Symbol: "USDC"},
-		{Chain: "SOL", Symbol: "USDT"},
+		{Region: "US", SKU: "WIDGET"},
+		{Region: "EU", SKU: "GADGET"},
 	})
 	require.NoError(t, err)
-	require.Contains(t, sess.lastQuery, "AND ((chain_code, symbol) IN (($2, $3), ($4, $5))) ORDER BY chain_code ASC, symbol ASC")
+	require.Contains(t, sess.lastQuery, "AND ((region_code, sku) IN (($2, $3), ($4, $5))) ORDER BY region_code ASC, sku ASC")
 
-	_, err = rows.LockMany(t.Context(), []pairKey{{Chain: "ETH", Symbol: "USDC"}})
+	_, err = rows.LockMany(t.Context(), []pairKey{{Region: "US", SKU: "WIDGET"}})
 	require.NoError(t, err)
-	require.Contains(t, sess.lastQuery, "ORDER BY chain_code ASC, symbol ASC FOR UPDATE")
+	require.Contains(t, sess.lastQuery, "ORDER BY region_code ASC, sku ASC FOR UPDATE")
 
 	// Reject mismatched composite key struct.
 	type badKey struct {
-		Chain string `db:"chain_code"`
+		Region string `db:"region_code"`
 	}
 	_, err = TryDefine(reg, TableSpec[pairRow, badKey]{Name: "public.bad"})
-	require.ErrorContains(t, err, "missing key column symbol")
+	require.ErrorContains(t, err, "missing key column sku")
 }
 
 func TestConfigurableSoftDelete(t *testing.T) {
@@ -342,8 +342,8 @@ type noopSession struct {
 	lastSQL  string
 }
 
-func (n *noopSession) Tenant() struct{} { return struct{}{} }
-func (n *noopSession) Platform() bool   { return false }
+func (n *noopSession) Scope() struct{} { return struct{}{} }
+func (n *noopSession) Unscoped() bool  { return false }
 func (n *noopSession) Exec(_ context.Context, q string, _ ...any) (int64, error) {
 	n.lastSQL = q
 	return n.execRows, nil

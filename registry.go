@@ -23,11 +23,11 @@ import (
 // Direct pools implement this interface. Each must close its cursor and stop
 // on the first callback error. A session may implement ReadOnly() bool to
 // decline derived writes and locking reads before any SQL is sent.
-// S is the host application's scope value (for example a tenant scope, or
-// struct{} for applications without row-level tenant scoping).
+// S is the host application's row-scope value (for example a tenant, org, or
+// workspace ID, or struct{} for applications without row-level scoping).
 type Session[S any] interface {
-	Tenant() S
-	Platform() bool
+	Scope() S
+	Unscoped() bool
 	Exec(ctx context.Context, query string, args ...any) (int64, error)
 	Scan(ctx context.Context, query string, args []any, dest ...any) error
 	Returning(ctx context.Context, query string, args []any, dest ...any) error
@@ -49,12 +49,12 @@ type ErrorPolicy struct {
 type RegistryConfig[S any] struct {
 	// Prefix labels panic and declaration error messages (defaults to "tabula").
 	Prefix string
-	// TenantID extracts the raw SQL bind argument from a scope value S.
-	// When omitted, the scope value itself identifies the tenant.
-	TenantID func(S) any
-	// TenantWrap wraps a *S pointer into a sql.Scanner / driver.Valuer.
+	// ScopeID extracts the raw SQL bind argument from a scope value S.
+	// When omitted, the scope value itself identifies the row scope.
+	ScopeID func(S) any
+	// ScopeWrap wraps a *S pointer into a sql.Scanner / driver.Valuer.
 	// Optional when S already implements sql.Scanner and driver.Valuer.
-	TenantWrap func(*S) any
+	ScopeWrap func(*S) any
 	// ScopeLog formats a scope value S into the "tabula.scope" log attribute.
 	// When nil, "tabula.scope" is omitted from log entries.
 	ScopeLog func(S) string
@@ -80,8 +80,8 @@ type RegistryConfig[S any] struct {
 // declare one package-level Registry and may construct isolated registries in tests.
 type Registry[S any] struct {
 	prefix     string
-	tenantType reflect.Type
-	tenantID   func(S) any
+	scopeType  reflect.Type
+	scopeID    func(S) any
 	scopeLog   func(S) string
 	arrayArgFn func(any) any
 	arrayColFn func(reflect.Type) (func(any) any, error)
@@ -106,8 +106,8 @@ func NewRegistry[S any](cfg RegistryConfig[S]) *Registry[S] {
 	}
 	r := &Registry[S]{
 		prefix:     prefix,
-		tenantType: reflect.TypeFor[S](),
-		tenantID:   cfg.TenantID,
+		scopeType:  reflect.TypeFor[S](),
+		scopeID:    cfg.ScopeID,
 		scopeLog:   cfg.ScopeLog,
 		arrayArgFn: cfg.ArrayArg,
 		arrayColFn: cfg.ArrayColumn,
@@ -126,8 +126,8 @@ func NewRegistry[S any](cfg RegistryConfig[S]) *Registry[S] {
 			reflect.TypeFor[time.Time](): zeroOf[time.Time],
 		},
 	}
-	if cfg.TenantWrap != nil {
-		r.types[r.tenantType] = func(p any) any { return cfg.TenantWrap(p.(*S)) }
+	if cfg.ScopeWrap != nil {
+		r.types[r.scopeType] = func(p any) any { return cfg.ScopeWrap(p.(*S)) }
 	}
 	return r
 }
@@ -247,9 +247,9 @@ func (r *Registry[S]) classifyErr(ctx context.Context, err error) error {
 	return err
 }
 
-func (r *Registry[S]) tenantValue(s S) any {
-	if r.tenantID != nil {
-		return r.tenantID(s)
+func (r *Registry[S]) scopeValue(s S) any {
+	if r.scopeID != nil {
+		return r.scopeID(s)
 	}
 	return s
 }

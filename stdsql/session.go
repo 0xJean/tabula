@@ -9,11 +9,13 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/0xJean/tabula"
 )
 
-// ScopePolicy plugs application-specific isolation rules (tenant GUC variables,
+// ScopePolicy plugs application-specific isolation rules (scope GUC variables,
 // SET LOCAL ROLE, statement timeouts, or SQL guards) into a Runner and its
-// Sessions without coupling tabula to any particular tenant model.
+// Sessions without coupling tabula to any particular domain model.
 type ScopePolicy[S any] struct {
 	// SetupTx runs once right after BeginTx inside the transaction (for example
 	// calling SetLocalRole and SetLocalConfig for PostgreSQL RLS).
@@ -21,8 +23,8 @@ type ScopePolicy[S any] struct {
 	// GuardQuery optionally inspects every SQL string before execution and
 	// rejects forbidden statements (e.g. SET ROLE or set_config from adapters).
 	GuardQuery func(query string) error
-	// IsPlatform reports whether scope represents a cross-tenant/platform call.
-	IsPlatform func(scope S) bool
+	// IsUnscoped reports whether scope represents an unscoped (cross-partition) call.
+	IsUnscoped func(scope S) bool
 }
 
 // NoScopePolicy returns an empty ScopePolicy for applications that do not use
@@ -56,7 +58,8 @@ type Session[S any] struct {
 	readQueries
 	tx       *sql.Tx
 	scope    S
-	platform bool
+	unscoped bool
+	readOnly bool
 }
 
 // NewSession wraps an existing *sql.Tx with scope and policy.
@@ -64,14 +67,14 @@ func NewSession[S any](tx *sql.Tx, scope S, policy ScopePolicy[S]) *Session[S] {
 	if tx == nil {
 		panic("stdsql.NewSession: tx is required")
 	}
-	platform := false
-	if policy.IsPlatform != nil {
-		platform = policy.IsPlatform(scope)
+	unscoped := false
+	if policy.IsUnscoped != nil {
+		unscoped = policy.IsUnscoped(scope)
 	}
 	return &Session[S]{
 		tx:          tx,
 		scope:       scope,
-		platform:    platform,
+		unscoped:    unscoped,
 		readQueries: readQueries{db: tx, guard: policy.GuardQuery},
 	}
 }
@@ -79,11 +82,21 @@ func NewSession[S any](tx *sql.Tx, scope S, policy ScopePolicy[S]) *Session[S] {
 // Tx returns the underlying *sql.Tx for low-level escape hatches.
 func (s *Session[S]) Tx() *sql.Tx { return s.tx }
 
-// Tenant returns the session's bound scope value.
-func (s *Session[S]) Tenant() S { return s.scope }
+// Scope returns the session's bound scope value.
+func (s *Session[S]) Scope() S { return s.scope }
 
-// Platform reports whether this session runs in platform/cross-tenant mode.
-func (s *Session[S]) Platform() bool { return s.platform }
+// Unscoped reports whether this session bypasses row-level scope predicates.
+func (s *Session[S]) Unscoped() bool { return s.unscoped }
+
+// ReadOnly reports whether this session was opened as a READ ONLY transaction.
+func (s *Session[S]) ReadOnly() bool { return s.readOnly }
+
+func wrapReadOnlyErr(err error) error {
+	if tabula.SQLState(err) == "25006" {
+		return errors.Join(tabula.ErrReadOnly, err)
+	}
+	return err
+}
 
 func (s readQueries) check(query string) error {
 	if s.guard != nil {
@@ -99,7 +112,7 @@ func (s *Session[S]) Exec(ctx context.Context, query string, args ...any) (int64
 	}
 	res, err := s.tx.ExecContext(ctx, query, args...)
 	if err != nil {
-		return 0, err
+		return 0, wrapReadOnlyErr(err)
 	}
 	return res.RowsAffected()
 }
@@ -109,7 +122,7 @@ func (s readQueries) Scan(ctx context.Context, query string, args []any, dest ..
 	if err := s.check(query); err != nil {
 		return err
 	}
-	return s.db.QueryRowContext(ctx, query, args...).Scan(dest...)
+	return wrapReadOnlyErr(s.db.QueryRowContext(ctx, query, args...).Scan(dest...))
 }
 
 // Returning executes a write with RETURNING and scans the returned row into dest.
@@ -124,7 +137,7 @@ func (s readQueries) Each(ctx context.Context, query string, args []any, decode 
 	}
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return err
+		return wrapReadOnlyErr(err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
@@ -132,7 +145,7 @@ func (s readQueries) Each(ctx context.Context, query string, args []any, decode 
 			return err
 		}
 	}
-	return rows.Err()
+	return wrapReadOnlyErr(rows.Err())
 }
 
 // Savepoint runs fn inside a PostgreSQL SAVEPOINT. On error or panic, changes
@@ -221,6 +234,9 @@ func (r *Runner[S]) WithinOptions(ctx context.Context, scope S, opts *sql.TxOpti
 		}
 	}
 	sess := NewSession(tx, scope, r.policy)
+	if opts != nil && opts.ReadOnly {
+		sess.readOnly = true
+	}
 	if err := fn(ctx, sess); err != nil {
 		return err
 	}

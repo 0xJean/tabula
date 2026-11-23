@@ -64,7 +64,7 @@ func raw(p any) any           { return p }
 // Resolve returns the converter of a pointer to a value of type ft in r:
 //  1. json option: json text in and out;
 //  2. zero option: registered scalar, NULL read as the zero value;
-//  3. registry types (registered via RegisterType / TenantWrap);
+//  3. registry types (registered via RegisterType / ScopeWrap);
 //  4. types whose pointer implements sql.Scanner and driver.Valuer;
 //  5. database/sql native primitives (bool, ints, floats, string, []byte, time.Time).
 func (r *Registry[S]) Resolve(ft reflect.Type, jsonOption, zeroOption bool) (func(any) any, error) {

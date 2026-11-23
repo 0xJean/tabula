@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"net/url"
+	"time"
 
 	"github.com/0xJean/tabula"
 	"github.com/0xJean/tabula/internal/direct"
@@ -19,10 +20,28 @@ type readQueries struct {
 }
 
 // DirectPool owns a database/sql pool of read-only PostgreSQL connections.
-type DirectPool[S any] struct{ pool *direct.Pool[S] }
+type DirectPool[S any] struct {
+	db   *sql.DB
+	pool *direct.Pool[S]
+}
 
 // Session binds the scope without opening a transaction or checking out a connection.
 func (p *DirectPool[S]) Session(scope S) tabula.Session[S] { return p.pool.Session(scope) }
+
+// SetMaxOpenConns sets the maximum number of open connections to the database.
+func (p *DirectPool[S]) SetMaxOpenConns(n int) { p.db.SetMaxOpenConns(n) }
+
+// SetMaxIdleConns sets the maximum number of idle connections in the pool.
+func (p *DirectPool[S]) SetMaxIdleConns(n int) { p.db.SetMaxIdleConns(n) }
+
+// SetConnMaxLifetime sets the maximum amount of time a connection may be reused.
+func (p *DirectPool[S]) SetConnMaxLifetime(d time.Duration) { p.db.SetConnMaxLifetime(d) }
+
+// SetConnMaxIdleTime sets the maximum amount of time a connection may be idle.
+func (p *DirectPool[S]) SetConnMaxIdleTime(d time.Duration) { p.db.SetConnMaxIdleTime(d) }
+
+// Stats returns database/sql pool statistics.
+func (p *DirectPool[S]) Stats() sql.DBStats { return p.db.Stats() }
 
 // Close releases the underlying connection pool.
 func (p *DirectPool[S]) Close() error { return p.pool.Close() }
@@ -48,5 +67,8 @@ func Direct[S any](driverName, postgresURL string, policy ScopePolicy[S]) (*Dire
 	if err != nil {
 		return nil, err
 	}
-	return &DirectPool[S]{pool: direct.NewPool(readQueries{db: db, guard: direct.Guard(policy.GuardQuery)}, policy.IsPlatform, db.Close)}, nil
+	return &DirectPool[S]{
+		db:   db,
+		pool: direct.NewPool(readQueries{db: db, guard: direct.Guard(policy.GuardQuery)}, policy.IsUnscoped, db.Close),
+	}, nil
 }

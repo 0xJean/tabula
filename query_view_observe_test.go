@@ -12,12 +12,12 @@ func TestFilterHelpersAndIfInRange(t *testing.T) {
 	f := NewFilter("t1")
 	f.AndIf(false, "ignored = ?", "x")
 	f.AndIf(true, "status = ?", "active")
-	f.In("code", "BTC", "ETH")
+	f.In("code", "alpha", "beta")
 	var nilTime *time.Time
 	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	f.Range("created_at", start, nilTime)
 	require.Equal(t, " AND (status = $2) AND (code IN ($3, $4)) AND (created_at >= $5)", f.Where())
-	require.Equal(t, []any{"t1", "active", "BTC", "ETH", start}, f.Args())
+	require.Equal(t, []any{"t1", "active", "alpha", "beta", start}, f.Args())
 
 	empty := NewFilter()
 	empty.In("code")
@@ -27,7 +27,7 @@ func TestFilterHelpersAndIfInRange(t *testing.T) {
 
 func TestCountModesAndKeysetPagination(t *testing.T) {
 	reg := NewRegistry(RegistryConfig[customTenant]{
-		TenantID: func(s customTenant) any { return string(s) },
+		ScopeID: func(s customTenant) any { return string(s) },
 	})
 	tbl := Define(reg, TableSpec[customRow, int64]{
 		Name:  "public.custom_items",
@@ -197,7 +197,7 @@ func TestTracerAndMetricsHooks(t *testing.T) {
 	base := time.Date(2026, 11, 24, 0, 0, 0, 0, time.UTC)
 	tick := 0
 	reg := NewRegistry(RegistryConfig[customTenant]{
-		TenantID: func(s customTenant) any { return string(s) },
+		ScopeID:  func(s customTenant) any { return string(s) },
 		ScopeLog: func(s customTenant) string { return string(s) },
 		Log: LogConfig{
 			Now: func() time.Time {

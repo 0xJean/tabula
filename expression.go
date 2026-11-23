@@ -27,7 +27,7 @@ func SetNow(column string) Assignment { return Assignment{column: column} }
 
 // SetExpr applies assignments to one live row by key within the session scope.
 // Like Set, it checks the affected row count and does not perform version CAS.
-// Key, tenant, deleted, version and once columns cannot be expression targets.
+// Key, scope, deleted, version and once columns cannot be expression targets.
 func (r *Rows[T, K, S]) SetExpr(ctx context.Context, key K, assignments ...Assignment) error {
 	if r.readOnly() {
 		return ErrReadOnly
@@ -36,7 +36,7 @@ func (r *Rows[T, K, S]) SetExpr(ctx context.Context, key K, assignments ...Assig
 		return fmt.Errorf("tabula.SetExpr %s: an assignment is required", r.t.name)
 	}
 	args, scoped := r.keyArgs(key)
-	where := r.t.stmt.platformKeyWhere
+	where := r.t.stmt.unscopedKeyWhere
 	if scoped {
 		where = r.t.stmt.keyWhere
 	}

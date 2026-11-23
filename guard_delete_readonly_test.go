@@ -18,6 +18,9 @@ func TestGuardNoSessionEscape(t *testing.T) {
 		"SELECT pg_catalog.set_config('role', 'postgres', false)",
 		"SELECT 1; /* sneaky */ SET LOCAL ROLE super",
 		`SELECT "set_config"('x','y',true)`,
+		`SELECT E'\''; SET ROLE postgres`,
+		`SELECT e'\''; RESET ALL`,
+		`SELECT E'\\'; SET SESSION AUTHORIZATION DEFAULT`,
 	}
 	for _, q := range blocked {
 		require.ErrorIs(t, GuardNoSessionEscape(q), ErrForbiddenStatement, "should block: %s", q)
@@ -28,6 +31,7 @@ func TestGuardNoSessionEscape(t *testing.T) {
 		"UPDATE public.users SET role = $2 WHERE id = $1",
 		"SELECT 'SET ROLE postgres' AS literal_note FROM public.items",
 		"SELECT * FROM public.items WHERE note = 'don''t call set_config(1)'",
+		`SELECT E'don\'t; SET ROLE postgres' AS note`,
 		"-- SET ROLE postgres\nSELECT id FROM public.items",
 		"/* RESET ROLE; set_config('a','b',true) */ SELECT 1",
 	}
@@ -38,7 +42,7 @@ func TestGuardNoSessionEscape(t *testing.T) {
 
 func TestReadOnlyAndPhysicalDelete(t *testing.T) {
 	reg := NewRegistry(RegistryConfig[customTenant]{
-		TenantID: func(s customTenant) any { return string(s) },
+		ScopeID: func(s customTenant) any { return string(s) },
 	})
 
 	// ReadOnly + AllowDelete cannot combine.
@@ -91,7 +95,7 @@ func TestReadOnlyAndPhysicalDelete(t *testing.T) {
 	del.RequiresFunction("public.cleanup_item(bigint)")
 	delDef := del.Definition()
 	require.Equal(t, "DELETE FROM public.ephemeral_items WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL", delDef.Statements["delete"])
-	require.Equal(t, "DELETE FROM public.ephemeral_items WHERE id = $1 AND deleted_at IS NULL", delDef.Statements["platform_delete"])
+	require.Equal(t, "DELETE FROM public.ephemeral_items WHERE id = $1 AND deleted_at IS NULL", delDef.Statements["unscoped_delete"])
 	require.Contains(t, delDef.Privileges, DefinedPrivilege{Table: "public.ephemeral_items", Privilege: "DELETE"})
 	require.Contains(t, delDef.Privileges, DefinedPrivilege{Privilege: "EXECUTE", Function: "public.cleanup_item(bigint)"})
 

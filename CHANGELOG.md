@@ -8,18 +8,18 @@ v1.0 a minor version may contain breaking changes.
 ### Public API changes
 
 - Declare tables with `TableSpec[T, K]` and projections with `ViewSpec[T]`. The registry supplies the scope type. Compiled handles have read-only schema and access modes.
-- Session, Rows and ViewRows execution methods use the bound scope. Generated row writes validate tenant identity, including batch upserts and pgx COPY.
+- Session, Rows and ViewRows execution methods use the bound scope (`Session.Scope()`, `Session.Unscoped()`, `db:"...,scope"`, `RegistryConfig.ScopeID`/`ScopeWrap`, `ScopePolicy.IsUnscoped`). Generated row writes validate row scope identity, including batch upserts and pgx COPY.
 - Use the root package for Retry and SQLSTATE predicates. Use LockMode values for Listing and KeysetListing.
 - See [MIGRATION.md](docs/MIGRATION.md) for the old and new call sites.
 
 ### Additions
 
-- Table and view iterators, shared and nonblocking row locks, chunked UpsertMany, SetExpr, and read-only Direct pools in both drivers.
+- Table and view iterators, shared and nonblocking row locks, chunked UpsertMany, SetExpr, and read-only Direct pools (with pool sizing and stats) in both drivers; `WithinReadOnly` sessions enforce `ErrReadOnly` consistently with `Direct`.
 - Both drivers support integer, float and boolean array columns alongside string and bigint arrays. Host addresses and network prefixes use net/netip.
 - Go 1.26/1.27 and PostgreSQL 14–17 CI, coverage, lint, fuzz and vulnerability checks, a multitenant demo, a cross-library benchmark module, community templates and release tooling.
 
 - **Conditional, upsert, delete & batch writes**: `Rows.UpdateWhere`, `Rows.SetWhere`,
-  `Table.DefineUpsert` / `TryDefineUpsert` + `Rows.Upsert` (forbids updating key, tenant,
+  `Table.DefineUpsert` / `TryDefineUpsert` + `Rows.Upsert` (forbids updating key, scope,
   and `once` columns; registers SQL for `sqlcheck`), opt-in physical deletes
   (`TableSpec.AllowDelete` + `Rows.Delete` / `Rows.DeleteWhere`), `TableSpec.ReadOnly` mode
   (`ErrReadOnly`), `Rows.InsertReturning`, `Rows.SaveReturning`, and chunked multi-row

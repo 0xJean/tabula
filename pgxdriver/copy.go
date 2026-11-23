@@ -19,11 +19,14 @@ import (
 //
 // An empty rows slice returns 0, nil without touching the database.
 func CopyFrom[T, K, S any](ctx context.Context, sess *Session[S], tbl *tabula.Table[T, K, S], rows []T) (int64, error) {
-	if len(rows) == 0 {
-		return 0, nil
-	}
 	if sess == nil || tbl == nil {
 		return 0, errors.New("pgxdriver.CopyFrom: session and table are required")
+	}
+	if tbl.ReadOnly() || sess.ReadOnly() {
+		return 0, tabula.ErrReadOnly
+	}
+	if len(rows) == 0 {
+		return 0, nil
 	}
 	bound := tbl.Bind(sess)
 	for i := range rows {

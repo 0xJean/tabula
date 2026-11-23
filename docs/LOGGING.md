@@ -49,7 +49,7 @@ in every application.
 | Key | Type | Meaning |
 | --- | --- | --- |
 | `msg` | string | `tabula.statement`, `tabula.slow_statement` or `tabula.statement_failed` |
-| `tabula.key` | string | Registered statement key (for example `currency.chains_by_code`); derived statements use `<table>.<action>` |
+| `tabula.key` | string | Registered statement key (for example `catalog.items_by_code`); derived statements use `<table>.<action>` |
 | `tabula.table` | string | Table or view name |
 | `tabula.action` | string | `get`, `lock`, `insert`, `save`, `list`, `count`, `view`, `exec`, ... |
 | `tabula.duration_ms` | float | Elapsed time |

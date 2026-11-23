@@ -8,6 +8,9 @@ The current checkout contains the next minor release. The published v0.2.0 tag h
 | --- | --- |
 | `Define(reg, Table[Order, int64, Tenant]{…})` | `Define(reg, TableSpec[Order, int64]{…})` |
 | `DefineView(reg, View[Summary, Tenant]{…})` | `DefineView(reg, ViewSpec[Summary]{…})` |
+| `` `db:"tenant_id,tenant"` `` | `` `db:"tenant_id,scope"` `` |
+| `RegistryConfig{TenantID: …, TenantWrap: …}` | `RegistryConfig{ScopeID: …, ScopeWrap: …}` |
+| `ScopePolicy{IsPlatform: …}`, `sess.Tenant()`, `sess.Platform()` | `ScopePolicy{IsUnscoped: …}`, `sess.Scope()`, `sess.Unscoped()` |
 | `tbl.Name`, `tbl.ReadOnly`, `tbl.AllowDelete` | `tbl.Name()`, `tbl.ReadOnly()`, `tbl.AllowsDelete()` |
 | `rows.Get(ctx, scope, id)`, `rows.Delete(ctx, scope, id)` | `rows.Get(ctx, id)`, `rows.Delete(ctx, id)` |
 | `rows.List(ctx, scope, where, page)` | `rows.List(ctx, where, page)` |
@@ -19,22 +22,22 @@ The current checkout contains the next minor release. The published v0.2.0 tag h
 
 Declare the name, default order, escape columns, soft-delete policy and write permissions in the spec. The registry supplies the scope type. The compiled table or view keeps its own bindings. `Definition()` returns a snapshot. `Statement`, `Requires`, `RequiresFunction` and `DefineUpsert` register additional SQL and privilege metadata during application initialization.
 
-### Move tenant selection to the transaction boundary
+### Move row-scope selection to the transaction boundary
 
-Open a runner with the authenticated tenant. Derived reads and deletes use `Session.Tenant()`. Inserts, updates, upserts and pgx COPY check the row tenant against that scope before sending SQL. For structured scopes, `RegistryConfig.TenantID` should return a stable SQL identity. A mismatch returns `ErrScopeMismatch`. A platform session can address rows across tenants.
+Open a runner with the authenticated scope (for example a tenant, organization, or workspace ID). Derived reads and deletes use `Session.Scope()`. Inserts, updates, upserts and pgx COPY check the row's `,scope` column against that bound scope before sending SQL. For structured scopes, `RegistryConfig.ScopeID` should return a stable SQL identity. A mismatch returns `ErrScopeMismatch`. An unscoped session (`Session.Unscoped() == true`) can address rows across scopes.
 
-For a tenant-visible pagination total, use `CountExact` (the default). `CountEstimate` reads PostgreSQL's table-wide row estimate and includes other tenants. `CountNone` skips the count.
+For a scope-visible pagination total, use `CountExact` (the default). `CountEstimate` reads PostgreSQL's table-wide row estimate and includes all rows across scopes. `CountNone` skips the count.
 
-If a request supplies a second, independently obtained tenant ID, preserve that authorization check in the application binding. For example, when both IDs are comparable strings:
+If a request supplies a second, independently obtained scope ID, preserve that authorization check in the application binding. For example, when both IDs are comparable strings:
 
 ```go
-if requestTenant != sess.Tenant() {
-    return ErrTenantMismatch // application error
+if requestScope != sess.Scope() {
+    return ErrScopeAuthorization // application error
 }
 row, err := notes.Bind(sess).Get(ctx, id)
 ```
 
-Custom session adapters remove the scope parameter from `Exec`, `Scan`, `Returning` and `Each`. Keep `Tenant()` and `Platform()` stable for the lifetime of a binding. An `Each` implementation must stop on a callback error, close the cursor and return the error. Iterators use this contract to release resources on `break`.
+Custom session adapters remove the scope parameter from `Exec`, `Scan`, `Returning` and `Each`, and expose `Scope() S` and `Unscoped() bool`. Keep both stable for the lifetime of a binding. An `Each` implementation must stop on a callback error, close the cursor and return the error. Iterators use this contract to release resources on `break`.
 
 Hand-written SQL keeps its original placeholders and arguments. A query containing `WHERE tenant_id = $1` still needs that argument. PostgreSQL RLS can enforce isolation on joins and other application SQL. The runnable example uses an application role and a tenant-local setting. [Multitenant example](../examples/multitenant/README.md)
 

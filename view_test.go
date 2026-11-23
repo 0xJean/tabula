@@ -18,7 +18,7 @@ type projectionRow struct {
 
 func TestViewDefineColsAndSelect(t *testing.T) {
 	reg := NewRegistry(RegistryConfig[customTenant]{
-		TenantID: func(s customTenant) any { return string(s) },
+		ScopeID: func(s customTenant) any { return string(s) },
 		ArrayColumn: func(ft reflect.Type) (func(any) any, error) {
 			return func(p any) any { return p }, nil
 		},
@@ -48,7 +48,7 @@ func TestViewDefineColsAndSelect(t *testing.T) {
 		onScan: func(query string, _ []any, dest ...any) error {
 			scannedQuery = query
 			*dest[0].(*int64) = 9
-			*dest[1].(*string) = "BTC"
+			*dest[1].(*string) = "SKU-1"
 			require.NoError(t, dest[2].(*ZeroValue[string]).Scan(nil))
 			*dest[3].(*[]string) = []string{"r1"}
 			return nil
@@ -57,27 +57,27 @@ func TestViewDefineColsAndSelect(t *testing.T) {
 			scannedQuery = query
 			return scan(func(dest ...any) error {
 				*dest[0].(*int64) = 7
-				*dest[1].(*string) = "ETH"
-				require.NoError(t, dest[2].(*ZeroValue[string]).Scan("mainnet"))
-				*dest[3].(*[]string) = []string{"https://rpc"}
+				*dest[1].(*string) = "SKU-2"
+				require.NoError(t, dest[2].(*ZeroValue[string]).Scan("primary"))
+				*dest[3].(*[]string) = []string{"https://example.invalid"}
 				return nil
 			})
 		},
 	}
-	one, err := v.Bind(rec).One(t.Context(), stmt, "BTC")
+	one, err := v.Bind(rec).One(t.Context(), stmt, "SKU-1")
 	require.NoError(t, err)
 	require.Equal(t, stmt, scannedQuery)
-	require.Equal(t, &projectionRow{ID: 9, Code: "BTC", Note: "", Tags: []string{"r1"}}, one)
+	require.Equal(t, &projectionRow{ID: 9, Code: "SKU-1", Note: "", Tags: []string{"r1"}}, one)
 
-	list, err := v.Bind(rec).Select(t.Context(), stmt, "ETH")
+	list, err := v.Bind(rec).Select(t.Context(), stmt, "SKU-2")
 	require.NoError(t, err)
-	require.Equal(t, []projectionRow{{ID: 7, Code: "ETH", Note: "mainnet", Tags: []string{"https://rpc"}}}, list)
+	require.Equal(t, []projectionRow{{ID: 7, Code: "SKU-2", Note: "primary", Tags: []string{"https://example.invalid"}}}, list)
 }
 
 func TestLockByGetManyAndLockMany(t *testing.T) {
 	var wrappedSlices []any
 	reg := NewRegistry(RegistryConfig[customTenant]{
-		TenantID: func(s customTenant) any { return string(s) },
+		ScopeID: func(s customTenant) any { return string(s) },
 		ArrayArg: func(v any) any {
 			wrappedSlices = append(wrappedSlices, v)
 			return v

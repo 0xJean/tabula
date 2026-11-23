@@ -21,7 +21,7 @@ func bindReader[T, S any](d *descriptor[T, S], s Session[S]) readBinding[T, S] {
 }
 
 func (r *readBinding[T, S]) start(ctx context.Context, action, key string) (context.Context, opSpan[S]) {
-	return r.d.reg.startOp(ctx, r.logger, r.s.Tenant(), r.d.name, action, key)
+	return r.d.reg.startOp(ctx, r.logger, r.s.Scope(), r.d.name, action, key)
 }
 
 func (r *readBinding[T, S]) fail(ctx context.Context, err error) error {

@@ -40,7 +40,7 @@ func (r *Rows[T, K, S]) InsertReturning(ctx context.Context, row *T, columns ...
 // InsertMany inserts all rows using multi-row INSERT ... VALUES (...), (...).
 // An empty slice returns nil without issuing SQL. Large batches are chunked
 // automatically to stay within PostgreSQL's 65,535 bind parameter limit.
-// All rows in a non-platform tenant-scoped call must share the same tenant.
+// All rows in a scoped call must share the session's scope.
 func (r *Rows[T, K, S]) InsertMany(ctx context.Context, rows []T) error {
 	_, err := r.writeMany(ctx, "insert_many", stmtMeta{key: r.t.name + ".insert_many"}, "", rows)
 	return err
@@ -161,7 +161,7 @@ func (r *Rows[T, K, S]) Set(ctx context.Context, row T, columns ...string) error
 }
 
 // UpdateWhere writes every updatable column of the undeleted row matching key
-// (and tenant/version when declared) plus an extra static SQL predicate over
+// (and scope/version when declared) plus an extra static SQL predicate over
 // "?" placeholders. Reports whether a row matched; zero rows is not an error.
 func (r *Rows[T, K, S]) UpdateWhere(ctx context.Context, row T, where string, values ...any) (bool, error) {
 	if err := r.CheckWrite(&row); err != nil {
@@ -186,7 +186,7 @@ func (r *Rows[T, K, S]) UpdateWhere(ctx context.Context, row T, where string, va
 }
 
 // SetWhere writes only the named columns of the undeleted row matching key
-// (and tenant when declared) plus an extra static SQL predicate over "?"
+// (and scope when declared) plus an extra static SQL predicate over "?"
 // placeholders. Reports whether a row matched; zero rows is not an error.
 func (r *Rows[T, K, S]) SetWhere(ctx context.Context, row T, columns []string, where string, values ...any) (bool, error) {
 	if err := r.CheckWrite(&row); err != nil {
@@ -208,7 +208,7 @@ func (r *Rows[T, K, S]) Delete(ctx context.Context, key K) error {
 		panic(r.t.prefix() + ".Delete " + r.t.name + ": table does not enable AllowDelete")
 	}
 	args, scoped := r.keyArgs(key)
-	query := r.t.stmt.platformDelete
+	query := r.t.stmt.unscopedDelete
 	if scoped {
 		query = r.t.stmt.deleteStmt
 	}
@@ -265,7 +265,7 @@ func (r *Rows[T, K, S]) buildSetQuery(row *T, columns []string, extraWhere strin
 		if r.t.cols[i].once {
 			panic(r.t.prefix() + ".Table " + r.t.name + ": column is insert-only: " + name)
 		}
-		if r.t.cols[i].role == keyRole || r.t.cols[i].role == tenantRole {
+		if r.t.cols[i].role == keyRole || r.t.cols[i].role == scopeRole {
 			panic(r.t.prefix() + ".Table " + r.t.name + ": column cannot be updated: " + name)
 		}
 		args = append(args, addrs[i])

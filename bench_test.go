@@ -7,7 +7,7 @@ import (
 
 type benchRow struct {
 	ID        int64        `db:"id,key,serial"`
-	Tenant    customTenant `db:"tenant_id,tenant"`
+	Tenant    customTenant `db:"tenant_id,scope"`
 	Code      string       `db:"code"`
 	Name      string       `db:"name"`
 	Amount    int64        `db:"amount"`
@@ -19,16 +19,16 @@ type benchSession struct {
 	rows [][]any
 }
 
-func (b *benchSession) Tenant() customTenant { return "t1" }
-func (b *benchSession) Platform() bool       { return false }
+func (b *benchSession) Scope() customTenant { return "t1" }
+func (b *benchSession) Unscoped() bool      { return false }
 func (b *benchSession) Exec(_ context.Context, _ string, _ ...any) (int64, error) {
 	return 1, nil
 }
 func (b *benchSession) Scan(_ context.Context, _ string, _ []any, dest ...any) error {
 	*dest[0].(*int64) = 42
 	*dest[1].(*customTenant) = "t1"
-	*dest[2].(*string) = "BTC"
-	*dest[3].(*string) = "Bitcoin"
+	*dest[2].(*string) = "SKU-001"
+	*dest[3].(*string) = "Widget"
 	*dest[4].(*int64) = 100000
 	*dest[5].(*string) = "alice"
 	*dest[6].(*int) = 1
@@ -41,8 +41,8 @@ func (b *benchSession) Each(_ context.Context, _ string, _ []any, decode func(fu
 	scan := func(dest ...any) error {
 		*dest[0].(*int64) = 42
 		*dest[1].(*customTenant) = "t1"
-		*dest[2].(*string) = "BTC"
-		*dest[3].(*string) = "Bitcoin"
+		*dest[2].(*string) = "SKU-001"
+		*dest[3].(*string) = "Widget"
 		*dest[4].(*int64) = 100000
 		*dest[5].(*string) = "alice"
 		*dest[6].(*int) = 1
@@ -61,8 +61,8 @@ func BenchmarkFilterBuild(b *testing.B) {
 	for b.Loop() {
 		f := NewFilter("t1")
 		f.And("status = ?", "active")
-		f.AndIf(true, "code = ?", "BTC")
-		f.In("chain", "ETH", "SOL", "ARB")
+		f.AndIf(true, "code = ?", "SKU-001")
+		f.In("region", "us-east", "eu-west", "ap-south")
 		f.Range("amount", int64(10), int64(1000))
 		_ = f.Where() + f.Page(20, 40)
 		_ = f.Args()
@@ -84,7 +84,7 @@ func BenchmarkOrderSpecResolve(b *testing.B) {
 
 func BenchmarkRowsGet_Tabula(b *testing.B) {
 	reg := NewRegistry(RegistryConfig[customTenant]{
-		TenantID: func(s customTenant) any { return string(s) },
+		ScopeID: func(s customTenant) any { return string(s) },
 	})
 	tbl := Define(reg, TableSpec[benchRow, int64]{Name: "public.bench_items"})
 	rows := tbl.Bind(&benchSession{})
@@ -116,7 +116,7 @@ func BenchmarkRowsGet_RawManualScan(b *testing.B) {
 
 func BenchmarkRowsSelect100_Tabula(b *testing.B) {
 	reg := NewRegistry(RegistryConfig[customTenant]{
-		TenantID: func(s customTenant) any { return string(s) },
+		ScopeID: func(s customTenant) any { return string(s) },
 	})
 	tbl := Define(reg, TableSpec[benchRow, int64]{Name: "public.bench_items"})
 	sess := &benchSession{rows: make([][]any, 100)}

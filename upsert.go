@@ -10,7 +10,7 @@ import (
 
 // UpsertSpec declares a controlled PostgreSQL INSERT ... ON CONFLICT statement.
 // Conflict columns identify the unique index or constraint target. Update lists
-// the columns updated on conflict (key, tenant, and once columns are forbidden);
+// the columns updated on conflict (key, scope, and once columns are forbidden);
 // leaving Update empty produces ON CONFLICT (...) DO NOTHING.
 type UpsertSpec struct {
 	Conflict  []string
@@ -99,7 +99,7 @@ func (t *Table[T, K, S]) TryDefineUpsert(key string, spec UpsertSpec, opts ...St
 				return nil, fail("update column %s declared twice", col)
 			}
 			c := t.cols[idx]
-			if c.role == keyRole || c.role == tenantRole {
+			if c.role == keyRole || c.role == scopeRole {
 				return nil, fail("column %s (%s) cannot be updated on conflict", col, c.role)
 			}
 			if c.once {
@@ -111,13 +111,13 @@ func (t *Table[T, K, S]) TryDefineUpsert(key string, spec UpsertSpec, opts ...St
 		b.WriteString("DO UPDATE SET ")
 		b.WriteString(strings.Join(sets, ", "))
 		where := strings.TrimSpace(spec.Where)
-		if t.tenant >= 0 && !seenConflict[t.cols[t.tenant].name] {
-			col := t.cols[t.tenant].name
-			tenantGuard := t.name + "." + col + " = EXCLUDED." + col
+		if t.scope >= 0 && !seenConflict[t.cols[t.scope].name] {
+			col := t.cols[t.scope].name
+			scopeGuard := t.name + "." + col + " = EXCLUDED." + col
 			if where != "" {
-				where = "(" + where + ") AND " + tenantGuard
+				where = "(" + where + ") AND " + scopeGuard
 			} else {
-				where = tenantGuard
+				where = scopeGuard
 			}
 		}
 		if where != "" {

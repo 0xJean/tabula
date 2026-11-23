@@ -21,7 +21,7 @@ func TestScopedReadsAndBatchWrites(t *testing.T) {
 	type tenant string
 	type job struct {
 		ID       int64      `db:"id,key"`
-		Tenant   tenant     `db:"tenant,tenant"`
+		Tenant   tenant     `db:"tenant,scope"`
 		Attempts int        `db:"attempts"`
 		Updated  *time.Time `db:"updated"`
 	}
@@ -37,13 +37,13 @@ func TestScopedReadsAndBatchWrites(t *testing.T) {
 	t.Cleanup(func() { _, _ = db.Exec("DROP TABLE " + name) })
 	reg := tabula.NewRegistry(tabula.RegistryConfig[tenant]{})
 	tbl := tabula.Define(reg, tabula.TableSpec[job, int64]{Name: name, Order: "id", AllowDelete: true})
-	router := stdsql.NewRunner(db, stdsql.ScopePolicy[tenant]{IsPlatform: func(s tenant) bool { return s == "platform" }})
+	router := stdsql.NewRunner(db, stdsql.ScopePolicy[tenant]{IsUnscoped: func(s tenant) bool { return s == "all" }})
 	plan := tbl.DefineUpsert("up", tabula.UpsertSpec{Conflict: []string{"id"}, Update: []string{"attempts"}, Returning: []string{"updated"}})
 	skip := tbl.DefineUpsert("skip", tabula.UpsertSpec{Conflict: []string{"id"}})
 	within := func(scope tenant, fn func(*tabula.Rows[job, int64, tenant]) error) error {
 		return router.Within(ctx, scope, func(_ context.Context, s *stdsql.Session[tenant]) error { return fn(tbl.Bind(s)) })
 	}
-	require.NoError(t, within("platform", func(r *tabula.Rows[job, int64, tenant]) error {
+	require.NoError(t, within("all", func(r *tabula.Rows[job, int64, tenant]) error {
 		return r.InsertMany(ctx, []job{{ID: 1, Tenant: "a"}, {ID: 2, Tenant: "a"}, {ID: 3, Tenant: "b"}})
 	}))
 	require.NoError(t, within("a", func(r *tabula.Rows[job, int64, tenant]) error {
@@ -97,6 +97,11 @@ func TestScopedReadsAndBatchWrites(t *testing.T) {
 	direct, err := stdsql.Direct("postgres", dsn, stdsql.ScopePolicy[tenant]{})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = direct.Close() })
+	direct.SetMaxOpenConns(4)
+	direct.SetMaxIdleConns(2)
+	direct.SetConnMaxLifetime(5 * time.Minute)
+	direct.SetConnMaxIdleTime(time.Minute)
+	require.Equal(t, 4, direct.Stats().MaxOpenConnections)
 	sess := direct.Session("a")
 	r := tbl.Bind(sess)
 	got, err := r.Get(ctx, 3)

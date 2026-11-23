@@ -52,9 +52,9 @@ func (r *Rows[T, K, S]) keyArgs(key K) (args []any, scoped bool) {
 	for _, bind := range r.t.keyBinders {
 		args = append(args, bind(&key))
 	}
-	scoped = r.t.tenant >= 0 && !r.s.Platform()
+	scoped = r.t.scope >= 0 && !r.s.Unscoped()
 	if scoped {
-		args = append(args, r.t.reg.tenantValue(r.s.Tenant()))
+		args = append(args, r.t.reg.scopeValue(r.s.Scope()))
 	}
 	return args, scoped
 }
@@ -68,9 +68,9 @@ func (r *Rows[T, K, S]) byKey(key K, lock bool) (string, []any) {
 		return r.t.stmt.get, args
 	}
 	if lock {
-		return r.t.stmt.platformLock, args
+		return r.t.stmt.unscopedLock, args
 	}
-	return r.t.stmt.platformGet, args
+	return r.t.stmt.unscopedGet, args
 }
 
 // Get reads the undeleted row key without a lock; nil when missing.
@@ -225,12 +225,12 @@ func (r *Rows[T, K, S]) bindSingleKeys(keys []K) (any, error) {
 	}
 }
 
-// Scope starts a Filter seeded with the session tenant predicate (none on a
-// platform session) and soft-delete predicate.
+// Scope starts a Filter seeded with the session scope predicate (none on an
+// unscoped session) and soft-delete predicate.
 func (r *Rows[T, K, S]) Scope() *Filter {
 	f := NewFilter()
-	if r.t.tenant >= 0 && !r.s.Platform() {
-		f.And(r.name(r.t.tenant)+" = ?", r.t.reg.tenantValue(r.s.Tenant()))
+	if r.t.scope >= 0 && !r.s.Unscoped() {
+		f.And(r.name(r.t.scope)+" = ?", r.t.reg.scopeValue(r.s.Scope()))
 	}
 	if r.t.deleted >= 0 {
 		f.And(r.t.del.aliveSQL)
@@ -389,25 +389,25 @@ func (r *Rows[T, K, S]) readOnly() bool {
 	return r.t.readOnly || r.directReadOnly
 }
 
-// CheckWrite validates the table mode and row tenant for a write. Driver
+// CheckWrite validates the table mode and row scope for a write. Driver
 // adapters use it when sending rows through a bulk protocol such as COPY.
 func (r *Rows[T, K, S]) CheckWrite(row *T) error {
 	if r.readOnly() {
 		return ErrReadOnly
 	}
-	if r.t.tenant < 0 || r.s.Platform() {
+	if r.t.scope < 0 || r.s.Unscoped() {
 		return nil
 	}
-	want := r.t.reg.tenantValue(r.s.Tenant())
-	got := r.t.reg.tenantValue(r.rowTenant(row))
+	want := r.t.reg.scopeValue(r.s.Scope())
+	got := r.t.reg.scopeValue(r.rowScope(row))
 	if !reflect.DeepEqual(want, got) {
 		return ErrScopeMismatch
 	}
 	return nil
 }
 
-func (r *Rows[T, K, S]) rowTenant(row *T) S {
-	return *r.t.cols[r.t.tenant].field(row).(*S)
+func (r *Rows[T, K, S]) rowScope(row *T) S {
+	return *r.t.cols[r.t.scope].field(row).(*S)
 }
 
 func (r *Rows[T, K, S]) where(row *T, addrs []any) (string, []any, []bool) {
@@ -420,10 +420,10 @@ func (r *Rows[T, K, S]) where(row *T, addrs []any) (string, []any, []bool) {
 		parts[pos] = r.name(keyIdx) + " = $" + strconv.Itoa(pos+1)
 	}
 	where := " WHERE " + strings.Join(parts, " AND ")
-	if r.t.tenant >= 0 {
-		args = append(args, r.t.reg.tenantValue(r.rowTenant(row)))
-		secret = append(secret, r.t.cols[r.t.tenant].secret)
-		where += " AND " + r.name(r.t.tenant) + " = $" + strconv.Itoa(len(args))
+	if r.t.scope >= 0 {
+		args = append(args, r.t.reg.scopeValue(r.rowScope(row)))
+		secret = append(secret, r.t.cols[r.t.scope].secret)
+		where += " AND " + r.name(r.t.scope) + " = $" + strconv.Itoa(len(args))
 	}
 	if r.t.deleted >= 0 {
 		where += " AND " + r.t.del.aliveSQL

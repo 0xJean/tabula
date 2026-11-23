@@ -19,7 +19,7 @@ type scope string
 
 type item struct {
 	ID        int64      `db:"id,key,serial"`
-	Tenant    scope      `db:"tenant_id,tenant"`
+	Tenant    scope      `db:"tenant_id,scope"`
 	Code      string     `db:"code"`
 	Note      *string    `db:"note"`
 	Version   int        `db:"version,version"`
@@ -59,7 +59,7 @@ func TestVerifyAgainstPostgres(t *testing.T) {
 		_, _ = db.Exec(`DROP ROLE ` + app)
 	})
 
-	reg := tabula.NewRegistry(tabula.RegistryConfig[scope]{TenantID: func(s scope) any { return string(s) }})
+	reg := tabula.NewRegistry(tabula.RegistryConfig[scope]{ScopeID: func(s scope) any { return string(s) }})
 	tbl := tabula.Define(reg, tabula.TableSpec[item, int64]{Name: schema + ".items", Order: "id ASC"})
 	tbl.Statement("by_code", "SELECT "+tbl.Cols()+" FROM "+schema+".items WHERE code = $1")
 	tbl.DefineUpsert("upsert_id", tabula.UpsertSpec{
@@ -145,7 +145,7 @@ func TestVerifyAgainstPostgres(t *testing.T) {
 			ID   int64  `db:"id,zero"`
 			Code string `db:"code,zero"`
 		}
-		vReg := tabula.NewRegistry(tabula.RegistryConfig[scope]{TenantID: func(s scope) any { return string(s) }})
+		vReg := tabula.NewRegistry(tabula.RegistryConfig[scope]{ScopeID: func(s scope) any { return string(s) }})
 		v1 := tabula.DefineView(vReg, tabula.ViewSpec[summaryView]{Name: schema + ".active_items"})
 		v1.Statement("all", "SELECT "+v1.Cols()+" FROM "+schema+".active_items")
 		v2 := tabula.DefineView(vReg, tabula.ViewSpec[summaryView]{Name: schema + ".mv_items"})
@@ -169,7 +169,7 @@ func TestVerifyAgainstPostgres(t *testing.T) {
 		require.Empty(t, failures)
 
 		// DELETE and function EXECUTE privileges checked accurately.
-		delReg := tabula.NewRegistry(tabula.RegistryConfig[scope]{TenantID: func(s scope) any { return string(s) }})
+		delReg := tabula.NewRegistry(tabula.RegistryConfig[scope]{ScopeID: func(s scope) any { return string(s) }})
 		delTbl := tabula.Define(delReg, tabula.TableSpec[item, int64]{Name: schema + ".items", AllowDelete: true})
 		delTbl.RequiresFunction(schema + ".count_items(text)")
 		delNeeds, _ := CollectPrivilegeNeeds(delReg.Defined())

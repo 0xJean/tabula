@@ -44,17 +44,18 @@ func TestPgxRunnerAndTabulaIntegration(t *testing.T) {
 	type tenant string
 	type item struct {
 		ID      int64    `db:"id,key,serial"`
-		Tenant  tenant   `db:"tenant_id,tenant"`
+		Tenant  tenant   `db:"tenant_id,scope"`
 		Code    string   `db:"code"`
 		Tags    []string `db:"tags,array"`
 		Version int      `db:"version,version"`
 	}
 
 	reg := tabula.NewRegistry(tabula.RegistryConfig[tenant]{
-		TenantID:    func(s tenant) any { return string(s) },
+		ScopeID:     func(s tenant) any { return string(s) },
 		ArrayColumn: pgxdriver.ArrayColumn,
 	})
 	tbl := tabula.Define(reg, tabula.TableSpec[item, int64]{Name: schema + ".items", Order: "id ASC"})
+	roTbl := tabula.Define(reg, tabula.TableSpec[item, int64]{Name: schema + ".items", ReadOnly: true})
 
 	runner := pgxdriver.NewRunner(pool, pgxdriver.ScopePolicy[tenant]{
 		SetupTx: func(ctx context.Context, tx pgx.Tx, scope tenant) error {
@@ -64,13 +65,13 @@ func TestPgxRunnerAndTabulaIntegration(t *testing.T) {
 
 	require.NoError(t, runner.Within(ctx, "t1", func(ctx context.Context, s *pgxdriver.Session[tenant]) error {
 		r := tbl.Bind(s)
-		row := item{Tenant: "t1", Code: "btc", Tags: []string{"l1", "pow"}, Version: 1}
+		row := item{Tenant: "t1", Code: "alpha", Tags: []string{"core", "featured"}, Version: 1}
 		require.NoError(t, r.Insert(ctx, &row))
 		require.NotZero(t, row.ID)
 
 		got, err := r.Get(ctx, row.ID)
 		require.NoError(t, err)
-		require.Equal(t, []string{"l1", "pow"}, got.Tags)
+		require.Equal(t, []string{"core", "featured"}, got.Tags)
 
 		// Missing row maps pgx.ErrNoRows -> sql.ErrNoRows -> nil, nil.
 		missing, err := r.Get(ctx, 999999)
@@ -89,10 +90,14 @@ func TestPgxRunnerAndTabulaIntegration(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, many, 1)
 
+		// CopyFrom rejects ReadOnly table even for an empty batch.
+		_, err = pgxdriver.CopyFrom(ctx, s, roTbl, nil)
+		require.ErrorIs(t, err, tabula.ErrReadOnly)
+
 		// CopyFrom bulk-inserts rows via PostgreSQL COPY protocol.
 		copied, err := pgxdriver.CopyFrom(ctx, s, tbl, []item{
-			{Tenant: "t1", Code: "eth", Tags: []string{"l1", "pos"}, Version: 1},
-			{Tenant: "t1", Code: "sol", Tags: []string{"l1"}, Version: 1},
+			{Tenant: "t1", Code: "beta", Tags: []string{"core", "draft"}, Version: 1},
+			{Tenant: "t1", Code: "gamma", Tags: []string{"core"}, Version: 1},
 		})
 		require.NoError(t, err)
 		require.Equal(t, int64(2), copied)
@@ -100,9 +105,21 @@ func TestPgxRunnerAndTabulaIntegration(t *testing.T) {
 		all, err := r.Find(ctx, nil, tabula.Listing{})
 		require.NoError(t, err)
 		require.Len(t, all, 3)
-		require.Equal(t, []string{"l1", "pos"}, all[1].Tags)
+		require.Equal(t, []string{"core", "draft"}, all[1].Tags)
 		return nil
 	}))
+
+	// WithinReadOnly enforces ErrReadOnly on derived writes, CopyFrom, and PG 25006.
+	err = runner.WithinReadOnly(ctx, "t1", func(ctx context.Context, s *pgxdriver.Session[tenant]) error {
+		require.True(t, s.ReadOnly())
+		_, err := pgxdriver.CopyFrom(ctx, s, tbl, nil)
+		require.ErrorIs(t, err, tabula.ErrReadOnly)
+		require.ErrorIs(t, tbl.Bind(s).Insert(ctx, &item{Tenant: "t1", Code: "ro", Version: 1}), tabula.ErrReadOnly)
+		_, rawErr := s.Exec(ctx, "INSERT INTO "+schema+".items (tenant_id, code, version) VALUES ($1, $2, 1)", "t1", "ro")
+		return rawErr
+	})
+	require.ErrorIs(t, err, tabula.ErrReadOnly)
+	require.Equal(t, "25006", tabula.SQLState(err))
 }
 
 func BenchmarkPGX_CopyFrom1000(b *testing.B) {
@@ -169,7 +186,7 @@ func TestDirectAndCopyTypes(t *testing.T) {
 	type enabled bool
 	type row struct {
 		ID      int64        `db:"id,key"`
-		Tenant  scope        `db:"tenant,tenant"`
+		Tenant  scope        `db:"tenant,scope"`
 		Counts  []int32      `db:"counts,array"`
 		Weights []float64    `db:"weights,array"`
 		Enabled []enabled    `db:"enabled,array"`
@@ -200,20 +217,24 @@ func TestDirectAndCopyTypes(t *testing.T) {
 		return err
 	}))
 	denied := errors.New("application read policy")
-	policy.IsPlatform = func(s scope) bool { return s == "platform" }
+	policy.IsUnscoped = func(s scope) bool { return s == "all" }
 	policy.GuardQuery = func(query string) error {
 		if query == "SELECT 42" {
 			return denied
 		}
 		return nil
 	}
-	ro, err := pgxdriver.Direct(ctx, dsn, policy)
+	ro, err := pgxdriver.Direct(ctx, dsn, policy, func(cfg *pgxpool.Config) {
+		cfg.MaxConns = 4
+		cfg.ConnConfig.RuntimeParams["default_transaction_read_only"] = "off" // Direct must re-enforce "on"
+	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = ro.Close() })
+	require.Equal(t, int32(4), ro.Stat().MaxConns())
 	s := ro.Session("one")
-	require.Equal(t, scope("one"), s.Tenant())
-	require.False(t, s.Platform())
-	require.True(t, ro.Session("platform").Platform())
+	require.Equal(t, scope("one"), s.Scope())
+	require.False(t, s.Unscoped())
+	require.True(t, ro.Session("all").Unscoped())
 	got, err := tbl.Bind(s).Get(ctx, 1)
 	require.NoError(t, err)
 	require.Equal(t, &input, got)
