@@ -65,12 +65,13 @@ These measurements were recorded before the bound-scope API change, on Apple M4 
 
 </details>
 
-Fuzzing targets are included for `db` tag parsing, `Filter`, `OrderSpec`, and `sqlcheck.ParseSnapshot`:
+CI fuzzes `db` tag parsing, `Filter`, `OrderSpec`, `GuardNoSessionEscape`, and `sqlcheck.ParseSnapshot`.
 
 ```sh
 go test -fuzz=FuzzParseColumnTag -fuzztime=5s .
 go test -fuzz=FuzzFilterAnd -fuzztime=5s .
 go test -fuzz=FuzzOrderSpecResolve -fuzztime=5s .
+go test -fuzz=FuzzGuardNoSessionEscape -fuzztime=5s .
 go test -fuzz=FuzzParseSnapshot -fuzztime=5s ./sqlcheck
 ```
 
@@ -97,7 +98,7 @@ For the development API and pgxdriver, run `scripts/workspace.sh` from the repos
 | `tabula/sqlcheck` | Snapshot render/parse, schema, privilege, and PREPARE/EXPLAIN verification | standard library only |
 | `tabula/pqdriver` | `lib/pq` array converters | `github.com/lib/pq` |
 | `tabula/pgxdriver` | Separate module: `pgx/v5` pool Runner, `pgx.Tx` Session, Direct & array converters | `github.com/jackc/pgx/v5` |
-| `tabula/cmd/tabula` | CI CLI (`tabula check --dsn ... --snapshot ... [--role ...]`) | `sqlcheck`, `github.com/lib/pq` |
+| `tabula/cmd/tabula` | Verify a snapshot with `tabula check --dsn ... --snapshot ... [--role ...]` and audit row-level security with `tabula check-rls --dsn ...` | `sqlcheck`, `github.com/lib/pq` |
 
 Applications may use `stdsql` or `pgxdriver` directly, or wrap `tabula` in a thin
 binding package of their own to enforce compile-time session/scope invariants.
