@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Use this checkout of both modules in local builds and CI.
+# Use this checkout of all three modules in local builds and CI.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export GOWORK="$PWD/go.work"
 
 if [[ -f "$GOWORK" ]]; then
-  go work use . ./pgxdriver
+  go work use . ./pgxdriver ./benchmarks
 else
-  go work init . ./pgxdriver
+  go work init . ./pgxdriver ./benchmarks
   go work edit -go=1.26.0
 fi
 
