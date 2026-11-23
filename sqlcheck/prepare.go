@@ -2,45 +2,60 @@ package sqlcheck
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/0xJean/tabula"
+	"github.com/0xJean/tabula/internal/pgstmt"
 )
 
 // PrepareStatement has the server PREPARE query inside tx, optionally as role,
 // then EXPLAIN EXECUTE it with NULL arguments. PREPARE checks names, types,
-// functions and parameter inference; EXPLAIN reaches executor start, where
-// table, column and function privileges are checked, without executing writes.
+// functions and parameter inference. EXPLAIN checks plan-time access without
+// executing the statement. Runtime function and sequence use needs execution probes.
 // Row-level security policies are not evaluated. Everything is undone through
 // a savepoint, so tx stays usable for the next statement.
 func PrepareStatement(ctx context.Context, tx *sql.Tx, query, role string) (err error) {
+	if _, ok := pgstmt.DML(query); !ok {
+		return errors.New("expected one preparable data statement")
+	}
 	if _, err := tx.ExecContext(ctx, `SAVEPOINT tabula_sqlcheck`); err != nil {
 		return err
 	}
+	prepared := false
+	name := "tabula_check_" + strings.ToLower(rand.Text())
 	defer func() {
-		if _, rollbackErr := tx.ExecContext(ctx, `ROLLBACK TO SAVEPOINT tabula_sqlcheck`); rollbackErr != nil && err == nil {
-			err = rollbackErr
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_, rollbackErr := tx.ExecContext(cleanup, `ROLLBACK TO SAVEPOINT tabula_sqlcheck`)
+		var deallocateErr error
+		if prepared {
+			_, deallocateErr = tx.ExecContext(cleanup, "DEALLOCATE "+name)
 		}
-		// PREPARE outlives the savepoint; release it explicitly.
-		_, _ = tx.ExecContext(ctx, `DEALLOCATE ALL`)
+		_, releaseErr := tx.ExecContext(cleanup, `RELEASE SAVEPOINT tabula_sqlcheck`)
+		err = errors.Join(err, rollbackErr, deallocateErr, releaseErr)
 	}()
-	if role != "" {
-		if _, err := tx.ExecContext(ctx, "SET LOCAL ROLE "+quoteIdent(role)); err != nil {
-			return err
-		}
-	}
-	if _, err := tx.ExecContext(ctx, `PREPARE tabula_sqlcheck_statement AS `+query); err != nil {
+	if err := auditRole(ctx, tx, role); err != nil {
 		return err
 	}
+	if _, err := tx.ExecContext(ctx, "SET LOCAL plan_cache_mode = force_generic_plan"); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "PREPARE "+name+" AS "+query); err != nil {
+		return err
+	}
+	prepared = true
 	var params int
 	if err := tx.QueryRowContext(ctx,
-		`SELECT cardinality(parameter_types) FROM pg_prepared_statements WHERE name = 'tabula_sqlcheck_statement'`).Scan(&params); err != nil {
+		`SELECT cardinality(parameter_types) FROM pg_catalog.pg_prepared_statements WHERE name = $1`, name).Scan(&params); err != nil {
 		return err
 	}
-	explain := `EXPLAIN EXECUTE tabula_sqlcheck_statement`
+	explain := "EXPLAIN EXECUTE " + name
 	if params > 0 {
 		explain += `(` + strings.TrimSuffix(strings.Repeat("NULL,", params), ",") + `)`
 	}
@@ -48,14 +63,11 @@ func PrepareStatement(ctx context.Context, tx *sql.Tx, query, role string) (err 
 	if err != nil {
 		return err
 	}
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		// Drain EXPLAIN output rows.
 	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return err
-	}
-	return rows.Close()
+	return rows.Err()
 }
 
 // VerifyStatements prepares and explains every statement of defs as role

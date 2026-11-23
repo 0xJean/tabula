@@ -15,6 +15,8 @@ and keeps the parts a reviewer must see (joins, locks, conditional writes) as SQ
    prepared and explained against the target schema, and the full SQL is kept in a
    reviewable snapshot.
 
+The authorization tooling accepts application-owned role assignments, policy categories and expected ACLs. It reads PostgreSQL catalogs, trials revocations in a rolled-back transaction and checks real row behavior in isolated fixtures. [Authorization design](AUTHORIZATION.md)
+
 ## Red lines
 
 These hold for every version. A proposal that crosses one needs a design discussion, not a

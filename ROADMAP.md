@@ -34,7 +34,7 @@ Items keep the red lines in [docs/DESIGN.md](docs/DESIGN.md).
 - **Drivers, sessions & transactions**: `stdsql` (`*sql.DB` / `*sql.Tx` Runner,
   `ScopePolicy` RLS plug-in, `Savepoint`, read-only `Direct` pools) and separate
   `pgxdriver` (`pgx/v5`) module including `Direct` pools and `CopyFrom` binary `COPY`.
-- **Errors & observability**: 7 PostgreSQL error classes and sentinels, opt-in `log/slog`
+- **Errors & observability**: PostgreSQL error classes and sentinels, opt-in `log/slog`
   per [docs/LOGGING.md](docs/LOGGING.md) (`LogOff`/`LogErrors`/`LogSlow`/`LogAll`,
   atomic level switch, `secret` tag, `Quiet()`/`Secret()`), plus explicit `Tracer` and
   `Metrics` hooks on `RegistryConfig`.
@@ -46,6 +46,13 @@ Items keep the red lines in [docs/DESIGN.md](docs/DESIGN.md).
   [docs/MIGRATION.md](docs/MIGRATION.md), [docs/COOKBOOK.md](docs/COOKBOOK.md),
   [examples/multitenant](examples/multitenant/README.md), and
   [benchmarks](benchmarks/README.md).
+
+### PostgreSQL authorization and RLS verification
+
+- Collect static and dynamic handwritten SQL sites, review exceptions and verify explicit per-role workloads.
+- Compare direct role grants against a manifest. Trial individual revocations in a disposable database and produce reviewable GRANT and REVOKE SQL.
+- Snapshot policies, FORCE RLS tables, grants and SECURITY DEFINER routines. Classify policies with application rules, check command coverage and exercise a role/scope/statement matrix.
+- Distinguish RLS and privilege denials, configure session guards and clone content-addressed PostgreSQL test templates through a chosen migration. [Design and configuration](docs/AUTHORIZATION.md)
 
 ## v1.0 — stability and ecosystem adapters
 

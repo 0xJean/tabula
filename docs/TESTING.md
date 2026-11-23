@@ -55,4 +55,6 @@ CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) additionally runs:
 
 ## Authorization fixtures
 
+The real-database suite exercises direct table, column, sequence and overloaded function grants, temporary revocation and restoration, command coverage, and role-specific row visibility and denial. The test account needs authority to create disposable roles, schemas and databases. [Authorization verification](AUTHORIZATION.md)
+
 The `postgresfixture` tests perform physical database clones, retry a failed install and check isolation between parallel tests. [Fixture integration test](../postgresfixture/fixture_integration_test.go)

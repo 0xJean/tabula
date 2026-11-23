@@ -1,8 +1,6 @@
-// Package sqlcheck is the reusable verification toolkit for tabula
-// descriptors: SQL snapshot rendering/parsing/diffing, Go-to-PostgreSQL schema
-// alignment checks (tables, views, and materialized views), column/table/sequence/
-// function privilege checks, generic RLS structural checks, and real-PostgreSQL
-// PREPARE/EXPLAIN verification.
+// Package sqlcheck verifies PostgreSQL descriptors, handwritten SQL and role
+// workloads. It checks schema alignment, snapshots database catalogs, compares
+// direct grants, trials revocations, classifies policies and tests RLS behavior.
 package sqlcheck
 
 import (
@@ -181,36 +179,22 @@ func VerifyViewSchema(ctx context.Context, db *sql.DB, views []tabula.ViewDefini
 }
 
 func loadInstalledColumns(ctx context.Context, db *sql.DB, schema, relation string) (map[string]ColumnInfo, error) {
-	rows, err := db.QueryContext(ctx,
-		`SELECT column_name, data_type, is_nullable = 'YES' FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2`,
-		schema, relation)
+	type column struct {
+		name string
+		ColumnInfo
+	}
+	scan := func(r *sql.Rows) (column, error) {
+		var c column
+		err := r.Scan(&c.name, &c.DataType, &c.Nullable)
+		return c, err
+	}
+	cols, err := readRows(ctx, db, `SELECT column_name, data_type, is_nullable = 'YES' FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2`, scan, schema, relation)
 	if err != nil {
 		return nil, err
 	}
-	installed := map[string]ColumnInfo{}
-	for rows.Next() {
-		var name string
-		var info ColumnInfo
-		if err := rows.Scan(&name, &info.DataType, &info.Nullable); err != nil {
-			_ = rows.Close()
-			return nil, err
-		}
-		installed[name] = info
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return nil, err
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if len(installed) > 0 {
-		return installed, nil
-	}
-
-	// Fallback to pg_attribute for materialized views (relkind = 'm'), which
-	// PostgreSQL omits from information_schema.columns.
-	mRows, err := db.QueryContext(ctx, `
+	if len(cols) == 0 {
+		// PostgreSQL omits materialized views from information_schema.columns.
+		cols, err = readRows(ctx, db, `
 		SELECT a.attname,
 		       CASE
 		           WHEN t.typelem <> 0 AND t.typlen = -1 THEN 'ARRAY'
@@ -222,24 +206,16 @@ func loadInstalledColumns(ctx context.Context, db *sql.DB, schema, relation stri
 		JOIN pg_namespace n ON n.oid = c.relnamespace
 		JOIN pg_type t ON t.oid = a.atttypid
 		WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind = 'm'
-		  AND a.attnum > 0 AND NOT a.attisdropped`, schema, relation)
-	if err != nil {
-		return nil, err
-	}
-	for mRows.Next() {
-		var name string
-		var info ColumnInfo
-		if err := mRows.Scan(&name, &info.DataType, &info.Nullable); err != nil {
-			_ = mRows.Close()
+		  AND a.attnum > 0 AND NOT a.attisdropped`, scan, schema, relation)
+		if err != nil {
 			return nil, err
 		}
-		installed[name] = info
 	}
-	if err := mRows.Err(); err != nil {
-		_ = mRows.Close()
-		return nil, err
+	installed := make(map[string]ColumnInfo, len(cols))
+	for _, c := range cols {
+		installed[c.name] = c.ColumnInfo
 	}
-	return installed, mRows.Close()
+	return installed, nil
 }
 
 // PrivilegeNeeds aggregates column, table-DELETE, sequence, and function EXECUTE
@@ -311,29 +287,20 @@ func CheckRolePrivileges(ctx context.Context, db *sql.DB, needs PrivilegeNeeds, 
 			}
 		}
 		schema, name, _ := strings.Cut(table, ".")
-		rows, err := db.QueryContext(ctx,
-			`SELECT privilege_type, column_name FROM information_schema.role_column_grants
-			 WHERE grantee = $1 AND table_schema = $2 AND table_name = $3 AND privilege_type IN ('SELECT', 'INSERT', 'UPDATE')`,
-			role, schema, name)
+		type columnGrant struct{ privilege, column string }
+		grants, err := readRows(ctx, db, `SELECT privilege_type, column_name FROM information_schema.role_column_grants
+			 WHERE grantee = $1 AND table_schema = $2 AND table_name = $3 AND privilege_type IN ('SELECT', 'INSERT', 'UPDATE')`, func(r *sql.Rows) (columnGrant, error) {
+			var g columnGrant
+			err := r.Scan(&g.privilege, &g.column)
+			return g, err
+		}, role, schema, name)
 		if err != nil {
 			return nil, nil, err
 		}
-		for rows.Next() {
-			var privilege, column string
-			if err := rows.Scan(&privilege, &column); err != nil {
-				_ = rows.Close()
-				return nil, nil, err
+		for _, g := range grants {
+			if !privileges[g.privilege][g.column] {
+				extra = append(extra, fmt.Sprintf("%s %s(%s)", table, g.privilege, g.column))
 			}
-			if !privileges[privilege][column] {
-				extra = append(extra, fmt.Sprintf("%s %s(%s)", table, privilege, column))
-			}
-		}
-		if err := rows.Err(); err != nil {
-			_ = rows.Close()
-			return nil, nil, err
-		}
-		if err := rows.Close(); err != nil {
-			return nil, nil, err
 		}
 	}
 	for table := range needs.TableDelete {

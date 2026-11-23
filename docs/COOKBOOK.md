@@ -219,3 +219,18 @@ Use a read-role connection URL and application-owned SQL. Both Direct adapters a
 Use `netip.Addr` for a host address and `netip.Prefix` for CIDR networks or inet values with a subnet mask. An SQL NULL maps to an invalid address or prefix, or to nil for pointer fields. Scanning a subnet into a host address returns an error so the prefix length is preserved.
 
 Set `RegistryConfig.ArrayColumn` to `pqdriver.ArrayColumn` or `pgxdriver.ArrayColumn` for one-dimensional string, int32, int64, float64 and bool slices, including named element types. A nil slice represents SQL NULL and a non-nil empty slice represents an empty PostgreSQL array.
+
+## Audit handwritten SQL before narrowing grants
+
+Run these commands in the application repository using the application’s inventory, workload, scope and expected grant files. Set `TABULA_DSN` to a disposable PostgreSQL installation.
+
+```sh
+tabula inventory --config inventory.json
+tabula verify-roles --config workload.json
+tabula grants --config privileges.json
+tabula minimize --config trials.json
+tabula check-coverage --config workload.json
+tabula test-rls --config behavior.json
+```
+
+Review each unregistered dynamic site and each extra grant before changing the application's grant declarations. [Full JSON examples and interpretation](AUTHORIZATION.md)

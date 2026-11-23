@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"slices"
-	"strings"
 )
 
 // RLSExpectation configures domain-agnostic PostgreSQL Row-Level Security
@@ -38,76 +37,41 @@ func CheckRLS(ctx context.Context, db *sql.DB, exp RLSExpectation) ([]string, er
 		rlsForced  bool
 	}
 	tables := map[string]tableState{}
-	rows, err := db.QueryContext(ctx, `
-		SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity
-		FROM pg_class c
-		JOIN pg_namespace n ON n.oid = c.relnamespace
-		WHERE n.nspname = $1 AND c.relkind IN ('r', 'p')`, schema)
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
 	if err != nil {
-		return nil, fmt.Errorf("sqlcheck.CheckRLS: list tables in %s: %w", schema, err)
-	}
-	for rows.Next() {
-		var name string
-		var st tableState
-		if err := rows.Scan(&name, &st.rlsEnabled, &st.rlsForced); err != nil {
-			_ = rows.Close()
-			return nil, err
-		}
-		tables[name] = st
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
 		return nil, err
 	}
-	if err := rows.Close(); err != nil {
+	defer func() { _ = tx.Rollback() }()
+	type table struct {
+		name string
+		tableState
+	}
+	installed, err := readRows(ctx, tx, `SELECT c.relname,c.relrowsecurity,c.relforcerowsecurity FROM pg_catalog.pg_class c
+	JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relkind IN ('r','p')`, func(rows *sql.Rows) (table, error) {
+		var t table
+		err := rows.Scan(&t.name, &t.rlsEnabled, &t.rlsForced)
+		return t, err
+	}, schema)
+	if err != nil {
+		return nil, fmt.Errorf("list RLS tables in %s: %w", schema, err)
+	}
+	for _, t := range installed {
+		tables[t.name] = t.tableState
+	}
+	schemas, err := scopeArray([]string{schema})
+	if err != nil {
 		return nil, err
 	}
-
-	// Collect policies for tables in schema.
-	type policyRow struct {
-		table      string
-		name       string
-		permissive bool
-		roles      []string
-	}
-	pRows, err := db.QueryContext(ctx, `
-		SELECT c.relname, p.polname, p.polpermissive,
-		       COALESCE(array_to_string(ARRAY(
-		           SELECT CASE WHEN r = 0 THEN 'public' ELSE pg_get_userbyid(r)::text END
-		           FROM unnest(p.polroles) r ORDER BY 1
-		       ), ','), '')
-		FROM pg_policy p
-		JOIN pg_class c ON c.oid = p.polrelid
-		JOIN pg_namespace n ON n.oid = c.relnamespace
-		WHERE n.nspname = $1`, schema)
+	policies, err := readPolicies(ctx, tx, schemas)
 	if err != nil {
-		return nil, fmt.Errorf("sqlcheck.CheckRLS: list policies in %s: %w", schema, err)
+		return nil, err
 	}
 	hasRestrictive := map[string]bool{}
-	var policies []policyRow
-	for pRows.Next() {
-		var pr policyRow
-		var roleCSV string
-		if err := pRows.Scan(&pr.table, &pr.name, &pr.permissive, &roleCSV); err != nil {
-			_ = pRows.Close()
-			return nil, err
+	for _, p := range policies {
+		if !p.Permissive {
+			hasRestrictive[p.Table] = true
 		}
-		if roleCSV != "" {
-			pr.roles = strings.Split(roleCSV, ",")
-		}
-		if !pr.permissive {
-			hasRestrictive[pr.table] = true
-		}
-		policies = append(policies, pr)
 	}
-	if err := pRows.Err(); err != nil {
-		_ = pRows.Close()
-		return nil, err
-	}
-	if err := pRows.Close(); err != nil {
-		return nil, err
-	}
-
 	targetTables := exp.Tables
 	if len(targetTables) == 0 {
 		for name, st := range tables {
@@ -142,9 +106,12 @@ func CheckRLS(ctx context.Context, db *sql.DB, exp RLSExpectation) ([]string, er
 			forbidden[r] = true
 		}
 		for _, p := range policies {
-			for _, role := range p.roles {
+			for _, role := range p.Roles {
+				if role == "PUBLIC" && forbidden["public"] {
+					role = "public"
+				}
 				if forbidden[role] {
-					failures = append(failures, fmt.Sprintf("%s.%s.%s: policy references forbidden role %s", schema, p.table, p.name, role))
+					failures = append(failures, fmt.Sprintf("%s.%s.%s: policy references forbidden role %s", schema, p.Table, p.Name, role))
 				}
 			}
 		}

@@ -14,8 +14,10 @@ v1.0 a minor version may contain breaking changes.
 
 ### Additions
 
+- PostgreSQL authorization auditing covers typed Go source inventory, per-role workloads, exact direct grant manifests, transactional privilege trials, four catalog snapshots, policy classification, command coverage and rollback-based RLS behavior matrices. The CLI accepts application-owned JSON configurations. [Authorization guide](docs/AUTHORIZATION.md)
 - Added `tabula.NewSessionGuard` and separate SQLSTATE 42501 classes and sentinels for RLS denials and insufficient privileges.
 - The standard-library `postgresfixture` package caches installation templates and clones an isolated database for each test.
+- `PrepareStatement` uses a private prepared statement and releases its savepoint. Application-owned prepared statements survive both successful and failed verification.
 - **Conditional, upsert, delete, expression & batch writes**: `Rows.UpdateWhere`,
   `Rows.SetWhere`, `Table.DefineUpsert` / `TryDefineUpsert` + `Rows.Upsert` / `UpsertMany`
   (forbids updating key, scope, and `once` columns; enforces scope on conflict; registers

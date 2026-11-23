@@ -36,7 +36,7 @@ The example verifies the schema, executes scoped writes and shows what each tena
 | Sessions, scope & retries | `stdsql` (`*sql.DB`/`*sql.Tx` Runner, `ScopePolicy` RLS plug-in, `Savepoint`, read-only `Direct` pool) and `pgxdriver` (`pgx/v5` Runner, Session, Direct & binary COPY), with driver-independent `tabula.Retry` |
 | Error classification | Distinct PostgreSQL sentinels & classes (`unique`, `foreign_key`, `check`, `not_null`, `serialization`, `deadlock`, `canceled`, `rls_denied`, `insufficient_privilege`) |
 | Observability | Opt-in `log/slog` ([spec](docs/LOGGING.md)), `Tracer`, and `Metrics` interfaces on `RegistryConfig` |
-| Verification & CI CLI | `sqlcheck` (`VerifyStatements`, `VerifyViewStatements`, `VerifySchema` incl. materialized views, `CheckRolePrivileges` incl. `DELETE` & function `EXECUTE`, `CheckRLS`) + `cmd/tabula` (`tabula check` & `tabula check-rls`) |
+| Verification & CI CLI | Descriptor and handwritten SQL, role workloads, direct grant drift and rollback-based minimization, policy catalogs, classification, command coverage and RLS behavior matrices. [Authorization guide](docs/AUTHORIZATION.md) |
 
 ## Benchmarks
 
@@ -95,11 +95,11 @@ For the development API and pgxdriver, run `scripts/workspace.sh` from the repos
 | --- | --- | --- |
 | `tabula` | Engine: registry, tables, views, rows, writes, upserts, keyset, filter, order, errors, logging, tracing/metrics interfaces | standard library only |
 | `tabula/stdsql` | `*sql.DB` / `*sql.Tx` sessions, `Runner`, `ScopePolicy` (RLS), `Savepoint`, read-only `Direct` pool | standard library only |
-| `tabula/sqlcheck` | Snapshot render/parse, schema, privilege, and PREPARE/EXPLAIN verification | standard library only |
-| `tabula/postgresfixture` | Content-addressed installation templates, migration prefixes and isolated per-test databases | standard library only |
+| `tabula/sqlcheck` | Descriptor and catalog snapshots, source SQL inventory, role workloads, grant minimization and RLS checks | standard library only |
 | `tabula/pqdriver` | `lib/pq` array converters | `github.com/lib/pq` |
 | `tabula/pgxdriver` | Separate module: `pgx/v5` pool Runner, `pgx.Tx` Session, Direct & array converters | `github.com/jackc/pgx/v5` |
-| `tabula/cmd/tabula` | Verify a snapshot with `tabula check --dsn ... --snapshot ... [--role ...]` and audit row-level security with `tabula check-rls --dsn ...` | `sqlcheck`, `github.com/lib/pq` |
+| `tabula/postgresfixture` | Content-addressed installation templates, migration prefixes and isolated per-test databases | standard library only |
+| `tabula/cmd/tabula` | `check`, `check-rls`, `inventory`, `verify-roles`, `grants`, `minimize`, `catalog`, `check-policies`, `check-coverage`, `test-rls` | `sqlcheck`, `github.com/lib/pq` |
 
 Applications may use `stdsql` or `pgxdriver` directly, or wrap `tabula` in a thin
 binding package of their own to enforce compile-time session/scope invariants.

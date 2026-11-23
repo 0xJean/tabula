@@ -5,6 +5,10 @@
 //
 //	tabula check --dsn "$POSTGRES_DSN" --snapshot path/to/defined-statements.sql [--role app_role]
 //	tabula check-rls --dsn "$POSTGRES_DSN" [--schema public] [--tables a,b] [--force] [--restrictive] [--forbid-roles r1,r2]
+//	tabula inventory --config inventory.json [--bindings bindings.json]
+//	tabula {verify-roles|grants|minimize|catalog|check-policies|check-coverage|test-rls} --config file.json
+//
+// Database commands accept TABULA_DSN. See docs/AUTHORIZATION.md for the JSON formats.
 package main
 
 import (
@@ -31,6 +35,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	switch args[0] {
+	case "inventory", "verify-roles", "grants", "minimize", "catalog", "check-policies", "check-coverage", "test-rls":
+		return runAudit(ctx, args[0], args[1:], stdout, stderr)
 	case "check":
 		return runCheck(ctx, args[1:], stdout, stderr)
 	case "check-rls":
@@ -47,6 +53,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 
 func printUsage(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "usage:")
+	_, _ = fmt.Fprintln(w, "  tabula inventory --config <file> [--bindings <file>]")
+	_, _ = fmt.Fprintln(w, "  tabula {verify-roles|grants|minimize|check-policies|check-coverage|test-rls} --config <file> --dsn <postgres-dsn>")
+	_, _ = fmt.Fprintln(w, "  tabula catalog --config <file> --dsn <postgres-dsn> [--section <file>] [--against <directory>]")
 	_, _ = fmt.Fprintln(w, "  tabula check --dsn <postgres-dsn> --snapshot <file> [--role <role>]")
 	_, _ = fmt.Fprintln(w, "  tabula check-rls --dsn <postgres-dsn> [--schema public] [--tables t1,t2] [--force] [--restrictive] [--forbid-roles r1,r2]")
 }

@@ -20,8 +20,8 @@ type Pool[S any] struct {
 	close    func() error
 }
 
-func NewPool[S any](r Reader, unscoped func(S) bool, close func() error) *Pool[S] {
-	return &Pool[S]{reader: r, unscoped: unscoped, close: close}
+func NewPool[S any](r Reader, unscoped func(S) bool, closePool func() error) *Pool[S] {
+	return &Pool[S]{reader: r, unscoped: unscoped, close: closePool}
 }
 
 // Session binds a scope without acquiring a connection or starting a transaction.
