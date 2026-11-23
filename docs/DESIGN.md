@@ -46,6 +46,9 @@ pull request.
 - **The core depends on the standard library only.** Drivers (`lib/pq`, `pgx`),
   adapters and integrations live in separate packages or modules so that users import only
   what they use.
+- **Logging is opt-in and explicit.** The logger (`log/slog`), its level switch, the slow
+  threshold and the value policy are passed in; logging is off by default and argument
+  values are never logged unless the application allows it. See [LOGGING.md](LOGGING.md).
 - **Reflection happens once.** Field indexes and codecs are computed at definition time;
   the query path does no tag parsing.
 

@@ -19,6 +19,7 @@ builds joins, never generates DDL, and never runs hidden callbacks.
 | Rows of hand-written SQL (joins, projections, reports) | `DefineView(View[T, S]{...})`: you write the SQL, pgtable decodes the rows |
 | Batch and locked reads | `GetMany`, `LockMany` (fixed key order), `LockBy` |
 | Safe dynamic parts | `Filter` (parameters only), `OrderSpec` (whitelisted sort columns) |
+| Logging | Opt-in `log/slog` with level switch, slow-statement threshold and value redaction ([spec](docs/LOGGING.md)) |
 | Verification | `sqlcheck`: PREPARE and EXPLAIN every registered statement, compare columns with the schema, derive privileges, snapshot the SQL for review |
 
 ## What it will not do

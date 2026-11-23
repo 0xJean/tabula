@@ -25,6 +25,9 @@ it is tagged. Items keep the red lines in [docs/DESIGN.md](docs/DESIGN.md).
 - Error classification: unique, foreign key, check, not null, serialization failure,
   deadlock, cancellation.
 - `sqlcheck` as a command-line tool for CI (`pgtable check --dsn ...`).
+- Logging per [docs/LOGGING.md](docs/LOGGING.md): `log/slog` logger in `RegistryConfig`,
+  levels off / errors / slow / all with run-time switch, fixed record keys, values never
+  logged by default, `secret` column tag, `Quiet()` and `Secret()` statement options.
 
 ## v0.4 — drivers, sessions and queries
 
@@ -38,7 +41,7 @@ it is tagged. Items keep the red lines in [docs/DESIGN.md](docs/DESIGN.md).
 
 ## v0.5 — observability, performance, documentation
 
-- Tracer / logger / metrics interfaces passed in explicitly; statement keys as span names;
+- Tracer and metrics interfaces passed in explicitly (logging already in v0.3); statement keys as span names;
   OpenTelemetry adapter as its own module.
 - Optional prepared-statement cache; `COPY` for large batch inserts.
 - Benchmarks against `database/sql`, sqlx, pgx and sqlc-generated code, published in the
