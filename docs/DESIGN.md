@@ -1,6 +1,6 @@
 # Design principles
 
-pgtable sits between raw `database/sql` and an ORM. It removes the repetitive parts of
+Tabula sits between raw `database/sql` and an ORM. It removes the repetitive parts of
 PostgreSQL access (column lists, scanning, nullable handling, single-table statements)
 and keeps the parts a reviewer must see (joins, locks, conditional writes) as SQL.
 
@@ -9,7 +9,7 @@ and keeps the parts a reviewer must see (joins, locks, conditional writes) as SQ
 1. **Declarative descriptors.** A Go struct with `db` tags describes one table or one row
    shape. Descriptors are defined once at package init and validated strictly: an invalid
    tag panics at start-up, not at the first query.
-2. **Explicit SQL.** Anything beyond single-table CRUD is written by hand. pgtable only
+2. **Explicit SQL.** Anything beyond single-table CRUD is written by hand. Tabula only
    provides the column list and decodes the result.
 3. **Verified against a real database.** Every derived or registered statement can be
    prepared and explained against the target schema, and the full SQL is kept in a

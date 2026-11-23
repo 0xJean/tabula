@@ -24,7 +24,7 @@ it is tagged. Items keep the red lines in [docs/DESIGN.md](docs/DESIGN.md).
 - Configurable soft delete (timestamp, status value, boolean).
 - Error classification: unique, foreign key, check, not null, serialization failure,
   deadlock, cancellation.
-- `sqlcheck` as a command-line tool for CI (`pgtable check --dsn ...`).
+- `sqlcheck` as a command-line tool for CI (`tabula check --dsn ...`).
 - Logging per [docs/LOGGING.md](docs/LOGGING.md): `log/slog` logger in `RegistryConfig`,
   levels off / errors / slow / all with run-time switch, fixed record keys, values never
   logged by default, `secret` column tag, `Quiet()` and `Secret()` statement options.

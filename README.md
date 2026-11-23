@@ -1,8 +1,8 @@
-# pgtable
+# Tabula
 
 Declarative descriptors, explicit SQL, verified against a real PostgreSQL.
 
-pgtable describes PostgreSQL tables and result rows with Go struct tags, derives the
+Tabula describes PostgreSQL tables and result rows with Go struct tags, derives the
 plain single-table statements from them, decodes the rows of hand-written SQL, and
 checks every registered statement against a real database. It is not an ORM: it never
 builds joins, never generates DDL, and never runs hidden callbacks.
@@ -13,10 +13,10 @@ builds joins, never generates DDL, and never runs hidden callbacks.
 
 ## What it does
 
-| Need | pgtable |
+| Need | Tabula |
 | --- | --- |
 | Single-table CRUD | `Define(Table[T, K, S]{Name, Order})` derives get, lock, insert, update, count and list from `db` tags (key, serial, tenant, deleted, version, once, json, zero, array) |
-| Rows of hand-written SQL (joins, projections, reports) | `DefineView(View[T, S]{...})`: you write the SQL, pgtable decodes the rows |
+| Rows of hand-written SQL (joins, projections, reports) | `DefineView(View[T, S]{...})`: you write the SQL, Tabula decodes the rows |
 | Batch and locked reads | `GetMany`, `LockMany` (fixed key order), `LockBy` |
 | Safe dynamic parts | `Filter` (parameters only), `OrderSpec` (whitelisted sort columns) |
 | Logging | Opt-in `log/slog` with level switch, slow-statement threshold and value redaction ([spec](docs/LOGGING.md)) |
@@ -32,12 +32,12 @@ builds joins, never generates DDL, and never runs hidden callbacks.
 
 | Package | Role | Dependencies |
 | --- | --- | --- |
-| `pgtable` | Engine: registry, tables, views, rows, filter, order | standard library only |
-| `pgtable/pqdriver` | lib/pq SQLSTATE helpers and array converters | `github.com/lib/pq` |
-| `pgtable/sqlcheck` | Snapshot, schema and privilege verification | standard library only |
+| `tabula` | Engine: registry, tables, views, rows, filter, order | standard library only |
+| `tabula/pqdriver` | lib/pq SQLSTATE helpers and array converters | `github.com/lib/pq` |
+| `tabula/sqlcheck` | Snapshot, schema and privilege verification | standard library only |
 
 Applications bind the engine through a thin layer of their own: the session type, the
-scope type (for example a tenant), the error policy and extra value types. pgtable has no
+scope type (for example a tenant), the error policy and extra value types. Tabula has no
 notion of tenants or business errors.
 
 ## License
