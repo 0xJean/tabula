@@ -62,6 +62,20 @@ func TestVerifyAgainstPostgres(t *testing.T) {
 	reg := tabula.NewRegistry(tabula.RegistryConfig[scope]{TenantID: func(s scope) any { return string(s) }})
 	tbl := tabula.Define(reg, tabula.Table[item, int64, scope]{Name: schema + ".items", Order: "id ASC"})
 	tbl.Statement("by_code", "SELECT "+tbl.Cols()+" FROM "+schema+".items WHERE code = $1")
+	tbl.DefineUpsert("upsert_id", tabula.UpsertSpec{
+		Conflict:  []string{"id"},
+		Update:    []string{"code", "note", "version"},
+		Returning: []string{"id"},
+	})
+
+	t.Run("snapshot round-trip verifies against real postgres", func(t *testing.T) {
+		snap := RenderSnapshot(reg.Defined(), "Generated in integration test")
+		parsed, err := ParseSnapshot(snap)
+		require.NoError(t, err)
+		failures, err := VerifyStatements(ctx, db, parsed, "")
+		require.NoError(t, err)
+		require.Empty(t, failures)
+	})
 
 	t.Run("schema matches the descriptor", func(t *testing.T) {
 		families := DefaultTypeFamilies()

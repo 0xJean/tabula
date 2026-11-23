@@ -89,6 +89,8 @@ func DefaultTypeFamilies() map[string][]string {
 		"map[string]any":    {"jsonb", "json"},
 		"json.RawMessage":   {"jsonb", "json"},
 		"[]byte":            {"bytea"},
+		"[]string":          {"ARRAY"},
+		"[]int64":           {"ARRAY"},
 	})
 }
 
