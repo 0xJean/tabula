@@ -1,23 +1,27 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
 <defs>
-<linearGradient id="top" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#A5B4FC"/><stop offset="1" stop-color="#818CF8"/></linearGradient>
-<linearGradient id="left" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4F46E5"/><stop offset="1" stop-color="#3730A3"/></linearGradient>
-<linearGradient id="right" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#6366F1"/><stop offset="1" stop-color="#4338CA"/></linearGradient>
-<linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0F172A"/><stop offset="1" stop-color="#1E1B4B"/></linearGradient>
+<linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#1E1B4B"/><stop offset="1" stop-color="#0B0A1F"/></linearGradient>
+<radialGradient id="glow" cx=".5" cy=".42" r=".55"><stop offset="0" stop-color="#6366F1" stop-opacity=".45"/><stop offset="1" stop-color="#6366F1" stop-opacity="0"/></radialGradient>
+<linearGradient id="top" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#C7D2FE"/><stop offset="1" stop-color="#8B95F9"/></linearGradient>
+<linearGradient id="l" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5B52F0"/><stop offset="1" stop-color="#3B2FB8"/></linearGradient>
+<linearGradient id="r" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7479F7"/><stop offset="1" stop-color="#4F46E5"/></linearGradient>
+<linearGradient id="badge" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#67E8F9"/><stop offset="1" stop-color="#06B6D4"/></linearGradient>
+<filter id="sh" x="-30%" y="-30%" width="160%" height="160%"><feDropShadow dx="0" dy="6" stdDeviation="6" flood-color="#000" flood-opacity=".45"/></filter>
 </defs>
 <rect width="200" height="200" rx="44" fill="url(#bg)"/>
-<!-- header slab -->
+<rect width="200" height="200" rx="44" fill="url(#glow)"/>
+<rect x="1" y="1" width="198" height="198" rx="43" fill="none" stroke="#fff" stroke-opacity=".08" stroke-width="2"/>
+<ellipse cx="100" cy="176" rx="40" ry="7" fill="#000" opacity=".35"/>
+<g filter="url(#sh)">
+<path d="M78 112 L100 123 L100 172 L78 161 Z" fill="url(#l)"/>
+<path d="M122 112 L100 123 L100 172 L122 161 Z" fill="url(#r)"/>
+<path d="M38 70 L100 102 L100 116 L38 84 Z" fill="url(#l)"/>
+<path d="M162 70 L100 102 L100 116 L162 84 Z" fill="url(#r)"/>
 <path d="M100 38 L162 70 L100 102 L38 70 Z" fill="url(#top)"/>
-<path d="M38 70 L100 102 L100 118 L38 86 Z" fill="url(#left)"/>
-<path d="M162 70 L100 102 L100 118 L162 86 Z" fill="url(#right)"/>
-<!-- column -->
-<path d="M100 102 L122 113 L122 165 L100 176 L78 165 L78 113 Z" fill="none"/>
-<path d="M78 113 L100 124 L100 176 L78 165 Z" fill="url(#left)"/>
-<path d="M122 113 L100 124 L100 176 L122 165 Z" fill="url(#right)"/>
-<path d="M78 113 L100 102 L122 113 L100 124 Z" fill="#C7D2FE"/>
-<!-- grid lines on header top -->
-<path d="M69 54 L131 86 M131 54 L69 86" stroke="#312E81" stroke-width="2.5" opacity=".35"/>
-<!-- verified spark -->
-<circle cx="152" cy="146" r="17" fill="#22D3EE"/>
-<path d="M144 146 l6 6 l11-12" fill="none" stroke="#0F172A" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M69 54 L131 86 M131 54 L69 86" stroke="#4338CA" stroke-width="2" stroke-opacity=".4"/>
+<path d="M100 38 L162 70 M100 38 L38 70" stroke="#fff" stroke-opacity=".7" stroke-width="1.5"/>
+<path d="M100 102 L100 172" stroke="#fff" stroke-opacity=".18" stroke-width="1.2"/>
+</g>
+<g filter="url(#sh)"><circle cx="150" cy="146" r="18" fill="url(#badge)"/><circle cx="150" cy="146" r="18" fill="none" stroke="#1E1B4B" stroke-width="4"/>
+<path d="M142 146 l6 6 l11-12" fill="none" stroke="#0B0A1F" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/></g>
 </svg>

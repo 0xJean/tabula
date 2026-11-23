@@ -1,12 +1,23 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
-<defs><linearGradient id="s" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0EA5E9"/><stop offset=".55" stop-color="#6366F1"/><stop offset="1" stop-color="#A855F7"/></linearGradient></defs>
-<rect width="200" height="200" rx="44" fill="#0B1020"/>
-<circle cx="100" cy="100" r="70" fill="none" stroke="url(#s)" stroke-width="6"/>
-<circle cx="100" cy="100" r="58" fill="none" stroke="#1E293B" stroke-width="2" stroke-dasharray="3 6"/>
-<!-- T built from cells -->
-<g fill="url(#s)">
-<rect x="58" y="62" width="26" height="18" rx="4"/><rect x="87" y="62" width="26" height="18" rx="4"/><rect x="116" y="62" width="26" height="18" rx="4"/>
-<rect x="87" y="84" width="26" height="18" rx="4"/><rect x="87" y="106" width="26" height="18" rx="4"/><rect x="87" y="128" width="26" height="18" rx="4" opacity=".55"/>
+<defs>
+<linearGradient id="s" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#38BDF8"/><stop offset=".5" stop-color="#6366F1"/><stop offset="1" stop-color="#C084FC"/></linearGradient>
+<radialGradient id="bg" cx=".5" cy=".45" r=".7"><stop offset="0" stop-color="#151B33"/><stop offset="1" stop-color="#070A14"/></radialGradient>
+<radialGradient id="halo" cx=".5" cy=".5" r=".5"><stop offset=".6" stop-color="#6366F1" stop-opacity=".0"/><stop offset=".8" stop-color="#6366F1" stop-opacity=".25"/><stop offset="1" stop-color="#6366F1" stop-opacity="0"/></radialGradient>
+<linearGradient id="hi" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".45"/><stop offset=".5" stop-color="#fff" stop-opacity="0"/></linearGradient>
+<filter id="gl" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+</defs>
+<rect width="200" height="200" rx="44" fill="url(#bg)"/>
+<rect x="1" y="1" width="198" height="198" rx="43" fill="none" stroke="#fff" stroke-opacity=".07" stroke-width="2"/>
+<circle cx="100" cy="100" r="86" fill="url(#halo)"/>
+<circle cx="100" cy="100" r="72" fill="none" stroke="url(#s)" stroke-width="5" filter="url(#gl)"/>
+<circle cx="100" cy="100" r="62" fill="none" stroke="#334155" stroke-width="1.5" stroke-dasharray="2 5"/>
+<g fill="#1E293B" stroke="#334155" stroke-width="1">
+<rect x="57" y="84" width="26" height="18" rx="5"/><rect x="117" y="84" width="26" height="18" rx="5"/>
+<rect x="57" y="106" width="26" height="18" rx="5" opacity=".6"/><rect x="117" y="106" width="26" height="18" rx="5" opacity=".6"/>
 </g>
-<g fill="#334155"><rect x="58" y="84" width="26" height="18" rx="4"/><rect x="116" y="84" width="26" height="18" rx="4"/><rect x="58" y="106" width="26" height="18" rx="4" opacity=".6"/><rect x="116" y="106" width="26" height="18" rx="4" opacity=".6"/></g>
+<g filter="url(#gl)" fill="url(#s)">
+<rect x="57" y="60" width="26" height="20" rx="5"/><rect x="87" y="60" width="26" height="20" rx="5"/><rect x="117" y="60" width="26" height="20" rx="5"/>
+<rect x="87" y="84" width="26" height="18" rx="5"/><rect x="87" y="106" width="26" height="18" rx="5"/><rect x="87" y="128" width="26" height="18" rx="5" opacity=".55"/>
+</g>
+<g fill="url(#hi)"><rect x="57" y="60" width="86" height="10" rx="5"/><rect x="87" y="84" width="26" height="9" rx="4.5"/><rect x="87" y="106" width="26" height="9" rx="4.5"/></g>
 </svg>
