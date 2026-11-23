@@ -33,6 +33,8 @@ func TestErrorClassification(t *testing.T) {
 		{"not_null", pgStateErr{"23502", "nn"}, ClassNotNull, ErrNotNull},
 		{"serialization", pgStateErr{"40001", "ser"}, ClassSerialization, ErrSerialization},
 		{"deadlock", pgStateErr{"40P01", "dl"}, ClassDeadlock, ErrDeadlock},
+		{"rls", pgStateErr{"42501", "new row violates row-level security policy for table items"}, ClassRLSDenied, ErrRLSDenied},
+		{"privilege", pgStateErr{"42501", "permission denied for table items"}, ClassInsufficientPrivilege, ErrInsufficientPrivilege},
 		{"query_canceled", pgStateErr{"57014", "cancel"}, ClassCanceled, ErrCanceled},
 		{"ctx_canceled", context.Canceled, ClassCanceled, ErrCanceled},
 		{"other", errors.New("boom"), ClassOther, nil},

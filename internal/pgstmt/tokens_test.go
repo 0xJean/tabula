@@ -39,3 +39,18 @@ func TestTokensEscapeStrings(t *testing.T) {
 	require.Equal(t, []string{"select", "name", "from", "items"}, toksIdent)
 	require.Empty(t, SessionChange(toksIdent))
 }
+
+func TestDataStatementBoundaries(t *testing.T) {
+	for _, q := range []string{`SELECT $1, $$one; two$$;`, `(SELECT 'a''b')`, `/* outer /* inner */ */ UPDATE "MiXeD" SET x=1`} {
+		_, ok := DML(q)
+		require.True(t, ok, q)
+	}
+	for _, q := range []string{"", "(", "RESET ALL", "SELECT 1; SELECT 2"} {
+		_, ok := DML(q)
+		require.False(t, ok, q)
+	}
+	tokens := Lex(`SELECT "With.Dot", Äbc, $tag$note;$tag$ FROM items`)
+	require.Contains(t, tokens, Token{Quoted, "With.Dot"})
+	require.Contains(t, tokens, Token{Word, "Äbc"})
+	require.Contains(t, tokens, Token{Literal, "note;"})
+}

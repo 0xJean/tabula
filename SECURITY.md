@@ -27,3 +27,5 @@ Instead, report vulnerabilities privately via GitHub Security Advisories on
   single-quoted literals). `tabula.GuardReadOnly` admits only a single `SELECT` or `WITH`
   statement and combines with `default_transaction_read_only=on` in `stdsql.Direct` and
   `pgxdriver.Direct` for defense-in-depth read-only pools.
+
+- `NewSessionGuard` can protect application-owned GUC prefixes and restrict role, session authorization and `set_config` changes in adapter SQL. Run guarded SQL with PostgreSQL’s standard-conforming strings enabled. The database role remains the enforcement boundary for functions and other indirect operations.

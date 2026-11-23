@@ -14,6 +14,7 @@ v1.0 a minor version may contain breaking changes.
 
 ### Additions
 
+- Added `tabula.NewSessionGuard` and separate SQLSTATE 42501 classes and sentinels for RLS denials and insufficient privileges.
 - **Conditional, upsert, delete, expression & batch writes**: `Rows.UpdateWhere`,
   `Rows.SetWhere`, `Table.DefineUpsert` / `TryDefineUpsert` + `Rows.Upsert` / `UpsertMany`
   (forbids updating key, scope, and `once` columns; enforces scope on conflict; registers

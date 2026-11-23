@@ -54,7 +54,7 @@ in every application.
 | `tabula.action` | string | `get`, `lock`, `insert`, `save`, `list`, `count`, `view`, `exec`, ... |
 | `tabula.duration_ms` | float | Elapsed time |
 | `tabula.rows` | int | Rows returned or affected, when known |
-| `tabula.error_class` | string | `unique`, `foreign_key`, `check`, `not_null`, `serialization`, `deadlock`, `canceled`, `other` (failures only) |
+| `tabula.error_class` | string | `unique`, `foreign_key`, `check`, `not_null`, `serialization`, `deadlock`, `canceled`, `rls_denied`, `insufficient_privilege`, `other` (failures only) |
 | `tabula.sqlstate` | string | PostgreSQL SQLSTATE, when the driver exposes it |
 | `tabula.scope` | string | Only what the application's `ScopeLog` function returns (for example a tenant ID); omitted when not configured |
 

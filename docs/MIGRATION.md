@@ -54,3 +54,7 @@ Hand-written SQL keeps its original placeholders and arguments. A query containi
 | SQL migrations or GORM AutoMigrate | Existing SQL migrations plus `sqlcheck` | Apply migrations through your deployment tooling. Prepare the descriptor SQL and check schema, grants and RLS against the migrated database. |
 
 Migrate one query at a time. `stdsql.NewSession` wraps an existing `*sql.Tx` and `pgxdriver.NewSession` wraps a `pgx.Tx`. For an existing transaction, the application performs its scope setup before wrapping it. A `Runner` performs that setup when it owns the transaction.
+
+## Mapping permission errors
+
+Consumers with custom error mappings can use `ClassifyError` to distinguish `ClassRLSDenied` and `ClassInsufficientPrivilege` for SQLSTATE 42501. An RLS filter can also yield a successful SELECT with zero visible rows.

@@ -107,6 +107,12 @@ func FuzzOrderSpecResolve(f *testing.F) {
 }
 
 func FuzzGuardNoSessionEscape(f *testing.F) {
+	configured, err := NewSessionGuard(SessionGuardConfig{VariablePrefixes: []string{"scope."}, ForbidRole: true})
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add(`SELECT $body$SET scope.id = 1$body$`)
+	f.Add(`SET LOCAL "scope"."id" = 'one'`)
 	f.Add("SELECT id FROM items WHERE id = $1")
 	f.Add("SET LOCAL ROLE postgres")
 	f.Add("SELECT set_config('app.x', '1', true)")
@@ -117,5 +123,6 @@ func FuzzGuardNoSessionEscape(f *testing.F) {
 	f.Fuzz(func(t *testing.T, query string) {
 		_ = GuardNoSessionEscape(query)
 		_ = GuardReadOnly(query)
+		_ = configured(query)
 	})
 }

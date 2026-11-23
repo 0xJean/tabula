@@ -32,9 +32,9 @@ The example verifies the schema, executes scoped writes and shows what each tena
 | Conditional, upsert, delete & batch writes | `UpdateWhere`, `SetWhere`, `DefineUpsert`/`Upsert`, `Delete`/`DeleteWhere`, `InsertReturning`, `SaveReturning`, `InsertMany`, `UpsertMany`, `SetExpr` |
 | Rows of hand-written SQL (joins, views, materialized views) | `DefineView(reg, ViewSpec[T]{…})` with nested struct prefixes, `SelectAs`, `Requires`, and `RequiresFunction`: you write the SQL, Tabula decodes the rows |
 | Batch, locked & keyset reads | `GetMany`, `LockMany` (fixed key order), `Iter`, `LockBy`, `LockMode` (including `SKIP LOCKED` and `NOWAIT`), `ListKeyset`, `CountExact`/`CountNone`/`CountEstimate` |
-| Safe dynamic parts & guards | `Filter` (`And`, `AndIf`, `In`, `Range`, `??` escape), `OrderSpec` (whitelisted sort columns), `GuardNoSessionEscape` (blocks `SET ROLE`/`set_config`) |
+| Safe dynamic parts & guards | `Filter` (`And`, `AndIf`, `In`, `Range`, `??` escape), `OrderSpec` (whitelisted sort columns), `GuardNoSessionEscape`, `NewSessionGuard` (protected GUC prefixes, role and session changes) |
 | Sessions, scope & retries | `stdsql` (`*sql.DB`/`*sql.Tx` Runner, `ScopePolicy` RLS plug-in, `Savepoint`, read-only `Direct` pool) and `pgxdriver` (`pgx/v5` Runner, Session, Direct & binary COPY), with driver-independent `tabula.Retry` |
-| Error classification | Distinct PostgreSQL sentinels & classes (`unique`, `foreign_key`, `check`, `not_null`, `serialization`, `deadlock`, `canceled`) |
+| Error classification | Distinct PostgreSQL sentinels & classes (`unique`, `foreign_key`, `check`, `not_null`, `serialization`, `deadlock`, `canceled`, `rls_denied`, `insufficient_privilege`) |
 | Observability | Opt-in `log/slog` ([spec](docs/LOGGING.md)), `Tracer`, and `Metrics` interfaces on `RegistryConfig` |
 | Verification & CI CLI | `sqlcheck` (`VerifyStatements`, `VerifyViewStatements`, `VerifySchema` incl. materialized views, `CheckRolePrivileges` incl. `DELETE` & function `EXECUTE`, `CheckRLS`) + `cmd/tabula` (`tabula check` & `tabula check-rls`) |
 

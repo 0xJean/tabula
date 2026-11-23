@@ -3,6 +3,8 @@ package tabula
 import (
 	"context"
 	"errors"
+	"reflect"
+	"strings"
 )
 
 type staticError string
@@ -21,13 +23,15 @@ const (
 	ErrForbiddenStatement staticError = "statement attempts to modify session role or configuration"
 
 	// PostgreSQL error-class sentinels returned by default error classification.
-	ErrUnique        staticError = "unique constraint violation"
-	ErrForeignKey    staticError = "foreign key constraint violation"
-	ErrCheck         staticError = "check constraint violation"
-	ErrNotNull       staticError = "not-null constraint violation"
-	ErrSerialization staticError = "serialization failure"
-	ErrDeadlock      staticError = "deadlock detected"
-	ErrCanceled      staticError = "statement canceled"
+	ErrUnique                staticError = "unique constraint violation"
+	ErrForeignKey            staticError = "foreign key constraint violation"
+	ErrCheck                 staticError = "check constraint violation"
+	ErrNotNull               staticError = "not-null constraint violation"
+	ErrSerialization         staticError = "serialization failure"
+	ErrDeadlock              staticError = "deadlock detected"
+	ErrRLSDenied             staticError = "row-level security policy denied the operation"
+	ErrInsufficientPrivilege staticError = "insufficient PostgreSQL privilege"
+	ErrCanceled              staticError = "statement canceled"
 )
 
 // ErrorClass is the fixed error classification string used in structured logs
@@ -35,14 +39,16 @@ const (
 type ErrorClass string
 
 const (
-	ClassUnique        ErrorClass = "unique"
-	ClassForeignKey    ErrorClass = "foreign_key"
-	ClassCheck         ErrorClass = "check"
-	ClassNotNull       ErrorClass = "not_null"
-	ClassSerialization ErrorClass = "serialization"
-	ClassDeadlock      ErrorClass = "deadlock"
-	ClassCanceled      ErrorClass = "canceled"
-	ClassOther         ErrorClass = "other"
+	ClassUnique                ErrorClass = "unique"
+	ClassForeignKey            ErrorClass = "foreign_key"
+	ClassCheck                 ErrorClass = "check"
+	ClassNotNull               ErrorClass = "not_null"
+	ClassSerialization         ErrorClass = "serialization"
+	ClassDeadlock              ErrorClass = "deadlock"
+	ClassCanceled              ErrorClass = "canceled"
+	ClassRLSDenied             ErrorClass = "rls_denied"
+	ClassInsufficientPrivilege ErrorClass = "insufficient_privilege"
+	ClassOther                 ErrorClass = "other"
 )
 
 // SQLState returns the five-character PostgreSQL SQLSTATE carried by err
@@ -72,6 +78,11 @@ func ClassifyError(ctx context.Context, err error) (ErrorClass, error) {
 		return ClassCanceled, ErrCanceled
 	}
 	switch SQLState(err) {
+	case "42501":
+		if rlsViolation(err) {
+			return ClassRLSDenied, ErrRLSDenied
+		}
+		return ClassInsufficientPrivilege, ErrInsufficientPrivilege
 	case "23505":
 		return ClassUnique, ErrUnique
 	case "23503":
@@ -124,3 +135,31 @@ func IsRejectedValue(err error) bool {
 
 // IsNumericOutOfRange reports SQLSTATE 22003.
 func IsNumericOutOfRange(err error) bool { return SQLState(err) == "22003" }
+
+// rlsViolation uses the PostgreSQL source routine when a driver exposes it.
+// lib/pq and pgx both carry the Routine field. Other drivers can supply the
+// standard English primary diagnostic. An ambiguous 42501 stays generic.
+func rlsViolation(err error) bool {
+	pg, ok := errors.AsType[interface {
+		error
+		SQLState() string
+	}](err)
+	if !ok {
+		return false
+	}
+	v := reflect.ValueOf(pg)
+	if v.Kind() == reflect.Pointer && !v.IsNil() {
+		v = v.Elem()
+	}
+	if v.Kind() == reflect.Struct {
+		r := v.FieldByName("Routine")
+		if r.IsValid() && r.Kind() == reflect.String && r.String() != "" {
+			return r.String() == "ExecWithCheckOptions" || r.String() == "check_enable_rls"
+		}
+	}
+	msg := pg.Error()
+	for _, prefix := range []string{"pq: ", "ERROR: "} {
+		msg = strings.TrimPrefix(msg, prefix)
+	}
+	return strings.HasPrefix(msg, "new row violates row-level security policy") || strings.HasPrefix(msg, "query would be affected by row-level security policy")
+}
