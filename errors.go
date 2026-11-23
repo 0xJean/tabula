@@ -12,10 +12,12 @@ func (e staticError) Error() string { return string(e) }
 const (
 	// Write-guard and optimistic concurrency sentinel errors (used when
 	// ErrorPolicy leaves the corresponding slot nil).
-	ErrConflict   staticError = "row conflict or lost update"
-	ErrOnce       staticError = "insert-only column changed on update"
-	ErrNotDeleted staticError = "soft delete needs the deleted column set"
-	ErrRowCount   staticError = "write did not confirm exactly one row"
+	ErrConflict           staticError = "row conflict or lost update"
+	ErrOnce               staticError = "insert-only column changed on update"
+	ErrNotDeleted         staticError = "soft delete needs the deleted column set"
+	ErrRowCount           staticError = "write did not confirm exactly one row"
+	ErrReadOnly           staticError = "write refused on read-only table"
+	ErrForbiddenStatement staticError = "statement attempts to modify session role or configuration"
 
 	// PostgreSQL error-class sentinels returned by default error classification.
 	ErrUnique        staticError = "unique constraint violation"

@@ -383,4 +383,49 @@ func TestV03AgainstRealPostgres(t *testing.T) {
 		require.Equal(t, "a1", joined[0].Item.Code)
 		require.Equal(t, "primary", joined[0].Parent.Name)
 	})
+
+	t.Run("physical_delete_and_readonly_table", func(t *testing.T) {
+		_, err := db.ExecContext(ctx, `CREATE TABLE `+schema+`.tokens (id bigserial PRIMARY KEY, tenant_id text NOT NULL, code text NOT NULL)`)
+		require.NoError(t, err)
+		type tokenRow struct {
+			ID     int64       `db:"id,key,serial"`
+			Tenant tenantScope `db:"tenant_id,tenant"`
+			Code   string      `db:"code"`
+		}
+		tokTbl := tabula.Define(reg, tabula.Table[tokenRow, int64, tenantScope]{
+			Name:        schema + ".tokens",
+			AllowDelete: true,
+		})
+		roTbl := tabula.Define(reg, tabula.Table[tokenRow, int64, tenantScope]{
+			Name:     schema + ".tokens",
+			ReadOnly: true,
+		})
+
+		tx, err := db.BeginTx(ctx, nil)
+		require.NoError(t, err)
+		defer func() { _ = tx.Rollback() }()
+		sess := &pgTxSession[tenantScope]{tx: tx, tenant: "td"}
+		tr := tokTbl.Bind(sess)
+
+		t1 := tokenRow{Tenant: "td", Code: "k1"}
+		t2 := tokenRow{Tenant: "td", Code: "k2"}
+		t3 := tokenRow{Tenant: "td", Code: "k2"}
+		require.NoError(t, tr.Insert(ctx, &t1))
+		require.NoError(t, tr.Insert(ctx, &t2))
+		require.NoError(t, tr.Insert(ctx, &t3))
+
+		// ReadOnly table can read but refuses writes.
+		got, err := roTbl.Bind(sess).Get(ctx, "td", t1.ID)
+		require.NoError(t, err)
+		require.Equal(t, "k1", got.Code)
+		require.ErrorIs(t, roTbl.Bind(sess).Delete(ctx, "td", t1.ID), tabula.ErrReadOnly)
+
+		// Physical Delete by key and DeleteWhere.
+		require.NoError(t, tr.Delete(ctx, "td", t1.ID))
+		require.ErrorIs(t, tr.Delete(ctx, "td", t1.ID), tabula.ErrConflict)
+
+		deleted, err := tr.DeleteWhere(ctx, "td", "code = ?", "k2")
+		require.NoError(t, err)
+		require.Equal(t, int64(2), deleted)
+	})
 }

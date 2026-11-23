@@ -105,3 +105,14 @@ func FuzzOrderSpecResolve(f *testing.F) {
 		}
 	})
 }
+
+func FuzzGuardNoSessionEscape(f *testing.F) {
+	f.Add("SELECT id FROM items WHERE id = $1")
+	f.Add("SET LOCAL ROLE postgres")
+	f.Add("SELECT set_config('app.x', '1', true)")
+	f.Add("SELECT 'SET ROLE admin' /* RESET ROLE */")
+	f.Add("/* nested /* comment */ still comment */ SET ROLE x")
+	f.Fuzz(func(t *testing.T, query string) {
+		_ = GuardNoSessionEscape(query)
+	})
+}

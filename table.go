@@ -38,6 +38,12 @@ type Table[T, K, S any] struct {
 	Name, Order string
 	Columns     []Column[T]
 	SoftDelete  *SoftDelete
+	// ReadOnly restricts this table to read operations only: no INSERT/UPDATE/DELETE
+	// statements or write privileges are derived, and write methods return ErrReadOnly.
+	ReadOnly bool
+	// AllowDelete opts this table into physical DELETE statements (Delete / DeleteWhere)
+	// and derives the table-level DELETE privilege for sqlcheck. Cannot combine with ReadOnly.
+	AllowDelete bool
 
 	reg                      *Registry[S]
 	cols                     []column[T]
@@ -56,6 +62,7 @@ type Table[T, K, S any] struct {
 type statements struct {
 	columns, get, lock, insert, update, count, list string
 	values                                          string
+	deleteStmt, platformDelete                      string
 	platformGet, platformLock                       string
 	insertColumns, setColumns, onceColumns          []int
 }
@@ -114,13 +121,26 @@ func Define[T, K, S any](r *Registry[S], t Table[T, K, S]) *Table[T, K, S] {
 		cols[i] = DefinedColumn{Name: c.name, GoType: c.goType.String(), Nullable: c.nullable, Role: string(c.role), Once: c.once, Secret: c.secret}
 	}
 	stmts := map[string]string{
-		"get": d.stmt.get, "lock": d.stmt.lock, "insert": d.stmt.insert,
-		"update": d.stmt.update, "count": d.stmt.count, "list": d.stmt.list,
+		"get": d.stmt.get, "count": d.stmt.count, "list": d.stmt.list,
+	}
+	if !d.ReadOnly {
+		stmts["lock"] = d.stmt.lock
+		stmts["insert"] = d.stmt.insert
+		stmts["update"] = d.stmt.update
 	}
 	if d.stmt.platformGet != d.stmt.get {
-		stmts["platform_get"], stmts["platform_lock"] = d.stmt.platformGet, d.stmt.platformLock
+		stmts["platform_get"] = d.stmt.platformGet
+		if !d.ReadOnly {
+			stmts["platform_lock"] = d.stmt.platformLock
+		}
 	}
-	d.defID = r.record(d.Name, cols, stmts, derivePrivileges(d.Name, cols, d.stmt))
+	if d.AllowDelete {
+		stmts["delete"] = d.stmt.deleteStmt
+		if d.stmt.platformDelete != d.stmt.deleteStmt {
+			stmts["platform_delete"] = d.stmt.platformDelete
+		}
+	}
+	d.defID = r.record(d.Name, cols, stmts, derivePrivileges(d.Name, cols, d.stmt, d.ReadOnly, d.AllowDelete))
 	return d
 }
 
@@ -134,6 +154,9 @@ func TryDefine[T, K, S any](r *Registry[S], t Table[T, K, S]) (*Table[T, K, S], 
 	}
 	fail := func(format string, args ...any) error {
 		return fmt.Errorf(r.prefix+".Define "+t.Name+": "+format, args...)
+	}
+	if t.ReadOnly && t.AllowDelete {
+		return nil, fail("ReadOnly cannot combine with AllowDelete")
 	}
 	rt := reflect.TypeFor[T]()
 	if rt.Kind() != reflect.Struct {
@@ -395,6 +418,8 @@ func (t *Table[T, K, S]) derive() {
 		next++
 	}
 	t.stmt.update = "UPDATE " + t.Name + " SET " + strings.Join(sets, ", ") + where + cas
+	t.stmt.deleteStmt = "DELETE FROM " + t.Name + where
+	t.stmt.platformDelete = "DELETE FROM " + t.Name + byKey + alive
 	t.stmt.count = "SELECT count(*) FROM " + t.Name + " WHERE true"
 	t.stmt.list = "SELECT " + t.stmt.columns + " FROM " + t.Name + " WHERE true"
 }

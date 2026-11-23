@@ -12,6 +12,9 @@ const maxPostgresParams = 65535
 
 // Insert writes row; with a serial key the generated key is read back into row.
 func (r *Rows[T, K, S]) Insert(ctx context.Context, row *T) error {
+	if r.t.ReadOnly {
+		return ErrReadOnly
+	}
 	guard := r.guard(row)
 	ctx, span := r.start(ctx, guard, "insert", r.t.Name+".insert")
 	args := r.Args(*row)
@@ -42,6 +45,9 @@ func (r *Rows[T, K, S]) Insert(ctx context.Context, row *T) error {
 // InsertReturning writes row and scans the named columns (or all table columns
 // when columns is empty) back into row via RETURNING.
 func (r *Rows[T, K, S]) InsertReturning(ctx context.Context, row *T, columns ...string) error {
+	if r.t.ReadOnly {
+		return ErrReadOnly
+	}
 	guard := r.guard(row)
 	ctx, span := r.start(ctx, guard, "insert_returning", r.t.Name+".insert_returning")
 	retIdx := r.t.resolveReturningColumns(columns)
@@ -64,6 +70,9 @@ func (r *Rows[T, K, S]) InsertReturning(ctx context.Context, row *T, columns ...
 // automatically to stay within PostgreSQL's 65,535 bind parameter limit.
 // All rows in a non-platform tenant-scoped call must share the same tenant.
 func (r *Rows[T, K, S]) InsertMany(ctx context.Context, rows []T) error {
+	if r.t.ReadOnly {
+		return ErrReadOnly
+	}
 	if len(rows) == 0 {
 		return nil
 	}
@@ -138,6 +147,9 @@ func (r *Rows[T, K, S]) insertManyChunk(ctx context.Context, guard S, chunk []T,
 // Save writes every updatable column of the undeleted row at the previous
 // version (when versioned); no row updated returns the conflict error.
 func (r *Rows[T, K, S]) Save(ctx context.Context, row T) error {
+	if r.t.ReadOnly {
+		return ErrReadOnly
+	}
 	if err := r.unchanged(ctx, row); err != nil {
 		return err
 	}
@@ -160,6 +172,9 @@ func (r *Rows[T, K, S]) Save(ctx context.Context, row T) error {
 // columns (or all columns when empty) back into row via RETURNING. No row
 // matched returns the conflict error.
 func (r *Rows[T, K, S]) SaveReturning(ctx context.Context, row *T, columns ...string) error {
+	if r.t.ReadOnly {
+		return ErrReadOnly
+	}
 	if err := r.unchanged(ctx, *row); err != nil {
 		return err
 	}
@@ -194,6 +209,9 @@ func (r *Rows[T, K, S]) SoftDelete(ctx context.Context, row T) error {
 
 // Set writes only the named columns of the undeleted row (no version check).
 func (r *Rows[T, K, S]) Set(ctx context.Context, row T, columns ...string) error {
+	if r.t.ReadOnly {
+		return ErrReadOnly
+	}
 	guard := r.guard(&row)
 	ctx, span := r.start(ctx, guard, "set", r.t.Name+".set")
 	query, args, secret := r.buildSetQuery(&row, columns, "", nil)
@@ -212,6 +230,9 @@ func (r *Rows[T, K, S]) Set(ctx context.Context, row T, columns ...string) error
 // (and tenant/version when declared) plus an extra static SQL predicate over
 // "?" placeholders. Reports whether a row matched; zero rows is not an error.
 func (r *Rows[T, K, S]) UpdateWhere(ctx context.Context, row T, where string, values ...any) (bool, error) {
+	if r.t.ReadOnly {
+		return false, ErrReadOnly
+	}
 	if err := r.unchanged(ctx, row); err != nil {
 		return false, err
 	}
@@ -246,6 +267,9 @@ func (r *Rows[T, K, S]) UpdateWhere(ctx context.Context, row T, where string, va
 // (and tenant when declared) plus an extra static SQL predicate over "?"
 // placeholders. Reports whether a row matched; zero rows is not an error.
 func (r *Rows[T, K, S]) SetWhere(ctx context.Context, row T, columns []string, where string, values ...any) (bool, error) {
+	if r.t.ReadOnly {
+		return false, ErrReadOnly
+	}
 	guard := r.guard(&row)
 	ctx, span := r.start(ctx, guard, "set_where", r.t.Name+".set_where")
 	query, args, secret := r.buildSetQuery(&row, columns, where, values)
@@ -261,6 +285,67 @@ func (r *Rows[T, K, S]) SetWhere(ctx context.Context, row T, columns []string, w
 		return false, retErr
 	}
 	return n == 1, nil
+}
+
+// Delete physically deletes the row identified by key within the session scope.
+// Requires Table.AllowDelete = true. Returns the conflict error when zero rows
+// matched (missing or already deleted).
+func (r *Rows[T, K, S]) Delete(ctx context.Context, tenant S, key K) error {
+	if r.t.ReadOnly {
+		return ErrReadOnly
+	}
+	if !r.t.AllowDelete {
+		panic(r.t.prefix() + ".Delete " + r.t.Name + ": table does not enable AllowDelete")
+	}
+	args := make([]any, 0, len(r.t.keys)+1)
+	for _, bind := range r.t.keyBinders {
+		args = append(args, bind(&key))
+	}
+	query := r.t.stmt.platformDelete
+	if r.t.tenant >= 0 && !r.s.Platform() {
+		query = r.t.stmt.deleteStmt
+		args = append(args, r.t.reg.tenantValue(tenant))
+	}
+	ctx, span := r.start(ctx, tenant, "delete", r.t.Name+".delete")
+	n, err := r.s.Exec(ctx, tenant, query, args...)
+	var retErr error
+	if err != nil {
+		retErr = r.fail(ctx, err)
+	} else if n != 1 {
+		retErr = r.t.reg.conflictErr()
+	}
+	span.finish(ctx, query, n, logErr(err, retErr), args, nil, false, false)
+	return retErr
+}
+
+// DeleteWhere physically deletes rows matching the session scope and a required
+// non-empty static predicate over "?" placeholders. Requires Table.AllowDelete = true.
+// Returns the affected row count; zero rows matched is not an error.
+func (r *Rows[T, K, S]) DeleteWhere(ctx context.Context, tenant S, where string, values ...any) (int64, error) {
+	if r.t.ReadOnly {
+		return 0, ErrReadOnly
+	}
+	if !r.t.AllowDelete {
+		panic(r.t.prefix() + ".DeleteWhere " + r.t.Name + ": table does not enable AllowDelete")
+	}
+	if strings.TrimSpace(where) == "" {
+		panic(r.t.prefix() + ".DeleteWhere " + r.t.Name + ": non-empty where predicate is required")
+	}
+	f := r.Scope()
+	f.And(where, values...)
+	query := "DELETE FROM " + r.t.Name + " WHERE true" + f.Where()
+	args := f.Args()
+	ctx, span := r.start(ctx, tenant, "delete_where", r.t.Name+".delete_where")
+	n, err := r.s.Exec(ctx, tenant, query, args...)
+	var retErr error
+	if err != nil {
+		retErr = r.fail(ctx, err)
+	}
+	span.finish(ctx, query, n, logErr(err, retErr), args, nil, false, false)
+	if retErr != nil {
+		return 0, retErr
+	}
+	return n, nil
 }
 
 func (r *Rows[T, K, S]) saveArgs(row *T) ([]any, []bool) {

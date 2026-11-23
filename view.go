@@ -41,6 +41,7 @@ type ViewDefinition struct {
 	Name       string
 	Columns    []DefinedColumn
 	Statements map[string]string
+	Privileges []DefinedPrivilege
 }
 
 func cloneViewDefinition(v ViewDefinition) ViewDefinition {
@@ -48,6 +49,7 @@ func cloneViewDefinition(v ViewDefinition) ViewDefinition {
 		Name:       v.Name,
 		Columns:    slices.Clone(v.Columns),
 		Statements: maps.Clone(v.Statements),
+		Privileges: slices.Clone(v.Privileges),
 	}
 }
 
@@ -322,6 +324,47 @@ func (v *View[T, S]) Definition() ViewDefinition {
 		panic(v.prefix() + ".ViewDefinition " + v.Name + ": view is not defined")
 	}
 	return cloneViewDefinition(v.reg.views[v.viewID-1])
+}
+
+// Requires records a table or column privilege that statements of this View
+// depend on (for sqlcheck.CheckRolePrivileges).
+func (v *View[T, S]) Requires(table, privilege string, columns ...string) *View[T, S] {
+	p, err := buildPrivilege(table, privilege, columns)
+	if err != nil {
+		panic(fmt.Sprintf("%s.ViewRequires %s: %v", v.prefix(), v.Name, err))
+	}
+	if v.reg == nil || v.viewID <= 0 {
+		panic(v.prefix() + ".ViewRequires " + v.Name + ": view is not defined")
+	}
+	v.reg.mu.Lock()
+	defer v.reg.mu.Unlock()
+	if v.viewID > len(v.reg.views) {
+		panic(v.prefix() + ".ViewRequires " + v.Name + ": view is not defined")
+	}
+	v.reg.views[v.viewID-1].Privileges = append(v.reg.views[v.viewID-1].Privileges, p)
+	return v
+}
+
+// RequiresFunction records an EXECUTE privilege need on a PostgreSQL function
+// signature for statements of this View.
+func (v *View[T, S]) RequiresFunction(signature string) *View[T, S] {
+	sig := strings.TrimSpace(signature)
+	if sig == "" || !strings.Contains(sig, "(") || !strings.HasSuffix(sig, ")") {
+		panic(fmt.Sprintf("%s.ViewRequiresFunction %s: invalid function signature %q", v.prefix(), v.Name, signature))
+	}
+	if v.reg == nil || v.viewID <= 0 {
+		panic(v.prefix() + ".ViewRequiresFunction " + v.Name + ": view is not defined")
+	}
+	v.reg.mu.Lock()
+	defer v.reg.mu.Unlock()
+	if v.viewID > len(v.reg.views) {
+		panic(v.prefix() + ".ViewRequiresFunction " + v.Name + ": view is not defined")
+	}
+	v.reg.views[v.viewID-1].Privileges = append(v.reg.views[v.viewID-1].Privileges, DefinedPrivilege{
+		Privilege: "EXECUTE",
+		Function:  sig,
+	})
+	return v
 }
 
 // Bind binds this View to a transaction Session for read execution.

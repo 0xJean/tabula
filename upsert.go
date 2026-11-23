@@ -55,6 +55,9 @@ func (t *Table[T, K, S]) TryDefineUpsert(key string, spec UpsertSpec, opts ...St
 	fail := func(format string, args ...any) error {
 		return fmt.Errorf(t.prefix()+".Upsert "+t.Name+": "+format, args...)
 	}
+	if t.ReadOnly {
+		return nil, fail("cannot define upsert on a ReadOnly table")
+	}
 	if key == "" {
 		return nil, fail("statement key is required")
 	}

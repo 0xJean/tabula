@@ -1,0 +1,118 @@
+package tabula
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+func TestGuardNoSessionEscape(t *testing.T) {
+	blocked := []string{
+		"SET ROLE postgres",
+		"set local role admin_user",
+		"SET SESSION ROLE foo",
+		"RESET ROLE",
+		"reset all",
+		"SET SESSION AUTHORIZATION DEFAULT",
+		"SELECT set_config('app.current_tenant', 'other', true)",
+		"SELECT pg_catalog.set_config('role', 'postgres', false)",
+		"SELECT 1; /* sneaky */ SET LOCAL ROLE super",
+		`SELECT "set_config"('x','y',true)`,
+	}
+	for _, q := range blocked {
+		require.ErrorIs(t, GuardNoSessionEscape(q), ErrForbiddenStatement, "should block: %s", q)
+	}
+
+	allowed := []string{
+		"SELECT id, role FROM public.users WHERE id = $1",
+		"UPDATE public.users SET role = $2 WHERE id = $1",
+		"SELECT 'SET ROLE postgres' AS literal_note FROM public.items",
+		"SELECT * FROM public.items WHERE note = 'don''t call set_config(1)'",
+		"-- SET ROLE postgres\nSELECT id FROM public.items",
+		"/* RESET ROLE; set_config('a','b',true) */ SELECT 1",
+	}
+	for _, q := range allowed {
+		require.NoError(t, GuardNoSessionEscape(q), "should allow: %s", q)
+	}
+}
+
+func TestReadOnlyAndPhysicalDelete(t *testing.T) {
+	reg := NewRegistry(RegistryConfig[customTenant]{
+		TenantID: func(s customTenant) any { return string(s) },
+	})
+
+	// ReadOnly + AllowDelete cannot combine.
+	_, err := TryDefine(reg, Table[customRow, int64, customTenant]{
+		Name:        "public.bad",
+		ReadOnly:    true,
+		AllowDelete: true,
+	})
+	require.ErrorContains(t, err, "ReadOnly cannot combine with AllowDelete")
+
+	// ReadOnly table derives only read statements & SELECT privilege, refuses writes.
+	ro := Define(reg, Table[customRow, int64, customTenant]{
+		Name:     "public.readonly_items",
+		ReadOnly: true,
+	})
+	roDef := ro.Definition()
+	require.Contains(t, roDef.Statements, "get")
+	require.Contains(t, roDef.Statements, "list")
+	require.Contains(t, roDef.Statements, "count")
+	require.NotContains(t, roDef.Statements, "insert")
+	require.NotContains(t, roDef.Statements, "update")
+	require.NotContains(t, roDef.Statements, "delete")
+	require.Len(t, roDef.Privileges, 1)
+	require.Equal(t, "SELECT", roDef.Privileges[0].Privilege)
+	_, err = ro.TryDefineUpsert("u", UpsertSpec{Conflict: []string{"id"}})
+	require.ErrorContains(t, err, "ReadOnly")
+
+	sess := &fakeSession{tenant: "t-1", execRows: 1}
+	roRows := ro.Bind(sess)
+	row := customRow{ID: 1, Tenant: "t-1", Code: "a", CreatedBy: "u", Version: 1}
+	require.ErrorIs(t, roRows.Insert(t.Context(), &row), ErrReadOnly)
+	require.ErrorIs(t, roRows.InsertReturning(t.Context(), &row), ErrReadOnly)
+	require.ErrorIs(t, roRows.InsertMany(t.Context(), []customRow{row}), ErrReadOnly)
+	require.ErrorIs(t, roRows.Save(t.Context(), row), ErrReadOnly)
+	require.ErrorIs(t, roRows.SaveReturning(t.Context(), &row), ErrReadOnly)
+	require.ErrorIs(t, roRows.Set(t.Context(), row, "code"), ErrReadOnly)
+	_, err = roRows.UpdateWhere(t.Context(), row, "true")
+	require.ErrorIs(t, err, ErrReadOnly)
+	_, err = roRows.SetWhere(t.Context(), row, []string{"code"}, "true")
+	require.ErrorIs(t, err, ErrReadOnly)
+	require.ErrorIs(t, roRows.Delete(t.Context(), "t-1", 1), ErrReadOnly)
+	_, err = roRows.DeleteWhere(t.Context(), "t-1", "id = ?", 1)
+	require.ErrorIs(t, err, ErrReadOnly)
+
+	// AllowDelete derives delete statements & DELETE privilege.
+	del := Define(reg, Table[customRow, int64, customTenant]{
+		Name:        "public.ephemeral_items",
+		AllowDelete: true,
+	})
+	del.RequiresFunction("public.cleanup_item(bigint)")
+	delDef := del.Definition()
+	require.Equal(t, "DELETE FROM public.ephemeral_items WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL", delDef.Statements["delete"])
+	require.Equal(t, "DELETE FROM public.ephemeral_items WHERE id = $1 AND deleted_at IS NULL", delDef.Statements["platform_delete"])
+	require.Contains(t, delDef.Privileges, DefinedPrivilege{Table: "public.ephemeral_items", Privilege: "DELETE"})
+	require.Contains(t, delDef.Privileges, DefinedPrivilege{Privilege: "EXECUTE", Function: "public.cleanup_item(bigint)"})
+
+	delRows := del.Bind(sess)
+	require.NoError(t, delRows.Delete(t.Context(), "t-1", 42))
+	require.Equal(t, delDef.Statements["delete"], sess.lastQuery)
+	require.Len(t, sess.lastArgs, 2)
+	require.Equal(t, int64(42), *sess.lastArgs[0].(*int64))
+	require.Equal(t, "t-1", sess.lastArgs[1])
+
+	sess.execRows = 0
+	require.ErrorIs(t, delRows.Delete(t.Context(), "t-1", 42), ErrConflict)
+
+	sess.execRows = 3
+	n, err := delRows.DeleteWhere(t.Context(), "t-1", "code = ?", "expired")
+	require.NoError(t, err)
+	require.Equal(t, int64(3), n)
+	require.Equal(t, "DELETE FROM public.ephemeral_items WHERE true AND (tenant_id = $1) AND (deleted_at IS NULL) AND (code = $2)", sess.lastQuery)
+
+	// Guard against accidental full-table delete or table without AllowDelete.
+	require.Panics(t, func() { _, _ = delRows.DeleteWhere(t.Context(), "t-1", "   ") })
+	noDel := Define(reg, Table[customRow, int64, customTenant]{Name: "public.no_delete_items"})
+	require.Panics(t, func() { _ = noDel.Bind(sess).Delete(t.Context(), "t-1", 1) })
+}
