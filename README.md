@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/brand/lockup-light.svg" alt="Tabula" width="420"></p>
+
 # Tabula
 
 Declarative descriptors, explicit SQL, verified against a real PostgreSQL.
