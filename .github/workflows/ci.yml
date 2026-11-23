@@ -8,12 +8,16 @@ on:
 permissions:
   contents: read
 
+env:
+  GOTOOLCHAIN: local
+
 jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
+        go: ["1.26.x", "1.27.x"]
         postgres: ["14", "15", "16", "17"]
     services:
       postgres:
@@ -26,26 +30,83 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U tabula"
           --health-interval 2s --health-timeout 5s --health-retries 20
+    env:
+      TABULA_TEST_DSN: postgres://tabula:tabula@localhost:5432/tabula?sslmode=disable
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
-          go-version-file: go.mod
-      - name: Use the core and driver in this checkout
+          go-version: ${{ matrix.go }}
+          cache-dependency-path: "**/go.sum"
+      - name: Use the three modules in this checkout
         run: scripts/workspace.sh
-      - name: gofmt
-        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
-      - run: go vet -tags=integration ./...
-      - run: go test -race -count=1 ./...
-      - name: integration
-        env:
-          TABULA_TEST_DSN: postgres://tabula:tabula@localhost:5432/tabula?sslmode=disable
-        run: go test -race -count=1 -tags=integration ./...
-      - name: pgxdriver unit and integration
-        working-directory: pgxdriver
-        env:
-          TABULA_TEST_DSN: postgres://tabula:tabula@localhost:5432/tabula?sslmode=disable
+      - name: Test both modules against PostgreSQL
         run: |
-          go vet -tags=integration ./...
-          go test -race -count=1 ./...
-          go test -race -count=1 -tags=integration ./...
+          for module in . pgxdriver; do
+            (
+              cd "$module"
+              go vet -tags=integration ./...
+              go test -race -count=1 -tags=integration -coverprofile=coverage.out ./...
+              echo "### $module" >> "$GITHUB_STEP_SUMMARY"
+              go tool cover -func=coverage.out | tail -1 >> "$GITHUB_STEP_SUMMARY"
+            )
+          done
+      - uses: actions/upload-artifact@v4
+        if: matrix.postgres == '17'
+        with:
+          name: coverage-go-${{ matrix.go }}
+          path: |
+            coverage.out
+            pgxdriver/coverage.out
+      - name: Smoke test the comparison benchmark
+        if: matrix.postgres == '17'
+        working-directory: benchmarks
+        run: go test -run='^$' -bench=. -benchtime=1x -benchmem
+
+  quality:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        module: [".", "pgxdriver", "benchmarks"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.27.x"
+          cache-dependency-path: "**/go.sum"
+      - name: Use the three modules in this checkout
+        run: scripts/workspace.sh
+      - name: Check module boundaries
+        working-directory: ${{ matrix.module }}
+        run: |
+          go mod edit -json | jq -e '(.Replace | length) == 0'
+          if [[ "${{ matrix.module }}" != "." ]]; then
+            imports=$(go list -tags=integration -test -f '{{range .Imports}}{{println .}}{{end}}' ./...)
+            if grep -F 'github.com/0xJean/tabula/internal/' <<< "$imports"; then
+              echo "Submodules must use public core packages." >&2
+              exit 1
+            fi
+          fi
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.15.0
+          working-directory: ${{ matrix.module }}
+          args: --build-tags=integration
+      - name: Check reachable vulnerabilities
+        working-directory: ${{ matrix.module }}
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.10.0
+          govulncheck -test -tags=integration ./...
+      - name: Format and fuzz
+        if: matrix.module == '.'
+        run: |
+          test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+          for target in FuzzParseColumnTag FuzzFilterAnd FuzzOrderSpecResolve FuzzGuardNoSessionEscape; do
+            go test -run='^$' -fuzz="^${target}$" -fuzztime=1s .
+          done
+          go test -run='^$' -fuzz='^FuzzParseSnapshot$' -fuzztime=1s ./sqlcheck
+      - name: Verify standalone modules against an unpublished core
+        if: matrix.module == '.'
+        run: |
+          scripts/release.sh prepare v0.0.0
+          scripts/release.sh verify v0.0.0
