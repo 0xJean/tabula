@@ -35,7 +35,7 @@ if [[ -n "$unformatted" ]]; then
 fi
 
 echo "==> Checking core zero-third-party-dependency red line"
-core_deps=$(go list -f '{{range .Deps}}{{println .}}{{end}}' . ./stdsql ./sqlcheck ./internal/... | sort -u)
+core_deps=$(go list -f '{{range .Deps}}{{println .}}{{end}}' . ./stdsql ./sqlcheck ./postgresfixture ./internal/... | sort -u)
 non_std=$(xargs go list -f '{{if not .Standard}}{{.ImportPath}}{{end}}' <<< "$core_deps")
 bad_deps=$(grep -v '^github\.com/0xJean/tabula\(/\|$\)' <<< "$non_std" || true)
 if [[ -n "$bad_deps" ]]; then

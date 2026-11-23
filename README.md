@@ -96,6 +96,7 @@ For the development API and pgxdriver, run `scripts/workspace.sh` from the repos
 | `tabula` | Engine: registry, tables, views, rows, writes, upserts, keyset, filter, order, errors, logging, tracing/metrics interfaces | standard library only |
 | `tabula/stdsql` | `*sql.DB` / `*sql.Tx` sessions, `Runner`, `ScopePolicy` (RLS), `Savepoint`, read-only `Direct` pool | standard library only |
 | `tabula/sqlcheck` | Snapshot render/parse, schema, privilege, and PREPARE/EXPLAIN verification | standard library only |
+| `tabula/postgresfixture` | Content-addressed installation templates, migration prefixes and isolated per-test databases | standard library only |
 | `tabula/pqdriver` | `lib/pq` array converters | `github.com/lib/pq` |
 | `tabula/pgxdriver` | Separate module: `pgx/v5` pool Runner, `pgx.Tx` Session, Direct & array converters | `github.com/jackc/pgx/v5` |
 | `tabula/cmd/tabula` | Verify a snapshot with `tabula check --dsn ... --snapshot ... [--role ...]` and audit row-level security with `tabula check-rls --dsn ...` | `sqlcheck`, `github.com/lib/pq` |

@@ -52,3 +52,7 @@ CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) additionally runs:
 - **Security**: `govulncheck -test -tags=integration ./...` across all three modules
 - **Example E2E**: `examples/multitenant` migrated and executed against PostgreSQL 17
 - **Release rehearsal**: `scripts/release.sh prepare v0.0.0` + `scripts/release.sh verify v0.0.0` with `GOWORK=off`
+
+## Authorization fixtures
+
+The `postgresfixture` tests perform physical database clones, retry a failed install and check isolation between parallel tests. [Fixture integration test](../postgresfixture/fixture_integration_test.go)
