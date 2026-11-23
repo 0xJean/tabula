@@ -235,7 +235,7 @@ func (r *Registry[S]) classifyErr(ctx context.Context, err error) error {
 		return r.errors.Classify(ctx, err)
 	}
 	_, sentinel := ClassifyError(ctx, err)
-	if sentinel == ErrCanceled {
+	if errors.Is(sentinel, ErrCanceled) {
 		if ctx != nil && ctx.Err() != nil {
 			return errors.Join(ErrCanceled, ctx.Err())
 		}

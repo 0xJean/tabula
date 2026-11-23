@@ -131,7 +131,7 @@ func (r *Rows[T, K, S]) returning(ctx context.Context, action string, meta stmtM
 	var err error
 	if raw != nil {
 		n = 0
-		if errors.Is(raw, sql.ErrNoRows) && missing != sql.ErrNoRows {
+		if errors.Is(raw, sql.ErrNoRows) && !errors.Is(missing, sql.ErrNoRows) {
 			observed, err = missing, missing
 		} else {
 			err = r.fail(ctx, raw)

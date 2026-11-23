@@ -137,7 +137,7 @@ func walkFields(
 	return nil
 }
 
-func (t *descriptor[T, S]) escape(c Column[T], fail func(string, ...any) error) error {
+func (d *descriptor[T, S]) escape(c Column[T], fail func(string, ...any) error) error {
 	if c.Name == "" || c.Addr == nil {
 		return fail("Col %q needs a name and an address", c.Name)
 	}
@@ -147,7 +147,7 @@ func (t *descriptor[T, S]) escape(c Column[T], fail func(string, ...any) error) 
 		if vt == nil || vt.Kind() != reflect.Pointer {
 			return fail("column %s: Col must address a field, got %v", c.Name, vt)
 		}
-		wrap, err := t.reg.Resolve(vt.Elem(), false, false)
+		wrap, err := d.reg.Resolve(vt.Elem(), false, false)
 		if err != nil {
 			return fail("column %s: %w", c.Name, err)
 		}
@@ -158,14 +158,14 @@ func (t *descriptor[T, S]) escape(c Column[T], fail func(string, ...any) error) 
 		held = held.Elem()
 	}
 	nullable := networkType(held) || held.Kind() == reflect.Pointer || strings.HasPrefix(held.Name(), "Null")
-	return t.add(column[T]{name: c.Name, once: c.once, secret: c.secret, target: target, goType: held, nullable: nullable}, fail)
+	return d.add(column[T]{name: c.Name, once: c.once, secret: c.secret, target: target, goType: held, nullable: nullable}, fail)
 }
 
-func (t *descriptor[T, S]) add(c column[T], fail func(string, ...any) error) error {
-	if _, ok := t.byName[c.name]; ok {
+func (d *descriptor[T, S]) add(c column[T], fail func(string, ...any) error) error {
+	if _, ok := d.byName[c.name]; ok {
 		return fail("column %s declared twice", c.name)
 	}
-	t.byName[c.name] = len(t.cols)
-	t.cols = append(t.cols, c)
+	d.byName[c.name] = len(d.cols)
+	d.cols = append(d.cols, c)
 	return nil
 }

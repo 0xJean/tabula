@@ -30,9 +30,9 @@ type lockedRows struct {
 // WithLogger returns a Rows handle sharing the same Table and Session with a
 // per-binding logger override.
 func (r *Rows[T, K, S]) WithLogger(logger *slog.Logger) *Rows[T, K, S] {
-	copy := *r
-	copy.logger = logger
-	return &copy
+	clone := *r
+	clone.logger = logger
+	return &clone
 }
 
 // Listing is a List/Find page request: Order (table default when empty),

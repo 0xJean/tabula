@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -40,15 +44,21 @@ jobs:
           cache-dependency-path: "**/go.sum"
       - name: Use the three modules in this checkout
         run: scripts/workspace.sh
-      - name: Test both modules against PostgreSQL
+      - name: Test both modules against PostgreSQL and enforce coverage floor
         run: |
           for module in . pgxdriver; do
             (
               cd "$module"
               go vet -tags=integration ./...
               go test -race -count=1 -tags=integration -coverprofile=coverage.out ./...
+              total=$(go tool cover -func=coverage.out | tail -1)
               echo "### $module" >> "$GITHUB_STEP_SUMMARY"
-              go tool cover -func=coverage.out | tail -1 >> "$GITHUB_STEP_SUMMARY"
+              echo "$total" >> "$GITHUB_STEP_SUMMARY"
+              pct=$(awk '{ sub(/%/, "", $3); print $3 }' <<< "$total")
+              awk -v p="$pct" -v f=75 'BEGIN { exit (p + 0 < f + 0) ? 1 : 0 }' || {
+                echo "Coverage for $module (${pct}%) fell below floor (75%)" >&2
+                exit 1
+              }
             )
           done
       - uses: actions/upload-artifact@v4
@@ -62,6 +72,12 @@ jobs:
         if: matrix.postgres == '17'
         working-directory: benchmarks
         run: go test -run='^$' -bench=. -benchtime=1x -benchmem
+      - name: Run multitenant RLS example end-to-end
+        if: matrix.postgres == '17'
+        run: |
+          psql "$TABULA_TEST_DSN" -c "CREATE DATABASE tabula_demo;"
+          psql "postgres://tabula:tabula@localhost:5432/tabula_demo?sslmode=disable" -f examples/multitenant/migrations/001_notes.sql
+          TABULA_DEMO_PORT=5432 go run ./examples/multitenant
 
   quality:
     runs-on: ubuntu-latest
@@ -76,17 +92,9 @@ jobs:
           cache-dependency-path: "**/go.sum"
       - name: Use the three modules in this checkout
         run: scripts/workspace.sh
-      - name: Check module boundaries
-        working-directory: ${{ matrix.module }}
-        run: |
-          go mod edit -json | jq -e '(.Replace | length) == 0'
-          if [[ "${{ matrix.module }}" != "." ]]; then
-            imports=$(go list -tags=integration -test -f '{{range .Imports}}{{println .}}{{end}}' ./...)
-            if grep -F 'github.com/0xJean/tabula/internal/' <<< "$imports"; then
-              echo "Submodules must use public core packages." >&2
-              exit 1
-            fi
-          fi
+      - name: Run static and dependency-boundary gates
+        if: matrix.module == '.'
+        run: scripts/check.sh --static
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.15.0
@@ -97,10 +105,9 @@ jobs:
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@v1.10.0
           govulncheck -test -tags=integration ./...
-      - name: Format and fuzz
+      - name: Fuzz parsers and SQL guards
         if: matrix.module == '.'
         run: |
-          test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
           for target in FuzzParseColumnTag FuzzFilterAnd FuzzOrderSpecResolve FuzzGuardNoSessionEscape; do
             go test -run='^$' -fuzz="^${target}$" -fuzztime=1s .
           done

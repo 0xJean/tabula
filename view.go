@@ -185,9 +185,9 @@ type ViewRows[T, S any] struct{ readBinding[T, S] }
 
 // WithLogger returns a handle with a per-binding logger override.
 func (r *ViewRows[T, S]) WithLogger(logger *slog.Logger) *ViewRows[T, S] {
-	copy := *r
-	copy.logger = logger
-	return &copy
+	clone := *r
+	clone.logger = logger
+	return &clone
 }
 
 // One reads at most one row. A missing row returns nil, nil.

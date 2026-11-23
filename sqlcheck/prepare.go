@@ -49,6 +49,7 @@ func PrepareStatement(ctx context.Context, tx *sql.Tx, query, role string) (err 
 		return err
 	}
 	for rows.Next() {
+		// Drain EXPLAIN output rows.
 	}
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()

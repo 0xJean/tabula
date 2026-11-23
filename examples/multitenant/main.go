@@ -88,7 +88,7 @@ func run(ctx context.Context) error {
 					return err
 				}
 				if n.Tenant != scope {
-					return fmt.Errorf("RLS returned tenant %q for %q", n.Tenant, scope)
+					return fmt.Errorf("policy returned tenant %q for %q", n.Tenant, scope)
 				}
 				count++
 				fmt.Printf("%s sees %q\n", scope, n.Body)
