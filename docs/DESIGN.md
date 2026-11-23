@@ -68,6 +68,5 @@ an application should rarely need to fork it.
 
 - Semantic versioning. Breaking changes are allowed in `v0.x` with a changelog entry;
   from `v1.0.0` the public API is stable within the major version.
-- Supported Go versions: the two most recent releases.
-- Supported PostgreSQL versions: those still supported upstream (13 and later at the time
-  of writing).
+- Support the two most recent Go releases. The development branch tests Go 1.26 and 1.27 with automatic toolchain upgrades disabled.
+- The integration matrix runs PostgreSQL 14 through 17.

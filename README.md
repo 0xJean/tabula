@@ -2,6 +2,8 @@
 
 # Tabula
 
+[![CI](https://github.com/0xJean/tabula/actions/workflows/ci.yml/badge.svg)](https://github.com/0xJean/tabula/actions/workflows/ci.yml) [![Go Reference](https://pkg.go.dev/badge/github.com/0xJean/tabula.svg)](https://pkg.go.dev/github.com/0xJean/tabula) [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+
 Declarative descriptors, explicit SQL, verified against a real PostgreSQL.
 
 Tabula describes PostgreSQL tables and result rows with Go struct tags, derives the
@@ -9,27 +11,48 @@ plain single-table statements from them, decodes the rows of hand-written SQL, a
 checks every registered statement against a real database. It is not an ORM: it never
 builds joins, never generates DDL, and never runs hidden callbacks.
 
-> Status: v0.3, pre-1.0. The API may still change between minor versions. The engine was
-> extracted from a production refactoring project. See [ROADMAP.md](ROADMAP.md),
-> [docs/DESIGN.md](docs/DESIGN.md), and [docs/COOKBOOK.md](docs/COOKBOOK.md).
+> The latest tagged core release is v0.2.0. This checkout contains the development API for v0.3. See the [migration guide](docs/MIGRATION.md) and [changelog](CHANGELOG.md).
+
+## Try it locally
+
+From a checkout with Go 1.26 or later and Docker Compose installed, run:
+
+```sh
+cd examples/multitenant
+docker compose up -d --wait && go run .
+```
+
+The example verifies the schema, executes scoped writes and shows what each tenant can read through a PostgreSQL RLS policy. [Example and expected output](examples/multitenant/README.md)
 
 ## What it does
 
 | Need | Tabula |
 | --- | --- |
-| Single-table CRUD | `Define(Table[T, K, S]{Name, Order, ReadOnly, AllowDelete})` derives get, lock, insert, save, set, soft/physical delete, count and list from `db` tags (`key`, `serial`, `tenant`, `deleted`, `version`, `once`, `json`, `zero`, `array`, `secret`), including composite struct keys and timestamp/bool/status soft delete |
-| Conditional, upsert, delete & batch writes | `UpdateWhere`, `SetWhere`, `DefineUpsert`/`Upsert`, `Delete`/`DeleteWhere`, `InsertReturning`, `SaveReturning`, multi-row `InsertMany` |
-| Rows of hand-written SQL (joins, views, materialized views) | `DefineView(View[T, S]{...})` with nested struct prefixes, `SelectAs`, `Requires`, and `RequiresFunction`: you write the SQL, Tabula decodes the rows |
-| Batch, locked & keyset reads | `GetMany`, `LockMany` (fixed key order), `LockBy`, `ListKeyset`, `CountExact`/`CountNone`/`CountEstimate` |
+| Single-table CRUD | `Define(reg, TableSpec[T, K]{…})` derives get, lock, insert, save, set, soft/physical delete, count and list from `db` tags (`key`, `serial`, `tenant`, `deleted`, `version`, `once`, `json`, `zero`, `array`, `secret`), including composite struct keys and timestamp/bool/status soft delete |
+| Conditional, upsert, delete & batch writes | `UpdateWhere`, `SetWhere`, `DefineUpsert`/`Upsert`, `Delete`/`DeleteWhere`, `InsertReturning`, `SaveReturning`, `InsertMany`, `UpsertMany`, `SetExpr` |
+| Rows of hand-written SQL (joins, views, materialized views) | `DefineView(reg, ViewSpec[T]{…})` with nested struct prefixes, `SelectAs`, `Requires`, and `RequiresFunction`: you write the SQL, Tabula decodes the rows |
+| Batch, locked & keyset reads | `GetMany`, `LockMany` (fixed key order), `Iter`, `LockBy`, `LockMode` (including `SKIP LOCKED` and `NOWAIT`), `ListKeyset`, `CountExact`/`CountNone`/`CountEstimate` |
 | Safe dynamic parts & guards | `Filter` (`And`, `AndIf`, `In`, `Range`, `??` escape), `OrderSpec` (whitelisted sort columns), `GuardNoSessionEscape` (blocks `SET ROLE`/`set_config`) |
-| Sessions, scope & retries | `stdsql` (`*sql.DB`/`*sql.Tx` Runner, `ScopePolicy` RLS plug-in, `Savepoint`, `Retry` for `40001`/`40P01`) and `pgxdriver` (`pgx/v5` Runner, Session & `CopyFrom` binary `COPY`) |
+| Sessions, scope & retries | `stdsql` (`*sql.DB`/`*sql.Tx` Runner, `ScopePolicy` RLS plug-in, `Savepoint`, read-only `Direct` pool) and `pgxdriver` (`pgx/v5` Runner, Session, Direct & binary COPY), with driver-independent `tabula.Retry` |
 | Error classification | Distinct PostgreSQL sentinels & classes (`unique`, `foreign_key`, `check`, `not_null`, `serialization`, `deadlock`, `canceled`) |
 | Observability | Opt-in `log/slog` ([spec](docs/LOGGING.md)), `Tracer`, and `Metrics` interfaces on `RegistryConfig` |
 | Verification & CI CLI | `sqlcheck` (`VerifyStatements`, `VerifyViewStatements`, `VerifySchema` incl. materialized views, `CheckRolePrivileges` incl. `DELETE` & function `EXECUTE`, `CheckRLS`) + `cmd/tabula` (`tabula check` & `tabula check-rls`) |
 
 ## Benchmarks
 
-Measured on Apple M4 Pro (Go 1.27, local PostgreSQL 15, `-benchmem`):
+The [comparison benchmark](benchmarks/README.md) runs the same 100-row SELECT through Tabula, database/sql, pgx, sqlx and GORM. It reports latency, allocated bytes, allocations and the size of each adapter. Separate microbenchmarks and bulk-write benchmarks are available in the engine and pgxdriver modules.
+
+```sh
+scripts/workspace.sh
+go test -run='^$' -bench=. -benchmem .
+TABULA_TEST_DSN='postgres://...' go test -tags=integration -run='^$' -bench='^BenchmarkPG_' -benchmem .
+(cd pgxdriver && TABULA_TEST_DSN='postgres://...' go test -tags=integration -run='^$' -bench='^BenchmarkPGX_' -benchmem .)
+```
+
+<details>
+<summary>Earlier transaction and bulk-write measurements</summary>
+
+These measurements were recorded before the bound-scope API change, on Apple M4 Pro with Go 1.27 and local PostgreSQL 15. The SELECT benchmarks below include a transaction per operation.
 
 | Benchmark | Time/op | Bytes/op | Allocs/op |
 | --- | ---: | ---: | ---: |
@@ -40,13 +63,7 @@ Measured on Apple M4 Pro (Go 1.27, local PostgreSQL 15, `-benchmem`):
 | Pure engine overhead: `Rows.Get` (in-memory) | 132 ns | 288 B | 6 |
 | Pure engine overhead: `OrderSpec.Resolve` | 65 ns | 48 B | 3 |
 
-Reproduce locally:
-
-```sh
-go test -run='^$' -bench=. -benchmem .
-TABULA_TEST_DSN='postgres://...' go test -tags=integration -run='^$' -bench='^BenchmarkPG_' -benchmem .
-(cd pgxdriver && TABULA_TEST_DSN='postgres://...' go test -tags=integration -run='^$' -bench='^BenchmarkPGX_' -benchmem .)
-```
+</details>
 
 Fuzzing targets are included for `db` tag parsing, `Filter`, `OrderSpec`, and `sqlcheck.ParseSnapshot`:
 
@@ -57,22 +74,13 @@ go test -fuzz=FuzzOrderSpecResolve -fuzztime=5s .
 go test -fuzz=FuzzParseSnapshot -fuzztime=5s ./sqlcheck
 ```
 
-## Install
+## Install a tagged release
 
 ```sh
-go get github.com/0xJean/tabula@v0.3.0
-# Optional pgx/v5 driver module:
-go get github.com/0xJean/tabula/pgxdriver@v0.3.0
+go get github.com/0xJean/tabula@v0.2.0
 ```
 
-Requires Go 1.27 or later and PostgreSQL. Unit tests need no database; integration
-tests need a disposable one:
-
-```sh
-go test -race ./...
-TABULA_TEST_DSN='postgres://user:pass@localhost:5432/db?sslmode=disable' \
-  go test -race -tags=integration ./...
-```
+For the development API and pgxdriver, run `scripts/workspace.sh` from the repository root. Go then uses this checkout for all three modules. [Local development and testing](CONTRIBUTING.md)
 
 ## What it will not do
 
@@ -85,10 +93,10 @@ TABULA_TEST_DSN='postgres://user:pass@localhost:5432/db?sslmode=disable' \
 | Package | Role | Dependencies |
 | --- | --- | --- |
 | `tabula` | Engine: registry, tables, views, rows, writes, upserts, keyset, filter, order, errors, logging, tracing/metrics interfaces | standard library only |
-| `tabula/stdsql` | `*sql.DB` / `*sql.Tx` sessions, `Runner`, `ScopePolicy` (RLS), `Savepoint`, serialization/deadlock `Retry` | standard library only |
+| `tabula/stdsql` | `*sql.DB` / `*sql.Tx` sessions, `Runner`, `ScopePolicy` (RLS), `Savepoint`, read-only `Direct` pool | standard library only |
 | `tabula/sqlcheck` | Snapshot render/parse, schema, privilege, and PREPARE/EXPLAIN verification | standard library only |
-| `tabula/pqdriver` | `lib/pq` SQLSTATE helpers and array converters | `github.com/lib/pq` |
-| `tabula/pgxdriver` | Separate module: `pgx/v5` pool Runner, `pgx.Tx` Session, SQLSTATE & array converters | `github.com/jackc/pgx/v5` |
+| `tabula/pqdriver` | `lib/pq` array converters | `github.com/lib/pq` |
+| `tabula/pgxdriver` | Separate module: `pgx/v5` pool Runner, `pgx.Tx` Session, Direct & array converters | `github.com/jackc/pgx/v5` |
 | `tabula/cmd/tabula` | CI CLI (`tabula check --dsn ... --snapshot ... [--role ...]`) | `sqlcheck`, `github.com/lib/pq` |
 
 Applications may use `stdsql` or `pgxdriver` directly, or wrap `tabula` in a thin
