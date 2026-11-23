@@ -7,7 +7,50 @@ import (
 	"fmt"
 	"reflect"
 	"time"
+	"unsafe"
 )
+
+// fieldAccessor builds a fast pointer-to-field function at Define time using
+// the struct's static byte offset, avoiding reflect.ValueOf + FieldByIndex on
+// every scanned row.
+func fieldAccessor[T any](rt reflect.Type, index []int) func(*T) any {
+	var offset uintptr
+	cur := rt
+	for _, i := range index {
+		f := cur.Field(i)
+		offset += f.Offset
+		cur = f.Type
+	}
+	switch cur {
+	case reflect.TypeFor[int64]():
+		return func(row *T) any { return (*int64)(unsafe.Add(unsafe.Pointer(row), offset)) }
+	case reflect.TypeFor[int]():
+		return func(row *T) any { return (*int)(unsafe.Add(unsafe.Pointer(row), offset)) }
+	case reflect.TypeFor[int32]():
+		return func(row *T) any { return (*int32)(unsafe.Add(unsafe.Pointer(row), offset)) }
+	case reflect.TypeFor[string]():
+		return func(row *T) any { return (*string)(unsafe.Add(unsafe.Pointer(row), offset)) }
+	case reflect.TypeFor[bool]():
+		return func(row *T) any { return (*bool)(unsafe.Add(unsafe.Pointer(row), offset)) }
+	case reflect.TypeFor[float64]():
+		return func(row *T) any { return (*float64)(unsafe.Add(unsafe.Pointer(row), offset)) }
+	case reflect.TypeFor[time.Time]():
+		return func(row *T) any { return (*time.Time)(unsafe.Add(unsafe.Pointer(row), offset)) }
+	case reflect.TypeFor[*time.Time]():
+		return func(row *T) any { return (**time.Time)(unsafe.Add(unsafe.Pointer(row), offset)) }
+	case reflect.TypeFor[*string]():
+		return func(row *T) any { return (**string)(unsafe.Add(unsafe.Pointer(row), offset)) }
+	case reflect.TypeFor[*int64]():
+		return func(row *T) any { return (**int64)(unsafe.Add(unsafe.Pointer(row), offset)) }
+	case reflect.TypeFor[[]byte]():
+		return func(row *T) any { return (*[]byte)(unsafe.Add(unsafe.Pointer(row), offset)) }
+	case reflect.TypeFor[[]string]():
+		return func(row *T) any { return (*[]string)(unsafe.Add(unsafe.Pointer(row), offset)) }
+	default:
+		ft := cur
+		return func(row *T) any { return reflect.NewAt(ft, unsafe.Add(unsafe.Pointer(row), offset)).Interface() }
+	}
+}
 
 var (
 	scannerType = reflect.TypeFor[sql.Scanner]()

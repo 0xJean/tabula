@@ -11,23 +11,12 @@ package tabula
 
 import (
 	"context"
+	"errors"
 	"maps"
 	"reflect"
 	"slices"
 	"sync"
 	"time"
-)
-
-type staticError string
-
-func (e staticError) Error() string { return string(e) }
-
-const (
-	// Default sentinel errors returned when ErrorPolicy leaves a slot nil.
-	ErrConflict   staticError = "row conflict or lost update"
-	ErrOnce       staticError = "insert-only column changed on update"
-	ErrNotDeleted staticError = "soft delete needs the deleted column set"
-	ErrRowCount   staticError = "write did not confirm exactly one row"
 )
 
 // Session is the narrow transaction-bound executor a Rows handle drives.
@@ -46,6 +35,7 @@ type Session[S any] interface {
 // error categories. Nil fields fall back to the package's default sentinels.
 type ErrorPolicy struct {
 	Classify    func(ctx context.Context, err error) error
+	Sanitize    func(err error) string
 	Conflict    error
 	OnceChanged error
 	NotDeleted  error
@@ -62,6 +52,9 @@ type RegistryConfig[S any] struct {
 	// TenantWrap wraps a *S pointer into a sql.Scanner / driver.Valuer.
 	// Optional when S already implements sql.Scanner and driver.Valuer.
 	TenantWrap func(*S) any
+	// ScopeLog formats a scope value S into the "tabula.scope" log attribute.
+	// When nil, "tabula.scope" is omitted from log entries.
+	ScopeLog func(S) string
 	// ArrayArg wraps a Go slice for PostgreSQL "= ANY($n)" parameters
 	// (e.g. pqdriver.Array). When nil, slices are passed as-is (native pgx).
 	ArrayArg func(any) any
@@ -71,18 +64,28 @@ type RegistryConfig[S any] struct {
 	// Errors maps driver and write-guard failures for Rows created from this
 	// registry.
 	Errors ErrorPolicy
+	// Log configures opt-in structured statement logging via log/slog.
+	Log LogConfig
+	// Tracer optionally wraps every statement execution in a tracing span.
+	Tracer Tracer
+	// Metrics optionally records latency, row count, and error class per statement.
+	Metrics Metrics
 }
 
-// Registry owns registered value converters, error policy, and the list of
-// defined tables and views. Applications normally declare one package-level
-// Registry and may construct isolated registries with NewRegistry in tests.
+// Registry owns registered value converters, error policy, logging, tracing,
+// metrics, and the list of defined tables and views. Applications normally
+// declare one package-level Registry and may construct isolated registries in tests.
 type Registry[S any] struct {
 	prefix     string
 	tenantType reflect.Type
 	tenantID   func(S) any
+	scopeLog   func(S) string
 	arrayArgFn func(any) any
 	arrayColFn func(reflect.Type) (func(any) any, error)
 	errors     ErrorPolicy
+	log        *logState
+	tracer     Tracer
+	metrics    Metrics
 
 	mu    sync.RWMutex
 	types map[reflect.Type]func(any) any
@@ -102,9 +105,13 @@ func NewRegistry[S any](cfg RegistryConfig[S]) *Registry[S] {
 		prefix:     prefix,
 		tenantType: reflect.TypeFor[S](),
 		tenantID:   cfg.TenantID,
+		scopeLog:   cfg.ScopeLog,
 		arrayArgFn: cfg.ArrayArg,
 		arrayColFn: cfg.ArrayColumn,
 		errors:     cfg.Errors,
+		log:        newLogState(cfg.Log),
+		tracer:     cfg.Tracer,
+		metrics:    cfg.Metrics,
 		types:      map[reflect.Type]func(any) any{},
 		zeros: map[reflect.Type]func(any) any{
 			reflect.TypeFor[string]():    zeroOf[string],
@@ -121,6 +128,12 @@ func NewRegistry[S any](cfg RegistryConfig[S]) *Registry[S] {
 	}
 	return r
 }
+
+// SetLogLevel atomically updates this Registry's statement logging level.
+func (r *Registry[S]) SetLogLevel(level LogLevel) { r.log.level.Set(level) }
+
+// LogLevel returns this Registry's active statement logging level.
+func (r *Registry[S]) LogLevel() LogLevel { return r.log.level.Level() }
 
 // RegisterType registers a converter wrapping a pointer to a value of type T.
 // Call during initialization before Define.
@@ -214,8 +227,15 @@ func (r *Registry[S]) classifyErr(ctx context.Context, err error) error {
 	if r.errors.Classify != nil {
 		return r.errors.Classify(ctx, err)
 	}
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return ctxErr
+	_, sentinel := ClassifyError(ctx, err)
+	if sentinel == ErrCanceled {
+		if ctx != nil && ctx.Err() != nil {
+			return errors.Join(ErrCanceled, ctx.Err())
+		}
+		return errors.Join(ErrCanceled, err)
+	}
+	if sentinel != nil {
+		return errors.Join(sentinel, err)
 	}
 	return err
 }

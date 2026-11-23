@@ -21,6 +21,12 @@ func TestSQLStateClassifiers(t *testing.T) {
 	require.Equal(t, "", SQLState(fmt.Errorf("plain")))
 	require.True(t, IsUniqueViolation(fakePGError("23505")))
 	require.False(t, IsUniqueViolation(fakePGError("23503")))
+	require.True(t, IsForeignKeyViolation(fakePGError("23503")))
+	require.True(t, IsCheckViolation(fakePGError("23514")))
+	require.True(t, IsNotNullViolation(fakePGError("23502")))
+	require.True(t, IsSerializationFailure(fakePGError("40001")))
+	require.True(t, IsDeadlock(fakePGError("40P01")))
+	require.True(t, IsQueryCanceled(fakePGError("57014")))
 
 	for _, code := range []string{"22001", "22003", "23502", "23514", "22P02"} {
 		require.True(t, IsRejectedValue(fakePGError(code)), code)

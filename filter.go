@@ -1,6 +1,7 @@
 package tabula
 
 import (
+	"reflect"
 	"strconv"
 	"strings"
 )
@@ -54,6 +55,49 @@ func (f *Filter) And(clause string, values ...any) {
 		f.Arg(values[valIdx])
 	}
 	f.where = append(f.where, b.String())
+}
+
+// AndIf appends clause with values only when cond is true.
+func (f *Filter) AndIf(cond bool, clause string, values ...any) {
+	if !cond {
+		return
+	}
+	f.And(clause, values...)
+}
+
+// In appends "<column> IN ($n, $n+1, ...)" for values. When values is empty,
+// it appends "FALSE" so an empty list safely matches zero rows without
+// producing invalid SQL. column must be a static SQL identifier.
+func (f *Filter) In(column string, values ...any) {
+	if len(values) == 0 {
+		f.where = append(f.where, "FALSE")
+		return
+	}
+	holders := make([]string, len(values))
+	for i, v := range values {
+		holders[i] = f.Arg(v)
+	}
+	f.where = append(f.where, column+" IN ("+strings.Join(holders, ", ")+")")
+}
+
+// Range appends inclusive lower/upper bounds on column, omitting whichever
+// bound is nil (including typed nil pointers). column must be a static SQL
+// identifier.
+func (f *Filter) Range(column string, from, to any) {
+	if !isNilBound(from) {
+		f.where = append(f.where, column+" >= "+f.Arg(from))
+	}
+	if !isNilBound(to) {
+		f.where = append(f.where, column+" <= "+f.Arg(to))
+	}
+}
+
+func isNilBound(v any) bool {
+	if v == nil {
+		return true
+	}
+	rv := reflect.ValueOf(v)
+	return rv.Kind() == reflect.Pointer && rv.IsNil()
 }
 
 // Where returns the predicates as " AND (p1) AND (p2)", or "" when none.

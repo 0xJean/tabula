@@ -29,6 +29,24 @@ func SQLState(err error) string {
 // IsUniqueViolation reports PostgreSQL unique_violation (SQLSTATE 23505).
 func IsUniqueViolation(err error) bool { return SQLState(err) == "23505" }
 
+// IsForeignKeyViolation reports PostgreSQL foreign_key_violation (SQLSTATE 23503).
+func IsForeignKeyViolation(err error) bool { return SQLState(err) == "23503" }
+
+// IsCheckViolation reports PostgreSQL check_violation (SQLSTATE 23514).
+func IsCheckViolation(err error) bool { return SQLState(err) == "23514" }
+
+// IsNotNullViolation reports PostgreSQL not_null_violation (SQLSTATE 23502).
+func IsNotNullViolation(err error) bool { return SQLState(err) == "23502" }
+
+// IsSerializationFailure reports PostgreSQL serialization_failure (SQLSTATE 40001).
+func IsSerializationFailure(err error) bool { return SQLState(err) == "40001" }
+
+// IsDeadlock reports PostgreSQL deadlock_detected (SQLSTATE 40P01).
+func IsDeadlock(err error) bool { return SQLState(err) == "40P01" }
+
+// IsQueryCanceled reports PostgreSQL query_canceled (SQLSTATE 57014).
+func IsQueryCanceled(err error) bool { return SQLState(err) == "57014" }
+
 // IsRejectedValue reports a value refused by column definitions: string data
 // right truncation (22001), numeric value out of range (22003), not_null
 // violation (23502), check violation (23514), or invalid text representation
