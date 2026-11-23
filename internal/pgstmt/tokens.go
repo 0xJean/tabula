@@ -6,7 +6,8 @@ import (
 )
 
 // Tokens extracts lowercase SQL keywords, identifiers, '(', and ';' while
-// skipping -- line comments, /* block comments */, and '...' literals.
+// skipping -- line comments, /* block comments */, dollar-quoted literals,
+// PostgreSQL E'...' escape strings, and '...' literals.
 func Tokens(q string) []string {
 	var out []string
 	n := len(q)
@@ -52,6 +53,25 @@ func Tokens(q string) []string {
 					continue
 				}
 			}
+		}
+		if (c == 'e' || c == 'E') && i+1 < n && q[i+1] == '\'' {
+			i += 2
+			for i < n {
+				if q[i] == '\\' {
+					i += 2
+					continue
+				}
+				if q[i] == '\'' {
+					i++
+					if i < n && q[i] == '\'' {
+						i++
+						continue
+					}
+					break
+				}
+				i++
+			}
+			continue
 		}
 		if c == '\'' {
 			i++

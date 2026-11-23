@@ -15,12 +15,12 @@ func TestReadPolicy(t *testing.T) {
 		}
 		return nil
 	})
-	for _, q := range []string{"/* app */ SELECT 1;", "SELECT 'a;b'", "SELECT $body$x;y$body$", "WITH v AS (SELECT 1) SELECT * FROM v"} {
+	for _, q := range []string{"/* app */ SELECT 1;", "SELECT 'a;b'", "SELECT $body$x;y$body$", `SELECT E'a\'b;c'`, "WITH v AS (SELECT 1) SELECT * FROM v"} {
 		if err := guard(q); err != nil {
 			t.Errorf("%q: %v", q, err)
 		}
 	}
-	for _, q := range []string{"", "SELECT 1; SELECT 2", "UPDATE job SET id = 1"} {
+	for _, q := range []string{"", "SELECT 1; SELECT 2", `SELECT E'\''; SET default_transaction_read_only = off`, "UPDATE job SET id = 1"} {
 		if err := guard(q); !errors.Is(err, tabula.ErrReadOnly) {
 			t.Errorf("%q: got %v", q, err)
 		}
