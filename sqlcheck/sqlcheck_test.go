@@ -1,0 +1,70 @@
+package sqlcheck
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/0xJean/tabula"
+)
+
+func TestRenderSnapshotAndFirstDifference(t *testing.T) {
+	defs := []tabula.Definition{
+		{Name: "public.b", Statements: map[string]string{"z": "SELECT 2", "a": "SELECT 1"}},
+		{Name: "public.a", Statements: map[string]string{"get": "SELECT * FROM public.a WHERE id = $1"}},
+	}
+	got := RenderSnapshot(defs, "header line 1", "header line 2")
+	want := "-- header line 1\n-- header line 2\n" +
+		"\n-- public.a\n-- get\nSELECT * FROM public.a WHERE id = $1;\n" +
+		"\n-- public.b\n-- a\nSELECT 1;\n-- z\nSELECT 2;\n"
+	require.Equal(t, want, got)
+	require.Empty(t, FirstDifference(want, got))
+	require.Equal(t, "- line a\n+ line b", FirstDifference("same\nline a", "same\nline b"))
+}
+
+func TestCheckSchemaColumns(t *testing.T) {
+	families := DefaultTypeFamilies()
+	def := tabula.Definition{
+		Name: "public.items",
+		Columns: []tabula.DefinedColumn{
+			{Name: "id", GoType: "int64"},
+			{Name: "name", GoType: "string"},
+			{Name: "note", GoType: "*string", Nullable: true},
+		},
+	}
+
+	okInstalled := map[string]ColumnInfo{
+		"id":   {DataType: "bigint", Nullable: false},
+		"name": {DataType: "text", Nullable: false},
+		"note": {DataType: "text", Nullable: true},
+	}
+	require.Empty(t, CheckSchemaColumns(def, okInstalled, families))
+	require.Equal(t, []string{"public.items: table not installed"}, CheckSchemaColumns(def, nil, families))
+
+	badInstalled := map[string]ColumnInfo{
+		"id":   {DataType: "text", Nullable: false},
+		"name": {DataType: "text", Nullable: true},
+	}
+	failures := CheckSchemaColumns(def, badInstalled, families)
+	require.Len(t, failures, 3)
+	require.Contains(t, failures[0], "public.items.id: Go type int64 expects")
+	require.Contains(t, failures[1], "public.items.name: schema is nullable")
+	require.Contains(t, failures[2], "public.items.note: column missing from schema")
+}
+
+func TestCollectPrivilegeNeeds(t *testing.T) {
+	needs, empty := CollectPrivilegeNeeds([]tabula.Definition{
+		{
+			Name: "public.items",
+			Privileges: []tabula.DefinedPrivilege{
+				{Table: "public.items", Privilege: "SELECT", Columns: []string{"id", "name"}},
+				{Table: "public.items", Privilege: "USAGE", Sequence: "id"},
+			},
+		},
+		{Name: "public.empty"},
+	})
+	require.Equal(t, []string{"public.empty"}, empty)
+	require.True(t, needs.Columns["public.items"]["SELECT"]["id"])
+	require.True(t, needs.Columns["public.items"]["SELECT"]["name"])
+	require.Equal(t, [][2]string{{"public.items", "id"}}, needs.Sequences)
+}

@@ -1,0 +1,41 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ["14", "15", "16", "17"]
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}-alpine
+        env:
+          POSTGRES_USER: tabula
+          POSTGRES_PASSWORD: tabula
+          POSTGRES_DB: tabula
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U tabula"
+          --health-interval 2s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      - run: go vet -tags=integration ./...
+      - run: go test -race -count=1 ./...
+      - name: integration
+        env:
+          TABULA_TEST_DSN: postgres://tabula:tabula@localhost:5432/tabula?sslmode=disable
+        run: go test -race -count=1 -tags=integration ./...

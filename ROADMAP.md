@@ -10,7 +10,8 @@ it is tagged. Items keep the red lines in [docs/DESIGN.md](docs/DESIGN.md).
 - `View[T, S]`: decode rows of hand-written SQL by `db` tags; `Cols`, `ColsAs`,
   `Statement`, `One`, `Select`, `Scan`.
 - `Filter`, `OrderSpec`, JSON / zero / array codecs, privilege derivation.
-- `pqdriver`, `sqlcheck`.
+- `pqdriver`; `sqlcheck`: snapshots, schema columns, privilege derivation and role grants,
+  `PrepareStatement` / `VerifyStatements` (PREPARE plus EXPLAIN EXECUTE on a real database).
 
 ## v0.3 — single-table writes and errors
 

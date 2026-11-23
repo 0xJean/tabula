@@ -1,4 +1,4 @@
-<p align="center"><img src="docs/brand/lockup-light.svg" alt="Tabula" width="420"></p>
+<p align="center"><img src="docs/brand/lockup-light.png" alt="Tabula" width="420"></p>
 
 # Tabula
 
@@ -9,8 +9,8 @@ plain single-table statements from them, decodes the rows of hand-written SQL, a
 checks every registered statement against a real database. It is not an ORM: it never
 builds joins, never generates DDL, and never runs hidden callbacks.
 
-> Status: pre-release. The engine was extracted from a production refactoring project
-> (v0.2 there). See [ROADMAP.md](ROADMAP.md) for what comes next and
+> Status: v0.2, pre-1.0. The API may still change between minor versions. The engine was
+> extracted from a production refactoring project. See [ROADMAP.md](ROADMAP.md) for what comes next and
 > [docs/DESIGN.md](docs/DESIGN.md) for the rules the library keeps.
 
 ## What it does
@@ -21,8 +21,23 @@ builds joins, never generates DDL, and never runs hidden callbacks.
 | Rows of hand-written SQL (joins, projections, reports) | `DefineView(View[T, S]{...})`: you write the SQL, Tabula decodes the rows |
 | Batch and locked reads | `GetMany`, `LockMany` (fixed key order), `LockBy` |
 | Safe dynamic parts | `Filter` (parameters only), `OrderSpec` (whitelisted sort columns) |
-| Logging | Opt-in `log/slog` with level switch, slow-statement threshold and value redaction ([spec](docs/LOGGING.md)) |
+| Logging (planned, v0.3) | Opt-in `log/slog` with level switch, slow-statement threshold and value redaction ([spec](docs/LOGGING.md)) |
 | Verification | `sqlcheck`: PREPARE and EXPLAIN every registered statement, compare columns with the schema, derive privileges, snapshot the SQL for review |
+
+## Install
+
+```sh
+go get github.com/0xJean/tabula@v0.2.0
+```
+
+Requires Go 1.27 or later and PostgreSQL. Unit tests need no database; integration
+tests need a disposable one:
+
+```sh
+go test -race ./...
+TABULA_TEST_DSN='postgres://user:pass@localhost:5432/db?sslmode=disable' \
+  go test -race -tags=integration ./...
+```
 
 ## What it will not do
 
@@ -44,4 +59,4 @@ notion of tenants or business errors.
 
 ## License
 
-To be decided before the first public release.
+Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
