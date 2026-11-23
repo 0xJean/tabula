@@ -56,4 +56,25 @@ func TestCLICheckAgainstRealPostgres(t *testing.T) {
 	code = run(ctx, []string{"check", "--dsn", dsn, "--snapshot", badSnap}, &out, &errBuf)
 	require.Equal(t, 1, code)
 	require.Contains(t, errBuf.String(), "missing_col")
+
+	// check-rls fails when widgets lacks RLS, and passes once RLS + FORCE + RESTRICTIVE are enabled.
+	out.Reset()
+	errBuf.Reset()
+	code = run(ctx, []string{"check-rls", "--dsn", dsn, "--schema", schema, "--tables", "widgets", "--force", "--restrictive"}, &out, &errBuf)
+	require.Equal(t, 1, code)
+	require.Contains(t, errBuf.String(), "ROW LEVEL SECURITY is not enabled")
+
+	for _, q := range []string{
+		`ALTER TABLE ` + schema + `.widgets ENABLE ROW LEVEL SECURITY`,
+		`ALTER TABLE ` + schema + `.widgets FORCE ROW LEVEL SECURITY`,
+		`CREATE POLICY widgets_rls ON ` + schema + `.widgets AS RESTRICTIVE FOR ALL TO PUBLIC USING (true)`,
+	} {
+		_, err := db.ExecContext(ctx, q)
+		require.NoError(t, err)
+	}
+	out.Reset()
+	errBuf.Reset()
+	code = run(ctx, []string{"check-rls", "--dsn", dsn, "--schema", schema, "--tables", "widgets", "--force", "--restrictive"}, &out, &errBuf)
+	require.Equal(t, 0, code, "stderr: %s", errBuf.String())
+	require.Contains(t, out.String(), "passed")
 }

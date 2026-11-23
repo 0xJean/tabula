@@ -15,10 +15,11 @@ Items keep the red lines in [docs/DESIGN.md](docs/DESIGN.md).
 
 ## v0.3 — complete feature release (current)
 
-- **Single-table writes**: `UpdateWhere` / `SetWhere` (0 rows is not an error),
-  controlled upsert (`DefineUpsert` / `Upsert`; key, scope and `once` columns can never
-  be updated), `InsertReturning` / `SaveReturning`, multi-row `InsertMany` (chunked at
-  PostgreSQL's 65,535 param limit).
+- **Single-table writes & table modes**: `UpdateWhere` / `SetWhere` (0 rows is not an
+  error), controlled upsert (`DefineUpsert` / `Upsert`; key, scope and `once` columns can
+  never be updated), opt-in physical deletes (`Table.AllowDelete` + `Delete` / `DeleteWhere`),
+  `Table.ReadOnly` mode, `InsertReturning` / `SaveReturning`, multi-row `InsertMany`
+  (chunked at PostgreSQL's 65,535 param limit).
 - **Schema shapes**: composite keys (struct `K`) with tuple `IN` for `GetMany` / `LockMany`;
   configurable soft delete (`*time.Time`, `bool`, or status value via `Table.SoftDelete`).
 - **Queries & projections**: keyset pagination (`ListKeyset`), count strategies
@@ -31,17 +32,19 @@ Items keep the red lines in [docs/DESIGN.md](docs/DESIGN.md).
   per [docs/LOGGING.md](docs/LOGGING.md) (`LogOff`/`LogErrors`/`LogSlow`/`LogAll`,
   atomic level switch, `secret` tag, `Quiet()`/`Secret()`), plus explicit `Tracer` and
   `Metrics` hooks on `RegistryConfig`.
-- **Verification, fuzzing, benchmarks & docs**: `sqlcheck.ParseSnapshot`, `cmd/tabula`
-  CI CLI (`tabula check --dsn ... --snapshot ...`), static-offset field accessors, fuzz
-  targets (`FuzzParseColumnTag`, `FuzzFilterAnd`, `FuzzOrderSpecResolve`,
-  `FuzzParseSnapshot`), micro/real-PG benchmarks, and [docs/COOKBOOK.md](docs/COOKBOOK.md).
+- **Verification, RLS, fuzzing, benchmarks & docs**: `sqlcheck.ParseSnapshot`,
+  `RenderAllSnapshot`, `VerifyViewStatements`, `VerifyViewSchema` (regular & materialized
+  views), `DELETE` & function `EXECUTE` privilege checks, `CheckRLS` + `cmd/tabula` CI CLI
+  (`tabula check` & `tabula check-rls`), `GuardNoSessionEscape`, static-offset field
+  accessors, fuzz targets, micro/real-PG benchmarks, GoDoc examples, `CONTRIBUTING.md`,
+  `SECURITY.md`, and [docs/COOKBOOK.md](docs/COOKBOOK.md).
 
 ## v1.0 — stability and ecosystem adapters
 
 - API freeze and semver compatibility promise.
 - Optional OpenTelemetry / Prometheus adapter modules over `Tracer` and `Metrics`.
 - Optional prepared-statement cache.
-- `CONTRIBUTING.md`, `SECURITY.md`, issue/PR templates, automated release workflow.
+- Automated release workflow and issue/PR templates.
 
 ## Out of scope
 

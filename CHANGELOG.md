@@ -7,10 +7,21 @@ v1.0 a minor version may contain breaking changes.
 
 Complete single-table write, query, driver, session, observability, and CI CLI release.
 
-- **Conditional, upsert & batch writes**: `Rows.UpdateWhere`, `Rows.SetWhere`,
+- **Conditional, upsert, delete & batch writes**: `Rows.UpdateWhere`, `Rows.SetWhere`,
   `Table.DefineUpsert` / `TryDefineUpsert` + `Rows.Upsert` (forbids updating key, tenant,
-  and `once` columns; registers SQL for `sqlcheck`), `Rows.InsertReturning`,
-  `Rows.SaveReturning`, and chunked multi-row `Rows.InsertMany`.
+  and `once` columns; registers SQL for `sqlcheck`), opt-in physical deletes
+  (`Table.AllowDelete` + `Rows.Delete` / `Rows.DeleteWhere`), `Table.ReadOnly` mode
+  (`ErrReadOnly`), `Rows.InsertReturning`, `Rows.SaveReturning`, and chunked multi-row
+  `Rows.InsertMany`.
+- **Security & RLS tooling**: `GuardNoSessionEscape` (`ErrForbiddenStatement`) blocking
+  `SET ROLE`/`RESET ROLE`/`SESSION AUTHORIZATION`/`set_config` in adapter SQL;
+  `Table.RequiresFunction` and `View.Requires`/`RequiresFunction` for `DELETE` and
+  function `EXECUTE` privilege checks; `sqlcheck.CheckRLS` and `tabula check-rls` CLI.
+- **Views & materialized views in `sqlcheck`**: `ViewsToDefinitions`, `RenderAllSnapshot`,
+  `VerifyViewStatements`, `VerifyViewSchema` (supports PostgreSQL regular views and
+  materialized views via `pg_attribute` fallback).
+- **GoDoc examples & repo standards**: runnable `Example*` tests, `CONTRIBUTING.md`, and
+  `SECURITY.md`.
 - **Composite keys & configurable soft delete**: comparable struct `K` with tuple `IN`
   for `GetMany` / `LockMany`; `*time.Time` (`IS NULL`), `bool` (`= FALSE`), and
   string/integer status values via `Table.SoftDelete`.

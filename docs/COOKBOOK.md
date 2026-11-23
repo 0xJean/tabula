@@ -27,6 +27,7 @@ runner := stdsql.NewRunner(db, stdsql.ScopePolicy[TenantID]{
         }
         return stdsql.SetLocalConfig(ctx, tx, "app.current_tenant", string(tenant))
     },
+    GuardQuery: tabula.GuardNoSessionEscape,
 })
 ```
 
@@ -158,4 +159,11 @@ go run github.com/0xJean/tabula/cmd/tabula@v0.3.0 check \
   --dsn "$POSTGRES_DSN" \
   --snapshot test/sqlprepare/testdata/defined-statements.sql \
   --role app_user
+
+# Also audit Row-Level Security (ENABLE + FORCE + RESTRICTIVE):
+go run github.com/0xJean/tabula/cmd/tabula@v0.3.0 check-rls \
+  --dsn "$POSTGRES_DSN" \
+  --schema public \
+  --force \
+  --restrictive
 ```

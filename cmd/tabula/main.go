@@ -1,9 +1,10 @@
-// Command tabula verifies committed Tabula SQL snapshots against a real
-// PostgreSQL database using PREPARE and EXPLAIN EXECUTE.
+// Command tabula verifies committed Tabula SQL snapshots and PostgreSQL RLS
+// configuration against a real PostgreSQL database.
 //
 // Usage:
 //
 //	tabula check --dsn "$POSTGRES_DSN" --snapshot path/to/defined-statements.sql [--role app_role]
+//	tabula check-rls --dsn "$POSTGRES_DSN" [--schema public] [--tables a,b] [--force] [--restrictive] [--forbid-roles r1,r2]
 package main
 
 import (
@@ -13,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	_ "github.com/lib/pq"
 
@@ -31,6 +33,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "check":
 		return runCheck(ctx, args[1:], stdout, stderr)
+	case "check-rls":
+		return runCheckRLS(ctx, args[1:], stdout, stderr)
 	case "-h", "--help", "help":
 		printUsage(stdout)
 		return 0
@@ -42,7 +46,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 }
 
 func printUsage(w io.Writer) {
-	fmt.Fprintln(w, "usage: tabula check --dsn <postgres-dsn> --snapshot <file> [--role <role>]")
+	fmt.Fprintln(w, "usage:")
+	fmt.Fprintln(w, "  tabula check --dsn <postgres-dsn> --snapshot <file> [--role <role>]")
+	fmt.Fprintln(w, "  tabula check-rls --dsn <postgres-dsn> [--schema public] [--tables t1,t2] [--force] [--restrictive] [--forbid-roles r1,r2]")
 }
 
 func runCheck(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -81,17 +87,11 @@ func runCheck(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		return 2
 	}
 
-	db, err := sql.Open("postgres", *dsn)
+	db, err := openDB(ctx, *dsn, "tabula check", stderr)
 	if err != nil {
-		fmt.Fprintf(stderr, "tabula check: open database: %v\n", err)
 		return 2
 	}
 	defer func() { _ = db.Close() }()
-
-	if err := db.PingContext(ctx); err != nil {
-		fmt.Fprintf(stderr, "tabula check: connect database: %v\n", err)
-		return 2
-	}
 
 	failures, err := sqlcheck.VerifyStatements(ctx, db, defs, *role)
 	if err != nil {
@@ -111,4 +111,77 @@ func runCheck(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		fmt.Fprintf(stdout, "tabula check: %d statements across %d tables verified\n", totalStmts, len(defs))
 	}
 	return 0
+}
+
+func runCheckRLS(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("check-rls", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	dsn := fs.String("dsn", os.Getenv("TABULA_DSN"), "PostgreSQL DSN (defaults to TABULA_DSN)")
+	schema := fs.String("schema", "public", "PostgreSQL schema to audit")
+	tablesCSV := fs.String("tables", "", "comma-separated table names that must have RLS enabled (default: all RLS tables in schema)")
+	force := fs.Bool("force", true, "require FORCE ROW LEVEL SECURITY")
+	restrictive := fs.Bool("restrictive", false, "require at least one RESTRICTIVE policy per table")
+	forbidCSV := fs.String("forbid-roles", "", "comma-separated role names forbidden from appearing directly in policies")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *dsn == "" {
+		fmt.Fprintln(stderr, "tabula check-rls: --dsn (or TABULA_DSN) is required")
+		return 2
+	}
+
+	db, err := openDB(ctx, *dsn, "tabula check-rls", stderr)
+	if err != nil {
+		return 2
+	}
+	defer func() { _ = db.Close() }()
+
+	failures, err := sqlcheck.CheckRLS(ctx, db, sqlcheck.RLSExpectation{
+		Schema:               *schema,
+		Tables:               splitCSV(*tablesCSV),
+		RequireForce:         *force,
+		RequireRestrictive:   *restrictive,
+		ForbiddenPolicyRoles: splitCSV(*forbidCSV),
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "tabula check-rls: %v\n", err)
+		return 2
+	}
+	if len(failures) > 0 {
+		for _, f := range failures {
+			fmt.Fprintln(stderr, f)
+		}
+		fmt.Fprintf(stderr, "tabula check-rls: %d RLS violations found\n", len(failures))
+		return 1
+	}
+	fmt.Fprintf(stdout, "tabula check-rls: schema %s RLS check passed\n", *schema)
+	return 0
+}
+
+func openDB(ctx context.Context, dsn, prefix string, stderr io.Writer) (*sql.DB, error) {
+	db, err := sql.Open("postgres", dsn)
+	if err != nil {
+		fmt.Fprintf(stderr, "%s: open database: %v\n", prefix, err)
+		return nil, err
+	}
+	if err := db.PingContext(ctx); err != nil {
+		_ = db.Close()
+		fmt.Fprintf(stderr, "%s: connect database: %v\n", prefix, err)
+		return nil, err
+	}
+	return db, nil
+}
+
+func splitCSV(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

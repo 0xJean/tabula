@@ -78,6 +78,12 @@ func VerifyStatements(ctx context.Context, db *sql.DB, defs []tabula.Definition,
 	return failures, nil
 }
 
+// VerifyViewStatements prepares and explains every registered statement across
+// views as role inside one rolled-back transaction.
+func VerifyViewStatements(ctx context.Context, db *sql.DB, views []tabula.ViewDefinition, role string) ([]string, error) {
+	return VerifyStatements(ctx, db, ViewsToDefinitions(views), role)
+}
+
 func quoteIdent(name string) string {
 	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }

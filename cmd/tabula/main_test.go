@@ -13,13 +13,15 @@ func TestCLISubcommandValidation(t *testing.T) {
 	t.Run("no_args", func(t *testing.T) {
 		var out, errBuf bytes.Buffer
 		require.Equal(t, 2, run(t.Context(), nil, &out, &errBuf))
-		require.Contains(t, errBuf.String(), "usage: tabula check")
+		require.Contains(t, errBuf.String(), "tabula check")
+		require.Contains(t, errBuf.String(), "tabula check-rls")
 	})
 
 	t.Run("help", func(t *testing.T) {
 		var out, errBuf bytes.Buffer
 		require.Equal(t, 0, run(t.Context(), []string{"--help"}, &out, &errBuf))
-		require.Contains(t, out.String(), "usage: tabula check")
+		require.Contains(t, out.String(), "tabula check")
+		require.Contains(t, out.String(), "tabula check-rls")
 	})
 
 	t.Run("missing_dsn", func(t *testing.T) {

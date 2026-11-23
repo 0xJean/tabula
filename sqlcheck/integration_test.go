@@ -123,4 +123,86 @@ func TestVerifyAgainstPostgres(t *testing.T) {
 		require.Contains(t, missing, schema+".items USAGE(seq id)")
 		require.Empty(t, extra)
 	})
+
+	t.Run("views, materialized views, functions, delete privileges and RLS audit", func(t *testing.T) {
+		for _, q := range []string{
+			`CREATE VIEW ` + schema + `.active_items AS SELECT id, code FROM ` + schema + `.items WHERE deleted_at IS NULL`,
+			`CREATE MATERIALIZED VIEW ` + schema + `.mv_items AS SELECT id, code FROM ` + schema + `.items`,
+			`CREATE FUNCTION ` + schema + `.count_items(p_tenant text) RETURNS bigint LANGUAGE sql AS 'SELECT count(*) FROM ` + schema + `.items WHERE tenant_id = $1'`,
+			`GRANT SELECT ON ` + schema + `.active_items, ` + schema + `.mv_items TO ` + app,
+			`GRANT EXECUTE ON FUNCTION ` + schema + `.count_items(text) TO ` + app,
+			`GRANT DELETE ON ` + schema + `.items TO ` + app,
+			`REVOKE EXECUTE ON FUNCTION ` + schema + `.count_items(text) FROM PUBLIC`,
+			`ALTER TABLE ` + schema + `.items ENABLE ROW LEVEL SECURITY`,
+			`ALTER TABLE ` + schema + `.items FORCE ROW LEVEL SECURITY`,
+			`CREATE POLICY items_tenant_scope ON ` + schema + `.items AS RESTRICTIVE FOR ALL TO PUBLIC USING (tenant_id = current_setting('app.current_tenant', true))`,
+		} {
+			_, err := db.ExecContext(ctx, q)
+			require.NoError(t, err, q)
+		}
+
+		type summaryView struct {
+			ID   int64  `db:"id,zero"`
+			Code string `db:"code,zero"`
+		}
+		vReg := tabula.NewRegistry(tabula.RegistryConfig[scope]{TenantID: func(s scope) any { return string(s) }})
+		v1 := tabula.DefineView(vReg, tabula.View[summaryView, scope]{Name: schema + ".active_items"})
+		v1.Statement("all", "SELECT "+v1.Cols()+" FROM "+schema+".active_items")
+		v2 := tabula.DefineView(vReg, tabula.View[summaryView, scope]{Name: schema + ".mv_items"})
+		v2.Statement("all", "SELECT "+v2.Cols()+" FROM "+schema+".mv_items")
+
+		// Verify regular view and materialized view schemas and statements.
+		failures, err := VerifyViewSchema(ctx, db, vReg.DefinedViews(), DefaultTypeFamilies())
+		require.NoError(t, err)
+		require.Empty(t, failures)
+
+		failures, err = VerifyViewStatements(ctx, db, vReg.DefinedViews(), app)
+		require.NoError(t, err)
+		require.Empty(t, failures)
+
+		// RenderAllSnapshot includes both tables and views.
+		allSnap := RenderAllSnapshot(reg.Defined(), vReg.DefinedViews(), "Combined snapshot")
+		parsed, err := ParseSnapshot(allSnap)
+		require.NoError(t, err)
+		failures, err = VerifyStatements(ctx, db, parsed, app)
+		require.NoError(t, err)
+		require.Empty(t, failures)
+
+		// DELETE and function EXECUTE privileges checked accurately.
+		delReg := tabula.NewRegistry(tabula.RegistryConfig[scope]{TenantID: func(s scope) any { return string(s) }})
+		delTbl := tabula.Define(delReg, tabula.Table[item, int64, scope]{Name: schema + ".items", AllowDelete: true})
+		delTbl.RequiresFunction(schema + ".count_items(text)")
+		delNeeds, _ := CollectPrivilegeNeeds(delReg.Defined())
+		missing, _, err := CheckRolePrivileges(ctx, db, delNeeds, app)
+		require.NoError(t, err)
+		require.Empty(t, missing)
+
+		missingNarrow, _, err := CheckRolePrivileges(ctx, db, delNeeds, role)
+		require.NoError(t, err)
+		require.Contains(t, missingNarrow, schema+".items DELETE")
+		require.Contains(t, missingNarrow, "EXECUTE("+schema+".count_items(text))")
+
+		// Generic RLS audit passes when ENABLE + FORCE + RESTRICTIVE are present.
+		rlsFails, err := CheckRLS(ctx, db, RLSExpectation{
+			Schema:               schema,
+			Tables:               []string{"items"},
+			RequireForce:         true,
+			RequireRestrictive:   true,
+			ForbiddenPolicyRoles: []string{role},
+		})
+		require.NoError(t, err)
+		require.Empty(t, rlsFails)
+
+		// Reports a table without RLS or FORCE.
+		_, err = db.ExecContext(ctx, `CREATE TABLE `+schema+`.unprotected (id int PRIMARY KEY)`)
+		require.NoError(t, err)
+		rlsFails, err = CheckRLS(ctx, db, RLSExpectation{
+			Schema:             schema,
+			Tables:             []string{"unprotected"},
+			RequireForce:       true,
+			RequireRestrictive: true,
+		})
+		require.NoError(t, err)
+		require.Equal(t, []string{schema + ".unprotected: ROW LEVEL SECURITY is not enabled"}, rlsFails)
+	})
 }

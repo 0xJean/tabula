@@ -17,15 +17,15 @@ builds joins, never generates DDL, and never runs hidden callbacks.
 
 | Need | Tabula |
 | --- | --- |
-| Single-table CRUD | `Define(Table[T, K, S]{Name, Order})` derives get, lock, insert, save, set, soft delete, count and list from `db` tags (`key`, `serial`, `tenant`, `deleted`, `version`, `once`, `json`, `zero`, `array`, `secret`), including composite struct keys and timestamp/bool/status soft delete |
-| Conditional, upsert & batch writes | `UpdateWhere`, `SetWhere`, `DefineUpsert`/`Upsert`, `InsertReturning`, `SaveReturning`, multi-row `InsertMany` |
-| Rows of hand-written SQL (joins, projections, reports) | `DefineView(View[T, S]{...})` with nested struct prefixes and `SelectAs`: you write the SQL, Tabula decodes the rows |
+| Single-table CRUD | `Define(Table[T, K, S]{Name, Order, ReadOnly, AllowDelete})` derives get, lock, insert, save, set, soft/physical delete, count and list from `db` tags (`key`, `serial`, `tenant`, `deleted`, `version`, `once`, `json`, `zero`, `array`, `secret`), including composite struct keys and timestamp/bool/status soft delete |
+| Conditional, upsert, delete & batch writes | `UpdateWhere`, `SetWhere`, `DefineUpsert`/`Upsert`, `Delete`/`DeleteWhere`, `InsertReturning`, `SaveReturning`, multi-row `InsertMany` |
+| Rows of hand-written SQL (joins, views, materialized views) | `DefineView(View[T, S]{...})` with nested struct prefixes, `SelectAs`, `Requires`, and `RequiresFunction`: you write the SQL, Tabula decodes the rows |
 | Batch, locked & keyset reads | `GetMany`, `LockMany` (fixed key order), `LockBy`, `ListKeyset`, `CountExact`/`CountNone`/`CountEstimate` |
-| Safe dynamic parts | `Filter` (`And`, `AndIf`, `In`, `Range`, `??` escape), `OrderSpec` (whitelisted sort columns) |
+| Safe dynamic parts & guards | `Filter` (`And`, `AndIf`, `In`, `Range`, `??` escape), `OrderSpec` (whitelisted sort columns), `GuardNoSessionEscape` (blocks `SET ROLE`/`set_config`) |
 | Sessions, scope & retries | `stdsql` (`*sql.DB`/`*sql.Tx` Runner, `ScopePolicy` RLS plug-in, `Savepoint`, `Retry` for `40001`/`40P01`) and `pgxdriver` (`pgx/v5` Runner, Session & `CopyFrom` binary `COPY`) |
 | Error classification | Distinct PostgreSQL sentinels & classes (`unique`, `foreign_key`, `check`, `not_null`, `serialization`, `deadlock`, `canceled`) |
 | Observability | Opt-in `log/slog` ([spec](docs/LOGGING.md)), `Tracer`, and `Metrics` interfaces on `RegistryConfig` |
-| Verification & CI CLI | `sqlcheck` + `cmd/tabula` (`tabula check --dsn ... --snapshot ... [--role ...]`) PREPARE and EXPLAIN every registered statement, compare columns with the schema, derive privileges, snapshot the SQL for review |
+| Verification & CI CLI | `sqlcheck` (`VerifyStatements`, `VerifyViewStatements`, `VerifySchema` incl. materialized views, `CheckRolePrivileges` incl. `DELETE` & function `EXECUTE`, `CheckRLS`) + `cmd/tabula` (`tabula check` & `tabula check-rls`) |
 
 ## Benchmarks
 

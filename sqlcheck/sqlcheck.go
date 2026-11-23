@@ -1,6 +1,7 @@
 // Package sqlcheck is the reusable verification toolkit for tabula
-// descriptors: SQL snapshot rendering/diffing, Go-to-PostgreSQL schema
-// alignment checks, column privilege gap checks, and real-PostgreSQL
+// descriptors: SQL snapshot rendering/parsing/diffing, Go-to-PostgreSQL schema
+// alignment checks (tables, views, and materialized views), column/table/sequence/
+// function privilege checks, generic RLS structural checks, and real-PostgreSQL
 // PREPARE/EXPLAIN verification.
 package sqlcheck
 
@@ -15,6 +16,21 @@ import (
 	"github.com/0xJean/tabula"
 )
 
+// ViewsToDefinitions converts ViewDefinitions into Definitions so they can be
+// passed to RenderSnapshot, VerifyStatements, VerifySchema, or CollectPrivilegeNeeds.
+func ViewsToDefinitions(views []tabula.ViewDefinition) []tabula.Definition {
+	out := make([]tabula.Definition, len(views))
+	for i, v := range views {
+		out[i] = tabula.Definition{
+			Name:       v.Name,
+			Columns:    slices.Clone(v.Columns),
+			Statements: maps.Clone(v.Statements),
+			Privileges: slices.Clone(v.Privileges),
+		}
+	}
+	return out
+}
+
 // RenderSnapshot formats every statement across defs deterministically (sorted
 // by table name, then statement key), prefixed by headerLines (each written as
 // a "-- " comment line).
@@ -26,6 +42,9 @@ func RenderSnapshot(defs []tabula.Definition, headerLines ...string) string {
 		b.WriteString("-- " + line + "\n")
 	}
 	for _, d := range sorted {
+		if len(d.Statements) == 0 {
+			continue
+		}
 		b.WriteString("\n-- " + d.Name + "\n")
 		keys := make([]string, 0, len(d.Statements))
 		for key := range d.Statements {
@@ -37,6 +56,15 @@ func RenderSnapshot(defs []tabula.Definition, headerLines ...string) string {
 		}
 	}
 	return b.String()
+}
+
+// RenderAllSnapshot renders both table Definitions and ViewDefinitions into one
+// deterministic SQL snapshot.
+func RenderAllSnapshot(tables []tabula.Definition, views []tabula.ViewDefinition, headerLines ...string) string {
+	combined := make([]tabula.Definition, 0, len(tables)+len(views))
+	combined = append(combined, tables...)
+	combined = append(combined, ViewsToDefinitions(views)...)
+	return RenderSnapshot(combined, headerLines...)
 }
 
 // FirstDifference returns up to 40 diff lines showing the first mismatches
@@ -59,7 +87,8 @@ func FirstDifference(want, got string) string {
 	return strings.Join(out, "\n")
 }
 
-// ColumnInfo is one PostgreSQL column as read from information_schema.columns.
+// ColumnInfo is one PostgreSQL column as read from information_schema.columns
+// or pg_catalog.pg_attribute (for materialized views).
 type ColumnInfo struct {
 	DataType string
 	Nullable bool
@@ -95,7 +124,7 @@ func DefaultTypeFamilies() map[string][]string {
 }
 
 // CheckSchemaColumns compares one descriptor Definition against the installed
-// PostgreSQL columns for its table and returns human-readable mismatch lines.
+// PostgreSQL columns for its table or view and returns human-readable mismatch lines.
 func CheckSchemaColumns(def tabula.Definition, installed map[string]ColumnInfo, families map[string][]string) []string {
 	if len(installed) == 0 {
 		return []string{def.Name + ": table not installed"}
@@ -118,8 +147,9 @@ func CheckSchemaColumns(def tabula.Definition, installed map[string]ColumnInfo, 
 	return failures
 }
 
-// VerifySchema inspects information_schema.columns on db for every Definition
-// in defs and returns all column mismatches.
+// VerifySchema inspects PostgreSQL columns on db for every Definition in defs
+// (supporting tables, partitioned tables, regular views, and materialized views)
+// and returns all column mismatches.
 func VerifySchema(ctx context.Context, db *sql.DB, defs []tabula.Definition, families map[string][]string) ([]string, error) {
 	var failures []string
 	for _, d := range defs {
@@ -128,67 +158,131 @@ func VerifySchema(ctx context.Context, db *sql.DB, defs []tabula.Definition, fam
 			failures = append(failures, d.Name+": table name is not schema-qualified")
 			continue
 		}
-		rows, err := db.QueryContext(ctx,
-			`SELECT column_name, data_type, is_nullable = 'YES' FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2`,
-			schema, table)
+		installed, err := loadInstalledColumns(ctx, db, schema, table)
 		if err != nil {
 			return nil, fmt.Errorf("query schema for %s: %w", d.Name, err)
-		}
-		installed := map[string]ColumnInfo{}
-		for rows.Next() {
-			var name string
-			var info ColumnInfo
-			if err := rows.Scan(&name, &info.DataType, &info.Nullable); err != nil {
-				_ = rows.Close()
-				return nil, err
-			}
-			installed[name] = info
-		}
-		if err := rows.Err(); err != nil {
-			_ = rows.Close()
-			return nil, err
-		}
-		if err := rows.Close(); err != nil {
-			return nil, err
 		}
 		failures = append(failures, CheckSchemaColumns(d, installed, families)...)
 	}
 	return failures, nil
 }
 
-// PrivilegeNeeds aggregates column and sequence privileges required across a
-// set of descriptor Definitions.
+// VerifyViewSchema verifies column alignment for views (including PostgreSQL
+// regular views and materialized views) against db.
+func VerifyViewSchema(ctx context.Context, db *sql.DB, views []tabula.ViewDefinition, families map[string][]string) ([]string, error) {
+	return VerifySchema(ctx, db, ViewsToDefinitions(views), families)
+}
+
+func loadInstalledColumns(ctx context.Context, db *sql.DB, schema, relation string) (map[string]ColumnInfo, error) {
+	rows, err := db.QueryContext(ctx,
+		`SELECT column_name, data_type, is_nullable = 'YES' FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2`,
+		schema, relation)
+	if err != nil {
+		return nil, err
+	}
+	installed := map[string]ColumnInfo{}
+	for rows.Next() {
+		var name string
+		var info ColumnInfo
+		if err := rows.Scan(&name, &info.DataType, &info.Nullable); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		installed[name] = info
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if len(installed) > 0 {
+		return installed, nil
+	}
+
+	// Fallback to pg_attribute for materialized views (relkind = 'm'), which
+	// PostgreSQL omits from information_schema.columns.
+	mRows, err := db.QueryContext(ctx, `
+		SELECT a.attname,
+		       CASE
+		           WHEN t.typelem <> 0 AND t.typlen = -1 THEN 'ARRAY'
+		           ELSE format_type(a.atttypid, NULL)
+		       END,
+		       NOT a.attnotnull
+		FROM pg_attribute a
+		JOIN pg_class c ON c.oid = a.attrelid
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		JOIN pg_type t ON t.oid = a.atttypid
+		WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind = 'm'
+		  AND a.attnum > 0 AND NOT a.attisdropped`, schema, relation)
+	if err != nil {
+		return nil, err
+	}
+	for mRows.Next() {
+		var name string
+		var info ColumnInfo
+		if err := mRows.Scan(&name, &info.DataType, &info.Nullable); err != nil {
+			_ = mRows.Close()
+			return nil, err
+		}
+		installed[name] = info
+	}
+	if err := mRows.Err(); err != nil {
+		_ = mRows.Close()
+		return nil, err
+	}
+	return installed, mRows.Close()
+}
+
+// PrivilegeNeeds aggregates column, table-DELETE, sequence, and function EXECUTE
+// privileges required across a set of descriptor Definitions.
 type PrivilegeNeeds struct {
-	Columns   map[string]map[string]map[string]bool
-	Sequences [][2]string
+	Columns     map[string]map[string]map[string]bool
+	TableDelete map[string]bool
+	Sequences   [][2]string
+	Functions   []string
 }
 
 // CollectPrivilegeNeeds merges the Privileges declared on defs and also
 // reports any definition names that declared zero privileges.
 func CollectPrivilegeNeeds(defs []tabula.Definition) (PrivilegeNeeds, []string) {
-	n := PrivilegeNeeds{Columns: map[string]map[string]map[string]bool{}}
+	n := PrivilegeNeeds{
+		Columns:     map[string]map[string]map[string]bool{},
+		TableDelete: map[string]bool{},
+	}
 	var empty []string
+	seenFunc := map[string]bool{}
 	for _, d := range defs {
 		if len(d.Privileges) == 0 {
 			empty = append(empty, d.Name)
 			continue
 		}
 		for _, p := range d.Privileges {
-			if p.Privilege == "USAGE" {
+			switch p.Privilege {
+			case "USAGE":
 				n.Sequences = append(n.Sequences, [2]string{p.Table, p.Sequence})
-				continue
-			}
-			if n.Columns[p.Table] == nil {
-				n.Columns[p.Table] = map[string]map[string]bool{}
-			}
-			if n.Columns[p.Table][p.Privilege] == nil {
-				n.Columns[p.Table][p.Privilege] = map[string]bool{}
-			}
-			for _, col := range p.Columns {
-				n.Columns[p.Table][p.Privilege][col] = true
+			case "DELETE":
+				n.TableDelete[p.Table] = true
+			case "EXECUTE":
+				if p.Function != "" && !seenFunc[p.Function] {
+					seenFunc[p.Function] = true
+					n.Functions = append(n.Functions, p.Function)
+				}
+			default:
+				if n.Columns[p.Table] == nil {
+					n.Columns[p.Table] = map[string]map[string]bool{}
+				}
+				if n.Columns[p.Table][p.Privilege] == nil {
+					n.Columns[p.Table][p.Privilege] = map[string]bool{}
+				}
+				for _, col := range p.Columns {
+					n.Columns[p.Table][p.Privilege][col] = true
+				}
 			}
 		}
 	}
+	slices.Sort(n.Functions)
 	return n, empty
 }
 
@@ -235,6 +329,17 @@ func CheckRolePrivileges(ctx context.Context, db *sql.DB, needs PrivilegeNeeds, 
 			return nil, nil, err
 		}
 	}
+	for table := range needs.TableDelete {
+		var held bool
+		if err := db.QueryRowContext(ctx,
+			`SELECT has_table_privilege($1::name, $2::regclass, 'DELETE')`,
+			role, table).Scan(&held); err != nil {
+			return nil, nil, fmt.Errorf("%s DELETE: %w", table, err)
+		}
+		if !held {
+			missing = append(missing, fmt.Sprintf("%s DELETE", table))
+		}
+	}
 	for _, seq := range needs.Sequences {
 		var held bool
 		if err := db.QueryRowContext(ctx,
@@ -244,6 +349,17 @@ func CheckRolePrivileges(ctx context.Context, db *sql.DB, needs PrivilegeNeeds, 
 		}
 		if !held {
 			missing = append(missing, fmt.Sprintf("%s USAGE(seq %s)", seq[0], seq[1]))
+		}
+	}
+	for _, fn := range needs.Functions {
+		var held bool
+		if err := db.QueryRowContext(ctx,
+			`SELECT has_function_privilege($1::name, $2::regprocedure, 'EXECUTE')`,
+			role, fn).Scan(&held); err != nil {
+			return nil, nil, fmt.Errorf("function %s EXECUTE: %w", fn, err)
+		}
+		if !held {
+			missing = append(missing, fmt.Sprintf("EXECUTE(%s)", fn))
 		}
 	}
 	slices.Sort(missing)
