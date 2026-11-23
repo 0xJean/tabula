@@ -1,19 +1,17 @@
 // Package pgxdriver integrates github.com/jackc/pgx/v5 with tabula:
-// PostgreSQL SQLSTATE helpers, array column converters, transaction-bound
+// PostgreSQL array column converters, transaction-bound
 // Sessions, and pgxpool Runners with pluggable scope/RLS policies and savepoints.
 package pgxdriver
 
 import (
 	"context"
 	"database/sql"
-	"database/sql/driver"
 	"errors"
 	"fmt"
 	"reflect"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/0xJean/tabula"
@@ -22,150 +20,18 @@ import (
 // Compile-time check that *Session[S] implements tabula.Session[S].
 var _ tabula.Session[struct{}] = (*Session[struct{}])(nil)
 
-// SQLState returns the five-character PostgreSQL SQLSTATE code carried by err
-// (matching *pgconn.PgError or any error implementing SQLState() string).
-func SQLState(err error) string {
-	if pg, ok := errors.AsType[*pgconn.PgError](err); ok {
-		return pg.SQLState()
-	}
-	if pg, ok := errors.AsType[interface {
-		error
-		SQLState() string
-	}](err); ok {
-		return pg.SQLState()
-	}
-	return ""
-}
-
-// IsUniqueViolation reports SQLSTATE 23505.
-func IsUniqueViolation(err error) bool { return SQLState(err) == "23505" }
-
-// IsForeignKeyViolation reports SQLSTATE 23503.
-func IsForeignKeyViolation(err error) bool { return SQLState(err) == "23503" }
-
-// IsCheckViolation reports SQLSTATE 23514.
-func IsCheckViolation(err error) bool { return SQLState(err) == "23514" }
-
-// IsNotNullViolation reports SQLSTATE 23502.
-func IsNotNullViolation(err error) bool { return SQLState(err) == "23502" }
-
-// IsSerializationFailure reports SQLSTATE 40001.
-func IsSerializationFailure(err error) bool { return SQLState(err) == "40001" }
-
-// IsDeadlock reports SQLSTATE 40P01.
-func IsDeadlock(err error) bool { return SQLState(err) == "40P01" }
-
-// IsQueryCanceled reports SQLSTATE 57014.
-func IsQueryCanceled(err error) bool { return SQLState(err) == "57014" }
-
-// IsNumericOutOfRange reports SQLSTATE 22003.
-func IsNumericOutOfRange(err error) bool { return SQLState(err) == "22003" }
-
-// IsRejectedValue reports SQLSTATE 22001, 22003, 23502, 23514, or 22P02.
-func IsRejectedValue(err error) bool {
-	switch SQLState(err) {
-	case "22001", "22003", "23502", "23514", "22P02":
-		return true
-	}
-	return false
-}
-
-// ArrayColumn resolves a db:"...,array" column's Go slice type ([]~string or
-// []~int64) for pgx/v5. Plain []string and []int64 pass through directly to
-// pgx's native array codec; named element types convert cleanly via driver.Valuer.
+// ArrayColumn selects pgx's native one-dimensional array codec. Its type map
+// handles both built-in and named Go slices and element types.
 func ArrayColumn(ft reflect.Type) (func(any) any, error) {
 	if ft.Kind() != reflect.Slice {
 		return nil, fmt.Errorf("array option requires a slice type, got %s", ft)
 	}
-	elem := ft.Elem()
-	switch elem.Kind() {
-	case reflect.String:
-		if ft == reflect.TypeFor[[]string]() {
-			return func(p any) any { return p }, nil
-		}
-		return func(p any) any { return &namedStringSlice{ptr: p, sliceType: ft, elemType: elem} }, nil
-	case reflect.Int64:
-		if ft == reflect.TypeFor[[]int64]() {
-			return func(p any) any { return p }, nil
-		}
-		return func(p any) any { return &namedInt64Slice{ptr: p, sliceType: ft, elemType: elem} }, nil
+	switch ft.Elem().Kind() {
+	case reflect.String, reflect.Int64, reflect.Int32, reflect.Float64, reflect.Bool:
+		return func(p any) any { return p }, nil
 	default:
-		return nil, fmt.Errorf("array option supports []~string or []~int64, got %s", ft)
+		return nil, fmt.Errorf("unsupported array element type %s", ft.Elem())
 	}
-}
-
-type namedStringSlice struct {
-	ptr       any
-	sliceType reflect.Type
-	elemType  reflect.Type
-}
-
-func (s *namedStringSlice) Scan(src any) error {
-	rv := reflect.ValueOf(s.ptr).Elem()
-	if src == nil {
-		rv.Set(reflect.Zero(s.sliceType))
-		return nil
-	}
-	switch v := src.(type) {
-	case []string:
-		out := reflect.MakeSlice(s.sliceType, len(v), len(v))
-		for i, item := range v {
-			out.Index(i).Set(reflect.ValueOf(item).Convert(s.elemType))
-		}
-		rv.Set(out)
-		return nil
-	default:
-		return fmt.Errorf("pgxdriver: cannot scan %T into %s", src, s.sliceType)
-	}
-}
-
-func (s *namedStringSlice) Value() (driver.Value, error) {
-	rv := reflect.ValueOf(s.ptr).Elem()
-	if rv.IsNil() {
-		return nil, nil
-	}
-	out := make([]string, rv.Len())
-	for i := range rv.Len() {
-		out[i] = rv.Index(i).String()
-	}
-	return out, nil
-}
-
-type namedInt64Slice struct {
-	ptr       any
-	sliceType reflect.Type
-	elemType  reflect.Type
-}
-
-func (s *namedInt64Slice) Scan(src any) error {
-	rv := reflect.ValueOf(s.ptr).Elem()
-	if src == nil {
-		rv.Set(reflect.Zero(s.sliceType))
-		return nil
-	}
-	switch v := src.(type) {
-	case []int64:
-		out := reflect.MakeSlice(s.sliceType, len(v), len(v))
-		for i, item := range v {
-			out.Index(i).Set(reflect.ValueOf(item).Convert(s.elemType))
-		}
-		rv.Set(out)
-		return nil
-	default:
-		return fmt.Errorf("pgxdriver: cannot scan %T into %s", src, s.sliceType)
-	}
-}
-
-func (s *namedInt64Slice) Value() (driver.Value, error) {
-	rv := reflect.ValueOf(s.ptr).Elem()
-	if rv.IsNil() {
-		return nil, nil
-	}
-	out := make([]int64, rv.Len())
-	for i := range rv.Len() {
-		out[i] = rv.Index(i).Int()
-	}
-	return out, nil
 }
 
 // ScopePolicy plugs application-specific isolation rules (tenant GUC variables,
@@ -203,10 +69,10 @@ func quoteIdent(ident string) string {
 
 // Session implements tabula.Session[S] over one pgx.Tx.
 type Session[S any] struct {
+	readQueries
 	tx       pgx.Tx
 	scope    S
 	platform bool
-	guard    func(string) error
 }
 
 // NewSession wraps an existing pgx.Tx with scope and policy.
@@ -219,10 +85,10 @@ func NewSession[S any](tx pgx.Tx, scope S, policy ScopePolicy[S]) *Session[S] {
 		platform = policy.IsPlatform(scope)
 	}
 	return &Session[S]{
-		tx:       tx,
-		scope:    scope,
-		platform: platform,
-		guard:    policy.GuardQuery,
+		tx:          tx,
+		scope:       scope,
+		platform:    platform,
+		readQueries: readQueries{db: tx, guard: policy.GuardQuery},
 	}
 }
 
@@ -235,7 +101,7 @@ func (s *Session[S]) Tenant() S { return s.scope }
 // Platform reports whether this session runs in platform/cross-tenant mode.
 func (s *Session[S]) Platform() bool { return s.platform }
 
-func (s *Session[S]) check(query string) error {
+func (s readQueries) check(query string) error {
 	if s.guard != nil {
 		return s.guard(query)
 	}
@@ -243,7 +109,7 @@ func (s *Session[S]) check(query string) error {
 }
 
 // Exec executes query and returns the affected row count.
-func (s *Session[S]) Exec(ctx context.Context, _ S, query string, args ...any) (int64, error) {
+func (s *Session[S]) Exec(ctx context.Context, query string, args ...any) (int64, error) {
 	if err := s.check(query); err != nil {
 		return 0, err
 	}
@@ -255,11 +121,11 @@ func (s *Session[S]) Exec(ctx context.Context, _ S, query string, args ...any) (
 }
 
 // Scan executes a single-row query and maps pgx.ErrNoRows to sql.ErrNoRows.
-func (s *Session[S]) Scan(ctx context.Context, _ S, query string, args []any, dest ...any) error {
+func (s readQueries) Scan(ctx context.Context, query string, args []any, dest ...any) error {
 	if err := s.check(query); err != nil {
 		return err
 	}
-	err := s.tx.QueryRow(ctx, query, args...).Scan(dest...)
+	err := s.db.QueryRow(ctx, query, args...).Scan(dest...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return sql.ErrNoRows
 	}
@@ -267,23 +133,16 @@ func (s *Session[S]) Scan(ctx context.Context, _ S, query string, args []any, de
 }
 
 // Returning executes a write with RETURNING and maps pgx.ErrNoRows to sql.ErrNoRows.
-func (s *Session[S]) Returning(ctx context.Context, _ S, query string, args []any, dest ...any) error {
-	if err := s.check(query); err != nil {
-		return err
-	}
-	err := s.tx.QueryRow(ctx, query, args...).Scan(dest...)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return sql.ErrNoRows
-	}
-	return err
+func (s *Session[S]) Returning(ctx context.Context, query string, args []any, dest ...any) error {
+	return s.Scan(ctx, query, args, dest...)
 }
 
 // Each streams all rows of query through decode.
-func (s *Session[S]) Each(ctx context.Context, _ S, query string, args []any, decode func(func(...any) error) error) error {
+func (s readQueries) Each(ctx context.Context, query string, args []any, decode func(func(...any) error) error) error {
 	if err := s.check(query); err != nil {
 		return err
 	}
-	rows, err := s.tx.Query(ctx, query, args...)
+	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {
 		return err
 	}
@@ -308,7 +167,7 @@ func (s *Session[S]) Savepoint(ctx context.Context, fn func(context.Context, *Se
 			_ = nested.Rollback(context.WithoutCancel(ctx))
 		}
 	}()
-	child := &Session[S]{tx: nested, scope: s.scope, platform: s.platform, guard: s.guard}
+	child := &Session[S]{tx: nested, scope: s.scope, platform: s.platform, readQueries: readQueries{db: nested, guard: s.guard}}
 	if err := fn(ctx, child); err != nil {
 		return err
 	}

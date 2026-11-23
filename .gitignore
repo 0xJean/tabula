@@ -2,4 +2,6 @@
 *.out
 coverage.*
 /bin/
+/go.work
+/go.work.sum
 .DS_Store

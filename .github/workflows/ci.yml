@@ -31,6 +31,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: Use the core and driver in this checkout
+        run: scripts/workspace.sh
       - name: gofmt
         run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
       - run: go vet -tags=integration ./...

@@ -25,17 +25,20 @@ func CopyFrom[T, K, S any](ctx context.Context, sess *Session[S], tbl *tabula.Ta
 	if sess == nil || tbl == nil {
 		return 0, errors.New("pgxdriver.CopyFrom: session and table are required")
 	}
-	def := tbl.Definition()
-	cols := insertColumnsFromDef(def)
-	if len(cols) == 0 {
-		return 0, fmt.Errorf("pgxdriver.CopyFrom %s: table has no insertable columns", def.Name)
+	bound := tbl.Bind(sess)
+	for i := range rows {
+		if err := bound.CheckWrite(&rows[i]); err != nil {
+			return 0, err
+		}
 	}
-	tableIdent := parseIdentifier(def.Name)
-	if err := sess.check("COPY " + def.Name); err != nil {
+	cols := tbl.InsertColumns()
+	if len(cols) == 0 {
+		return 0, fmt.Errorf("pgxdriver.CopyFrom %s: table has no insertable columns", tbl.Name())
+	}
+	tableIdent := parseIdentifier(tbl.Name())
+	if err := sess.check("COPY " + tbl.Name()); err != nil {
 		return 0, err
 	}
-
-	bound := tbl.Bind(sess)
 	src := &copySource[T, K, S]{
 		rows:  rows,
 		bound: bound,
@@ -46,15 +49,6 @@ func CopyFrom[T, K, S any](ctx context.Context, sess *Session[S], tbl *tabula.Ta
 		return n, err
 	}
 	return n, nil
-}
-
-func insertColumnsFromDef(def tabula.Definition) []string {
-	for _, p := range def.Privileges {
-		if p.Table == def.Name && p.Privilege == "INSERT" {
-			return p.Columns
-		}
-	}
-	return nil
 }
 
 func parseIdentifier(name string) pgx.Identifier {

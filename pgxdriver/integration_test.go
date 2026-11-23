@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"os"
 	"testing"
 	"time"
@@ -53,7 +54,7 @@ func TestPgxRunnerAndTabulaIntegration(t *testing.T) {
 		TenantID:    func(s tenant) any { return string(s) },
 		ArrayColumn: pgxdriver.ArrayColumn,
 	})
-	tbl := tabula.Define(reg, tabula.Table[item, int64, tenant]{Name: schema + ".items", Order: "id ASC"})
+	tbl := tabula.Define(reg, tabula.TableSpec[item, int64]{Name: schema + ".items", Order: "id ASC"})
 
 	runner := pgxdriver.NewRunner(pool, pgxdriver.ScopePolicy[tenant]{
 		SetupTx: func(ctx context.Context, tx pgx.Tx, scope tenant) error {
@@ -67,12 +68,12 @@ func TestPgxRunnerAndTabulaIntegration(t *testing.T) {
 		require.NoError(t, r.Insert(ctx, &row))
 		require.NotZero(t, row.ID)
 
-		got, err := r.Get(ctx, "t1", row.ID)
+		got, err := r.Get(ctx, row.ID)
 		require.NoError(t, err)
 		require.Equal(t, []string{"l1", "pow"}, got.Tags)
 
 		// Missing row maps pgx.ErrNoRows -> sql.ErrNoRows -> nil, nil.
-		missing, err := r.Get(ctx, "t1", 999999)
+		missing, err := r.Get(ctx, 999999)
 		require.NoError(t, err)
 		require.Nil(t, missing)
 
@@ -84,7 +85,7 @@ func TestPgxRunnerAndTabulaIntegration(t *testing.T) {
 		})
 		require.ErrorContains(t, spErr, "abort savepoint")
 
-		many, err := r.GetMany(ctx, "t1", []int64{row.ID})
+		many, err := r.GetMany(ctx, []int64{row.ID})
 		require.NoError(t, err)
 		require.Len(t, many, 1)
 
@@ -96,7 +97,7 @@ func TestPgxRunnerAndTabulaIntegration(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, int64(2), copied)
 
-		all, err := r.Find(ctx, "t1", nil, tabula.Listing{})
+		all, err := r.Find(ctx, nil, tabula.Listing{})
 		require.NoError(t, err)
 		require.Len(t, all, 3)
 		require.Equal(t, []string{"l1", "pos"}, all[1].Tags)
@@ -139,7 +140,7 @@ func BenchmarkPGX_CopyFrom1000(b *testing.B) {
 		Version int    `db:"version,version"`
 	}
 	reg := tabula.NewRegistry(tabula.RegistryConfig[struct{}]{})
-	tbl := tabula.Define(reg, tabula.Table[benchItem, int64, struct{}]{Name: schema + ".items"})
+	tbl := tabula.Define(reg, tabula.TableSpec[benchItem, int64]{Name: schema + ".items"})
 
 	batch := make([]benchItem, 1000)
 	for i := range batch {
@@ -161,4 +162,80 @@ func BenchmarkPGX_CopyFrom1000(b *testing.B) {
 		}
 		_ = tx.Rollback(ctx)
 	}
+}
+
+func TestDirectAndCopyTypes(t *testing.T) {
+	type scope string
+	type enabled bool
+	type row struct {
+		ID      int64        `db:"id,key"`
+		Tenant  scope        `db:"tenant,tenant"`
+		Counts  []int32      `db:"counts,array"`
+		Weights []float64    `db:"weights,array"`
+		Enabled []enabled    `db:"enabled,array"`
+		Address netip.Addr   `db:"address"`
+		Prefix  netip.Prefix `db:"prefix"`
+	}
+	ctx := t.Context()
+	dsn := os.Getenv("TABULA_TEST_DSN")
+	require.NotEmpty(t, dsn)
+	db, err := pgxpool.New(ctx, dsn)
+	require.NoError(t, err)
+	t.Cleanup(db.Close)
+	name := fmt.Sprintf("pgx_types_%d", time.Now().UnixNano())
+	_, err = db.Exec(ctx, "CREATE TABLE "+name+" (id bigint PRIMARY KEY, tenant text, counts integer[], weights float8[], enabled bool[], address inet, prefix cidr)")
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DROP TABLE "+name) })
+	reg := tabula.NewRegistry(tabula.RegistryConfig[scope]{ArrayColumn: pgxdriver.ArrayColumn})
+	tbl := tabula.Define(reg, tabula.TableSpec[row, int64]{Name: name})
+	input := row{ID: 1, Tenant: "one", Counts: []int32{}, Weights: []float64{0.125}, Enabled: []enabled{true, false}, Address: netip.MustParseAddr("2001:db8::5"), Prefix: netip.MustParsePrefix("10.0.0.0/8")}
+	policy := pgxdriver.ScopePolicy[scope]{}
+	require.NoError(t, pgxdriver.NewRunner(db, policy).Within(ctx, "one", func(ctx context.Context, s *pgxdriver.Session[scope]) error {
+		wrong := input
+		wrong.ID = 2
+		wrong.Tenant = "two"
+		_, err := pgxdriver.CopyFrom(ctx, s, tbl, []row{input, wrong})
+		require.ErrorIs(t, err, tabula.ErrScopeMismatch)
+		_, err = pgxdriver.CopyFrom(ctx, s, tbl, []row{input})
+		return err
+	}))
+	denied := errors.New("application read policy")
+	policy.IsPlatform = func(s scope) bool { return s == "platform" }
+	policy.GuardQuery = func(query string) error {
+		if query == "SELECT 42" {
+			return denied
+		}
+		return nil
+	}
+	ro, err := pgxdriver.Direct(ctx, dsn, policy)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ro.Close() })
+	s := ro.Session("one")
+	require.Equal(t, scope("one"), s.Tenant())
+	require.False(t, s.Platform())
+	require.True(t, ro.Session("platform").Platform())
+	got, err := tbl.Bind(s).Get(ctx, 1)
+	require.NoError(t, err)
+	require.Equal(t, &input, got)
+	other, err := tbl.Bind(ro.Session("two")).Get(ctx, 1)
+	require.NoError(t, err)
+	require.Nil(t, other)
+	require.ErrorIs(t, tbl.Bind(s).Insert(ctx, &input), tabula.ErrReadOnly)
+	var enabledOnServer bool
+	require.NoError(t, s.Scan(ctx, "SELECT current_setting('transaction_read_only')::bool", nil, &enabledOnServer))
+	require.True(t, enabledOnServer)
+	require.ErrorIs(t, s.Scan(ctx, "SELECT 42", nil), denied)
+	require.ErrorIs(t, s.Scan(ctx, "SELECT 1; SELECT 2", nil), tabula.ErrReadOnly)
+	_, err = s.Exec(ctx, "SELECT 1")
+	require.ErrorIs(t, err, tabula.ErrReadOnly)
+	require.ErrorIs(t, s.Returning(ctx, "SELECT 1", nil), tabula.ErrReadOnly)
+	lock := "SELECT id FROM " + name + " FOR UPDATE"
+	err = s.Scan(ctx, lock, nil, new(int64))
+	require.ErrorIs(t, err, tabula.ErrReadOnly)
+	require.Equal(t, "25006", tabula.SQLState(err))
+	err = s.Each(ctx, lock, nil, func(scan func(...any) error) error { return scan(new(int64)) })
+	require.ErrorIs(t, err, tabula.ErrReadOnly)
+	require.Equal(t, "25006", tabula.SQLState(err))
+	_, err = pgxdriver.Direct(ctx, dsn, pgxdriver.ScopePolicy[scope]{SetupTx: func(context.Context, pgx.Tx, scope) error { return nil }})
+	require.Error(t, err)
 }
