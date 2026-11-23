@@ -98,7 +98,7 @@ func TestRunnerScopeSavepointAndRetry(t *testing.T) {
 	require.Equal(t, "25006", tabula.SQLState(err))
 
 	// WithinIsolation works with Serializable + Retry helper.
-	require.NoError(t, stdsql.Retry(ctx, stdsql.RetryConfig{MaxAttempts: 3}, func(ctx context.Context) error {
+	require.NoError(t, tabula.Retry(ctx, tabula.RetryConfig{MaxAttempts: 3}, func(ctx context.Context) error {
 		return runner.WithinIsolation(ctx, "t-1", sql.LevelSerializable, func(ctx context.Context, s *stdsql.Session[tenant]) error {
 			rows, err := notes.Bind(s).Find(ctx, "t-1", nil, tabula.Listing{})
 			require.NoError(t, err)

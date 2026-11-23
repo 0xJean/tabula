@@ -1,11 +1,9 @@
-package stdsql
+package tabula
 
 import (
 	"context"
 	"errors"
 	"time"
-
-	"github.com/0xJean/tabula"
 )
 
 // RetryConfig controls explicit retries for transient PostgreSQL transaction
@@ -25,16 +23,16 @@ type RetryConfig struct {
 }
 
 // IsRetryable reports whether err is a PostgreSQL serialization failure
-// (SQLSTATE 40001 / tabula.ErrSerialization) or deadlock (SQLSTATE 40P01 /
-// tabula.ErrDeadlock).
+// (SQLSTATE 40001 / ErrSerialization) or deadlock (SQLSTATE 40P01 /
+// ErrDeadlock).
 func IsRetryable(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, tabula.ErrSerialization) || errors.Is(err, tabula.ErrDeadlock) {
+	if errors.Is(err, ErrSerialization) || errors.Is(err, ErrDeadlock) {
 		return true
 	}
-	switch tabula.SQLState(err) {
+	switch SQLState(err) {
 	case "40001", "40P01":
 		return true
 	}
@@ -82,7 +80,7 @@ func Retry(ctx context.Context, cfg RetryConfig, fn func(context.Context) error)
 		if sleepErr := sleepFn(ctx, wait); sleepErr != nil {
 			return sleepErr
 		}
-		delay = min(delay*2, maxDelay)
+		delay = wait + min(wait, maxDelay-wait)
 	}
 	return lastErr
 }
