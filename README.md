@@ -81,7 +81,7 @@ go test -fuzz=FuzzParseSnapshot -fuzztime=5s ./sqlcheck
 go get github.com/0xJean/tabula@v0.2.0
 ```
 
-For the development API and pgxdriver, run `scripts/workspace.sh` from the repository root. Go then uses this checkout for all three modules. [Local development and testing](CONTRIBUTING.md)
+For the development API and pgxdriver, run `scripts/workspace.sh` from the repository root. Go then uses this checkout for all three modules. See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/TESTING.md](docs/TESTING.md).
 
 ## What it will not do
 

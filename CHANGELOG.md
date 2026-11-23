@@ -14,46 +14,48 @@ v1.0 a minor version may contain breaking changes.
 
 ### Additions
 
-- Table and view iterators, shared and nonblocking row locks, chunked UpsertMany, SetExpr, and read-only Direct pools (with pool sizing and stats) in both drivers; `WithinReadOnly` sessions enforce `ErrReadOnly` consistently with `Direct`.
-- Both drivers support integer, float and boolean array columns alongside string and bigint arrays. Host addresses and network prefixes use net/netip.
-- Go 1.26/1.27 and PostgreSQL 14–17 CI, coverage, lint, fuzz and vulnerability checks, a multitenant demo, a cross-library benchmark module, community templates and release tooling.
-
-- **Conditional, upsert, delete & batch writes**: `Rows.UpdateWhere`, `Rows.SetWhere`,
-  `Table.DefineUpsert` / `TryDefineUpsert` + `Rows.Upsert` (forbids updating key, scope,
-  and `once` columns; registers SQL for `sqlcheck`), opt-in physical deletes
+- **Conditional, upsert, delete, expression & batch writes**: `Rows.UpdateWhere`,
+  `Rows.SetWhere`, `Table.DefineUpsert` / `TryDefineUpsert` + `Rows.Upsert` / `UpsertMany`
+  (forbids updating key, scope, and `once` columns; enforces scope on conflict; registers
+  SQL for `sqlcheck`), `Rows.SetExpr` (`Add`, `SetNow`), opt-in physical deletes
   (`TableSpec.AllowDelete` + `Rows.Delete` / `Rows.DeleteWhere`), `TableSpec.ReadOnly` mode
   (`ErrReadOnly`), `Rows.InsertReturning`, `Rows.SaveReturning`, and chunked multi-row
   `Rows.InsertMany`.
-- **Security & RLS tooling**: `GuardNoSessionEscape` (`ErrForbiddenStatement`) blocking
-  `SET ROLE`/`RESET ROLE`/`SESSION AUTHORIZATION`/`set_config` in adapter SQL;
-  `Table.RequiresFunction` and `View.Requires`/`RequiresFunction` for `DELETE` and
-  function `EXECUTE` privilege checks; `sqlcheck.CheckRLS` and `tabula check-rls` CLI.
-- **Views & materialized views in `sqlcheck`**: `ViewsToDefinitions`, `RenderAllSnapshot`,
-  `VerifyViewStatements`, `VerifyViewSchema` (supports PostgreSQL regular views and
-  materialized views via `pg_attribute` fallback).
-- **GoDoc examples & repo standards**: runnable `Example*` tests, `CONTRIBUTING.md`, and
-  `SECURITY.md`.
-- **Composite keys & configurable soft delete**: comparable struct `K` with tuple `IN`
-  for `GetMany` / `LockMany`; `*time.Time` (`IS NULL`), `bool` (`= FALSE`), and
-  string/integer status values via `TableSpec.SoftDelete`.
-- **Queries & views**: `Rows.ListKeyset` cursor pagination, `Listing.Count`
+- **Streaming, locking, queries & views**: `iter.Seq2` iterators (`Rows.Iter`,
+  `Rows.SelectIter`, `ViewRows.Iter`), `LockMode` (`LockUpdate`, `LockSkipLocked`,
+  `LockNoWait`, `LockShare`), `Rows.ListKeyset` cursor pagination, `Listing.Count`
   (`CountExact`, `CountNone`, `CountEstimate`), `Filter.AndIf` / `In` / `Range`, and
   `View` nested struct prefixes with `View.SelectAs`.
+- **Schema shapes & codecs**: composite keys (comparable struct `K` with tuple `IN` for
+  `GetMany` / `LockMany`); configurable soft delete (`*time.Time`, `bool`, or status value
+  via `TableSpec.SoftDelete`); built-in `net/netip.Addr` and `netip.Prefix` codecs;
+  `int32`, `float64`, and `bool` array codecs alongside `string` and `int64` in both drivers.
 - **Drivers, sessions & transactions**:
   - `stdsql` (stdlib only): `Runner`, `Session`, `ScopePolicy` (RLS `SetLocalConfig` /
-    `SetLocalRole` + `GuardQuery`), `Savepoint` and read-only `Direct` pools.
+    `SetLocalRole` + `GuardQuery`), `Savepoint`, read-only `Direct` pools (with pool sizing
+    and `Stats()`), and consistent `ErrReadOnly` enforcement on `WithinReadOnly`.
   - `pgxdriver` (separate Go module): `pgx/v5` pool `Runner`, `pgx.Tx` `Session`,
-    `ScopePolicy`, `Savepoint`, `CopyFrom` (`COPY` wire-protocol bulk insert) and array converters.
-- **Performance, fuzzing & benchmarks**: static struct-offset field accessors and reused
-  scan buffers on hot paths; fuzz targets for tag parsing, `Filter`, `OrderSpec`, and
-  `sqlcheck.ParseSnapshot`; microbenchmarks and real-PostgreSQL benchmarks.
+    `ScopePolicy`, `Savepoint`, `Direct` pools (`DirectOption`, `Stat()`), `CopyFrom`
+    (`COPY` wire-protocol bulk insert), and native array converters.
+- **Security & RLS tooling**: `GuardNoSessionEscape` (`ErrForbiddenStatement`) and
+  `GuardReadOnly` (with PostgreSQL comment, dollar-quote, and `E'...'` escape-string
+  handling); `Table.RequiresFunction` and `View.Requires` / `RequiresFunction` for `DELETE`
+  and function `EXECUTE` privilege checks; `sqlcheck.CheckRLS` and `tabula check-rls` CLI.
+- **Views & materialized views in `sqlcheck`**: `ViewsToDefinitions`, `RenderAllSnapshot`,
+  `VerifyViewStatements`, `VerifyViewSchema` (supports PostgreSQL regular views and
+  materialized views via `pg_attribute` fallback), `sqlcheck.ParseSnapshot`, and `cmd/tabula`
+  CLI (`tabula check` & `tabula check-rls`).
 - **Errors & observability**: `SQLState`, `ClassifyError`, `ErrorClass`, sentinels
   (`ErrUnique`, `ErrForeignKey`, `ErrCheck`, `ErrNotNull`, `ErrSerialization`,
   `ErrDeadlock`, `ErrCanceled`), `ErrorPolicy.Sanitize`, opt-in `log/slog`
   (`LogConfig`, `LogLevelVar`, `Registry.SetLogLevel`, `ScopeLog`, `WithLogger`,
   `db:"...,secret"`, `Quiet()`, `Secret()`), and `Tracer` / `Metrics` hooks.
-- **Verification & docs**: `sqlcheck.ParseSnapshot`, `cmd/tabula` CLI
-  (`tabula check --dsn ... --snapshot ... [--role ...]`), and `docs/COOKBOOK.md`.
+- **Performance, quality gates & ecosystem**: static struct-offset field accessors and
+  reused scan buffers; 5 fuzz targets; microbenchmarks, real-PG benchmarks, and the
+  cross-library `benchmarks/` comparison module; runnable `examples/multitenant` RLS demo;
+  Go 1.26/1.27 × PostgreSQL 14–17 CI with `.golangci.yml`, `scripts/check.sh`, coverage
+  gates, `govulncheck`, release tooling (`scripts/release.sh`), `AGENTS.md`,
+  `docs/TESTING.md`, `docs/COOKBOOK.md`, `CONTRIBUTING.md`, and `SECURITY.md`.
 
 ## v0.2.0 — 2026-11-24
 

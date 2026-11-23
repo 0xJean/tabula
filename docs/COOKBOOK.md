@@ -170,7 +170,7 @@ go run ./cmd/tabula check-rls \
   --restrictive
 ```
 
-## Stream a worker batch
+## 10. Stream a worker batch
 
 ```go
 for job, err := range jobs.Bind(sess).Iter(ctx, nil, tabula.Listing{
@@ -184,7 +184,7 @@ for job, err := range jobs.Bind(sess).Iter(ctx, nil, tabula.Listing{
 
 Each iteration executes the query in the bound session. A break releases the cursor. Finish the range or break before issuing another statement on the same transaction. PostgreSQL retains row locks until the transaction ends. Streaming a locked table with `once` columns retains a snapshot per locked row. Unlocked exports decode one row at a time. For hand-written SQL over the table columns use `rows.SelectIter(ctx, query, args...)`. For a projection, use `view.Bind(sess).Iter(ctx, query, args...)`.
 
-## Batch upserts and atomic updates
+## 11. Batch upserts and atomic updates
 
 ```go
 changed, err := configs.Bind(sess).UpsertMany(ctx, upsertConfig, batch)
@@ -198,21 +198,23 @@ err = jobs.Bind(sess).SetExpr(ctx, jobID,
 
 `SetExpr` checks the key, session scope, live-row predicate and affected row count. `Add` takes a bound numeric value. `SetNow` uses the database transaction timestamp. Both operate on declared, mutable payload columns.
 
-## Single-statement reads on a pool
+## 12. Single-statement reads on a pool
 
 ```go
 pool, err := stdsql.Direct("postgres", readURL, stdsql.NoScopePolicy())
 if err != nil { return err }
+pool.SetMaxOpenConns(16)
+pool.SetMaxIdleConns(4)
 defer pool.Close()
 
 row, err := settings.Bind(pool.Session(struct{}{})).Get(ctx, key)
 ```
 
-Create the pool at startup and reuse it across requests. Both `stdsql.Direct` and `pgxdriver.Direct` set `default_transaction_read_only=on` when physical connections open. A Get or View.One uses one query round trip on a warm connection. A List with CountExact still issues a count and a page query, each with its own snapshot.
+Create the pool at startup and reuse it across requests. Both `stdsql.Direct` and `pgxdriver.Direct` set `default_transaction_read_only=on` when physical connections open. Tune pool limits via `stdsql.DirectPool`'s `SetMaxOpenConns`/`SetMaxIdleConns`/`SetConnMaxLifetime`/`SetConnMaxIdleTime` (and inspect `Stats()`), or pass `pgxdriver.DirectOption` callbacks to `pgxdriver.Direct` (and inspect `Stat()`); `pgxdriver.Direct` always re-enforces `default_transaction_read_only=on` after applying options. A `Get` or `View.One` uses one query round trip on a warm connection. A `List` with `CountExact` still issues a count and a page query, each with its own snapshot.
 
-Use a read-role connection URL and application-owned SQL. Both Direct adapters apply `tabula.GuardReadOnly` before the application's `GuardQuery`. It accepts one SELECT or WITH statement at a time. PostgreSQL enforces read-only access inside the query. Use `WithinReadOnly` for transaction-local roles, tenant GUCs or a shared transaction snapshot with an appropriate isolation level. Direct rejects a policy with `SetupTx`.
+Use a read-role connection URL and application-owned SQL. Both Direct adapters apply `tabula.GuardReadOnly` before the application's `GuardQuery`. It accepts one `SELECT` or `WITH` statement at a time. PostgreSQL enforces read-only access inside the query. Use `WithinReadOnly` for transaction-local roles, scope GUCs or a shared transaction snapshot with an appropriate isolation level (`WithinReadOnly` sessions enforce `tabula.ErrReadOnly` consistently with `Direct`). Direct rejects a policy with `SetupTx`.
 
-## PostgreSQL network addresses and arrays
+## 13. PostgreSQL network addresses and arrays
 
 Use `netip.Addr` for a host address and `netip.Prefix` for CIDR networks or inet values with a subnet mask. An SQL NULL maps to an invalid address or prefix, or to nil for pointer fields. Scanning a subnet into a host address returns an error so the prefix length is preserved.
 

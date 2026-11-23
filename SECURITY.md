@@ -21,6 +21,9 @@ Instead, report vulnerabilities privately via GitHub Security Advisories on
 - **Sensitive data is never logged by default**: `LogConfig.Values` defaults to
   `ValuesNever`. Columns tagged `db:"...,secret"` and statements registered with
   `tabula.Secret()` are redacted as `"[redacted]"` even when `ValuesAllowed` is enabled.
-- **Session-escape guard**: `tabula.GuardNoSessionEscape` blocks adapter SQL from
-  executing `SET ROLE`, `RESET ROLE`, `RESET ALL`, `SESSION AUTHORIZATION`, or
-  `set_config(...)`.
+- **Session-escape & read-only guards**: `tabula.GuardNoSessionEscape` blocks adapter SQL
+  from executing `SET ROLE`, `RESET ROLE`, `RESET ALL`, `SESSION AUTHORIZATION`, or
+  `set_config(...)` (skipping comments, dollar-quoted strings, `E'...'` escape strings, and
+  single-quoted literals). `tabula.GuardReadOnly` admits only a single `SELECT` or `WITH`
+  statement and combines with `default_transaction_read_only=on` in `stdsql.Direct` and
+  `pgxdriver.Direct` for defense-in-depth read-only pools.

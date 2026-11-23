@@ -34,7 +34,7 @@ reg := tabula.NewRegistry(tabula.RegistryConfig[Scope]{
 | `LogSlow` | Failed statements and statements slower than `SlowThreshold` |
 | `LogAll` | Every statement (debugging; not for production traffic) |
 
-- The level can be changed at run time through an `atomic`-backed `LogConfig.SetLevel`, so
+- The level can be changed at run time through an `atomic`-backed `LogLevelVar.Set` (passed via `LogConfig.LevelVar`) or `Registry.SetLogLevel`, so
   an operator can raise it temporarily without a restart.
 - `Sample` (0–1) applies to `LogAll` only; errors and slow statements are never sampled.
 - A per-statement override is available at registration: `Statement(key, sql,

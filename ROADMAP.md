@@ -15,32 +15,37 @@ Items keep the red lines in [docs/DESIGN.md](docs/DESIGN.md).
 
 ## v0.3 — in development
 
+- **Immutable descriptors & generic row scope**: `TableSpec` / `ViewSpec`, bound-scope
+  sessions (`Scope` / `Unscoped` / `db:"...,scope"`), driver-independent `tabula.Retry` and
+  SQLSTATE helpers.
 - **Single-table writes & table modes**: `UpdateWhere` / `SetWhere` (0 rows is not an
-  error), controlled upsert (`DefineUpsert` / `Upsert`; key, scope and `once` columns can
-  never be updated), opt-in physical deletes (`TableSpec.AllowDelete` + `Delete` / `DeleteWhere`),
-  `TableSpec.ReadOnly` mode, `InsertReturning` / `SaveReturning`, multi-row `InsertMany`
-  (chunked at PostgreSQL's 65,535 param limit).
-- **Schema shapes**: composite keys (struct `K`) with tuple `IN` for `GetMany` / `LockMany`;
-  configurable soft delete (`*time.Time`, `bool`, or status value via `TableSpec.SoftDelete`).
-- **Queries & projections**: keyset pagination (`ListKeyset`), count strategies
-  (`CountExact`, `CountNone`, `CountEstimate`), `Filter` (`AndIf`, `In`, `Range`, `??`),
-  `View` nested struct prefixes and `SelectAs`.
+  error), controlled upsert (`DefineUpsert` / `Upsert` / `UpsertMany`; key, scope and `once`
+  columns can never be updated), `SetExpr` (`Add`, `SetNow`), opt-in physical deletes
+  (`TableSpec.AllowDelete` + `Delete` / `DeleteWhere`), `TableSpec.ReadOnly` mode,
+  `InsertReturning` / `SaveReturning`, multi-row `InsertMany` (chunked at PostgreSQL's
+  65,535 param limit).
+- **Schema shapes & codecs**: composite keys (struct `K`) with tuple `IN` for `GetMany` /
+  `LockMany`; configurable soft delete (`*time.Time`, `bool`, or status value via
+  `TableSpec.SoftDelete`); built-in `net/netip` and `int32`/`float64`/`bool` array codecs.
+- **Queries, streaming & projections**: `iter.Seq2` streaming (`Iter`, `SelectIter`),
+  `LockMode` (`FOR UPDATE`, `SKIP LOCKED`, `NOWAIT`, `FOR SHARE`), keyset pagination
+  (`ListKeyset`), count strategies (`CountExact`, `CountNone`, `CountEstimate`), `Filter`
+  (`AndIf`, `In`, `Range`, `??`), `View` nested struct prefixes and `SelectAs`.
 - **Drivers, sessions & transactions**: `stdsql` (`*sql.DB` / `*sql.Tx` Runner,
   `ScopePolicy` RLS plug-in, `Savepoint`, read-only `Direct` pools) and separate
-  `pgxdriver` (`pgx/v5`) module including `CopyFrom` binary `COPY` bulk inserts.
+  `pgxdriver` (`pgx/v5`) module including `Direct` pools and `CopyFrom` binary `COPY`.
 - **Errors & observability**: 7 PostgreSQL error classes and sentinels, opt-in `log/slog`
   per [docs/LOGGING.md](docs/LOGGING.md) (`LogOff`/`LogErrors`/`LogSlow`/`LogAll`,
   atomic level switch, `secret` tag, `Quiet()`/`Secret()`), plus explicit `Tracer` and
   `Metrics` hooks on `RegistryConfig`.
-- **Verification, RLS, fuzzing, benchmarks & docs**: `sqlcheck.ParseSnapshot`,
-  `RenderAllSnapshot`, `VerifyViewStatements`, `VerifyViewSchema` (regular & materialized
-  views), `DELETE` & function `EXECUTE` privilege checks, `CheckRLS` + `cmd/tabula` CI CLI
-  (`tabula check` & `tabula check-rls`), `GuardNoSessionEscape`, static-offset field
-  accessors, fuzz targets, micro/real-PG benchmarks, GoDoc examples, `CONTRIBUTING.md`,
-  `SECURITY.md`, and [docs/COOKBOOK.md](docs/COOKBOOK.md).
-
-- Bound-scope execution, immutable table and view shapes, native iterators, locking modes, batch upserts, atomic assignments, driver-independent retry and network types.
-- See the [migration guide](docs/MIGRATION.md), [runnable example](examples/multitenant/README.md) and [comparison benchmarks](benchmarks/README.md).
+- **Verification, quality gates & docs**: `sqlcheck.ParseSnapshot`, `RenderAllSnapshot`,
+  `VerifyViewStatements`, `VerifyViewSchema` (regular & materialized views), `DELETE` &
+  function `EXECUTE` privilege checks, `CheckRLS` + `cmd/tabula` CLI (`tabula check` &
+  `tabula check-rls`), `GuardNoSessionEscape` & `GuardReadOnly`, `.golangci.yml`,
+  `scripts/check.sh`, `AGENTS.md`, [docs/TESTING.md](docs/TESTING.md),
+  [docs/MIGRATION.md](docs/MIGRATION.md), [docs/COOKBOOK.md](docs/COOKBOOK.md),
+  [examples/multitenant](examples/multitenant/README.md), and
+  [benchmarks](benchmarks/README.md).
 
 ## v1.0 — stability and ecosystem adapters
 

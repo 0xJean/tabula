@@ -20,23 +20,15 @@ must preserve Tabula's core boundaries:
 From the repository root, run `scripts/workspace.sh` once per checkout. It creates a Git-ignored `go.work` for the core, pgxdriver and benchmarks. The tagged core v0.2.0 requires Go 1.27. A version-specific workspace override lets Go 1.26 load the local core while the child manifests still name that tag.
 
 ```sh
-# Format and vet
-gofmt -l .
-go vet -tags=integration ./...
-(cd pgxdriver && go vet -tags=integration ./...)
+# One-command local gate (static + unit -race + 1s fuzzing)
+scripts/check.sh --unit
 
-# Unit tests
-go test -race -count=1 ./...
-(cd pgxdriver && go test -race -count=1 ./...)
-
-# Real PostgreSQL integration tests (use a disposable database)
+# Full gate including real PostgreSQL integration tests, coverage floor, and benchmark smoke
 export TABULA_TEST_DSN='postgres://tabula:tabula@localhost:5432/tabula?sslmode=disable'
-go test -race -count=1 -tags=integration ./...
-(cd pgxdriver && go test -race -count=1 -tags=integration ./...)
+scripts/check.sh --all
 ```
 
-Pull requests should include unit tests and, when touching SQL generation, schema checks,
-RLS checks, or driver adapters, real PostgreSQL integration tests.
+See [docs/TESTING.md](docs/TESTING.md) for the test tiers, isolation rules, coverage floors, and mandatory integration scenarios, and [.golangci.yml](.golangci.yml) for the repository lint rules. Pull requests should include unit tests and, when touching SQL generation, schema checks, RLS checks, or driver adapters, real PostgreSQL integration tests.
 
 ## Development API
 
