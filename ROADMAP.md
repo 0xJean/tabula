@@ -1,9 +1,9 @@
 # Roadmap
 
-Every release is validated on real adapters of the project it was extracted from before
-it is tagged. Items keep the red lines in [docs/DESIGN.md](docs/DESIGN.md).
+Every release is validated against real PostgreSQL (14–17) before it is tagged.
+Items keep the red lines in [docs/DESIGN.md](docs/DESIGN.md).
 
-## v0.2 — current
+## v0.2 — released
 
 - `Table[T, K, S]` / `Rows`: get, lock, insert, save, set, soft delete, count, list, find,
   exists; `GetMany`, `LockMany` (ordered by key), `LockBy`.
@@ -13,49 +13,35 @@ it is tagged. Items keep the red lines in [docs/DESIGN.md](docs/DESIGN.md).
 - `pqdriver`; `sqlcheck`: snapshots, schema columns, privilege derivation and role grants,
   `PrepareStatement` / `VerifyStatements` (PREPARE plus EXPLAIN EXECUTE on a real database).
 
-## v0.3 — single-table writes and errors
+## v0.3 — complete feature release (current)
 
-- Conditional update `UpdateWhere` / `SetWhere`: key plus extra condition, reports whether
-  a row matched; zero rows is not an error.
-- Controlled upsert: declared conflict and update columns; key, scope and `once` columns
-  can never be updated.
-- `InsertReturning` / `SaveReturning`: read database-generated columns back into the row.
-- `InsertMany` with multi-row VALUES.
-- Composite keys (struct `K`).
-- Configurable soft delete (timestamp, status value, boolean).
-- Error classification: unique, foreign key, check, not null, serialization failure,
-  deadlock, cancellation.
-- `sqlcheck` as a command-line tool for CI (`tabula check --dsn ...`).
-- Logging per [docs/LOGGING.md](docs/LOGGING.md): `log/slog` logger in `RegistryConfig`,
-  levels off / errors / slow / all with run-time switch, fixed record keys, values never
-  logged by default, `secret` column tag, `Quiet()` and `Secret()` statement options.
+- **Single-table writes**: `UpdateWhere` / `SetWhere` (0 rows is not an error),
+  controlled upsert (`DefineUpsert` / `Upsert`; key, scope and `once` columns can never
+  be updated), `InsertReturning` / `SaveReturning`, multi-row `InsertMany` (chunked at
+  PostgreSQL's 65,535 param limit).
+- **Schema shapes**: composite keys (struct `K`) with tuple `IN` for `GetMany` / `LockMany`;
+  configurable soft delete (`*time.Time`, `bool`, or status value via `Table.SoftDelete`).
+- **Queries & projections**: keyset pagination (`ListKeyset`), count strategies
+  (`CountExact`, `CountNone`, `CountEstimate`), `Filter` (`AndIf`, `In`, `Range`, `??`),
+  `View` nested struct prefixes and `SelectAs`.
+- **Drivers, sessions & transactions**: `stdsql` (`*sql.DB` / `*sql.Tx` Runner,
+  `ScopePolicy` RLS plug-in, `Savepoint`, serialization/deadlock `Retry`) and separate
+  `pgxdriver` (`pgx/v5`) module including `CopyFrom` binary `COPY` bulk inserts.
+- **Errors & observability**: 7 PostgreSQL error classes and sentinels, opt-in `log/slog`
+  per [docs/LOGGING.md](docs/LOGGING.md) (`LogOff`/`LogErrors`/`LogSlow`/`LogAll`,
+  atomic level switch, `secret` tag, `Quiet()`/`Secret()`), plus explicit `Tracer` and
+  `Metrics` hooks on `RegistryConfig`.
+- **Verification, fuzzing, benchmarks & docs**: `sqlcheck.ParseSnapshot`, `cmd/tabula`
+  CI CLI (`tabula check --dsn ... --snapshot ...`), static-offset field accessors, fuzz
+  targets (`FuzzParseColumnTag`, `FuzzFilterAnd`, `FuzzOrderSpecResolve`,
+  `FuzzParseSnapshot`), micro/real-PG benchmarks, and [docs/COOKBOOK.md](docs/COOKBOOK.md).
 
-## v0.4 — drivers, sessions and queries
+## v1.0 — stability and ecosystem adapters
 
-- Separate modules: `stdsql` (`*sql.DB` / `*sql.Tx` sessions), `pgxdriver` (`pgx/v5`).
-- Transaction helpers: read-only, isolation level, savepoints, explicit retry helper for
-  serialization failures and deadlocks.
-- Scope as a plug-in: predicate, session variables (`set_config`) and row-level security
-  helpers supplied by configuration.
-- Keyset pagination on `(sort column, key)`; count strategies (exact, none, estimate).
-- `Filter`: `IN`, ranges, optional conditions; `View` nested struct prefixes.
-
-## v0.5 — observability, performance, documentation
-
-- Tracer and metrics interfaces passed in explicitly (logging already in v0.3); statement keys as span names;
-  OpenTelemetry adapter as its own module.
-- Optional prepared-statement cache; `COPY` for large batch inserts.
-- Benchmarks against `database/sql`, sqlx, pgx and sqlc-generated code, published in the
-  README.
-- Godoc examples and a cookbook: single-table CRUD, join projection, conditional update,
-  batch locking, scope plug-in, migration-tool integration (goose, atlas, golang-migrate).
-
-## v1.0 — stable
-
-- API freeze and compatibility promise.
-- Test matrix: PostgreSQL 13–17, the two latest Go releases, `-race`, fuzzing of tag
-  parsing, `Filter` and `OrderSpec`, coverage threshold.
-- LICENSE, CONTRIBUTING, SECURITY, CHANGELOG, issue and PR templates, automated releases.
+- API freeze and semver compatibility promise.
+- Optional OpenTelemetry / Prometheus adapter modules over `Tracer` and `Metrics`.
+- Optional prepared-statement cache.
+- `CONTRIBUTING.md`, `SECURITY.md`, issue/PR templates, automated release workflow.
 
 ## Out of scope
 
