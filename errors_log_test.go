@@ -110,17 +110,17 @@ type errSession struct {
 	scanErr error
 }
 
-func (e *errSession) Exec(ctx context.Context, s customTenant, q string, args ...any) (int64, error) {
+func (e *errSession) Exec(ctx context.Context, q string, args ...any) (int64, error) {
 	if e.execErr != nil {
 		return 0, e.execErr
 	}
-	return e.fakeSession.Exec(ctx, s, q, args...)
+	return e.fakeSession.Exec(ctx, q, args...)
 }
-func (e *errSession) Scan(ctx context.Context, s customTenant, q string, args []any, dest ...any) error {
+func (e *errSession) Scan(ctx context.Context, q string, args []any, dest ...any) error {
 	if e.scanErr != nil {
 		return e.scanErr
 	}
-	return e.fakeSession.Scan(ctx, s, q, args, dest...)
+	return e.fakeSession.Scan(ctx, q, args, dest...)
 }
 
 func TestLoggingSpec(t *testing.T) {
@@ -154,7 +154,7 @@ func TestLoggingSpec(t *testing.T) {
 			Now:           nowFn,
 		},
 	})
-	tbl := Define(reg, Table[secretRow, int64, customTenant]{Name: "public.accounts"})
+	tbl := Define(reg, TableSpec[secretRow, int64]{Name: "public.accounts"})
 	quietStmt := tbl.Statement("heartbeat", "SELECT 1", Quiet())
 	secretStmt := tbl.Statement("verify_secret", "SELECT "+tbl.Cols()+" FROM public.accounts WHERE password_hash = $1", Secret())
 
@@ -208,13 +208,13 @@ func TestLoggingSpec(t *testing.T) {
 	// Quiet() suppresses LogSlow and LogAll on success, but still logs failures.
 	handler.reset()
 	var one int
-	require.NoError(t, rows.Scan(t.Context(), "t-9", quietStmt, nil, &one))
+	require.NoError(t, rows.Scan(t.Context(), quietStmt, nil, &one))
 	require.Empty(t, handler.snapshot())
 	levelVar.Set(LogAll)
-	require.NoError(t, rows.Scan(t.Context(), "t-9", quietStmt, nil, &one))
+	require.NoError(t, rows.Scan(t.Context(), quietStmt, nil, &one))
 	require.Empty(t, handler.snapshot())
 	sess.scanErr = errors.New("db down")
-	require.Error(t, rows.Scan(t.Context(), "t-9", quietStmt, nil, &one))
+	require.Error(t, rows.Scan(t.Context(), quietStmt, nil, &one))
 	require.Len(t, handler.snapshot(), 1)
 	require.Equal(t, "public.accounts.heartbeat", handler.snapshot()[0].attrs["tabula.key"])
 	sess.scanErr = nil
@@ -232,7 +232,7 @@ func TestLoggingSpec(t *testing.T) {
 			Now:    nowFn,
 		},
 	})
-	tbl2 := Define(regAllowed, Table[secretRow, int64, customTenant]{Name: "public.accounts"})
+	tbl2 := Define(regAllowed, TableSpec[secretRow, int64]{Name: "public.accounts"})
 	secretStmt2 := tbl2.Statement("verify_secret", secretStmt, Secret())
 	rows2 := tbl2.Bind(sess)
 
@@ -245,7 +245,7 @@ func TestLoggingSpec(t *testing.T) {
 	require.Equal(t, []string{"4", "t-9", "dave", "[redacted]"}, argsVal)
 
 	handler.reset()
-	_, err := rows2.Select(t.Context(), "t-9", secretStmt2, "MY_API_TOKEN")
+	_, err := rows2.Select(t.Context(), secretStmt2, "MY_API_TOKEN")
 	require.NoError(t, err)
 	recs = handler.snapshot()
 	require.Len(t, recs, 1)
@@ -263,7 +263,7 @@ func TestLoggingSpec(t *testing.T) {
 			Now:    nowFn,
 		},
 	})
-	tbl3 := Define(regRedacted, Table[secretRow, int64, customTenant]{Name: "public.accounts"})
+	tbl3 := Define(regRedacted, TableSpec[secretRow, int64]{Name: "public.accounts"})
 	require.NoError(t, tbl3.Bind(sess).Insert(t.Context(), &secretRow{ID: 5, Tenant: "t-9", Username: "eve", PasswordHash: "HIDDEN"}))
 	recs = handler.snapshot()
 	require.Len(t, recs, 1)
@@ -280,7 +280,7 @@ func TestLoggingSpec(t *testing.T) {
 			Now:    nowFn,
 		},
 	})
-	tbl4 := Define(regSample, Table[secretRow, int64, customTenant]{Name: "public.accounts"})
+	tbl4 := Define(regSample, TableSpec[secretRow, int64]{Name: "public.accounts"})
 	bound := tbl4.Bind(sess).WithLogger(slog.New(overrideHandler))
 	for i := range 10 {
 		require.NoError(t, bound.Insert(t.Context(), &secretRow{ID: int64(i + 1), Tenant: "t-9", Username: "u", PasswordHash: "p"}))

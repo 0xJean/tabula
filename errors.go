@@ -16,7 +16,8 @@ const (
 	ErrOnce               staticError = "insert-only column changed on update"
 	ErrNotDeleted         staticError = "soft delete needs the deleted column set"
 	ErrRowCount           staticError = "write did not confirm exactly one row"
-	ErrReadOnly           staticError = "write refused on read-only table"
+	ErrReadOnly           staticError = "operation requires a writable session and table"
+	ErrScopeMismatch      staticError = "row tenant differs from the bound session"
 	ErrForbiddenStatement staticError = "statement attempts to modify session role or configuration"
 
 	// PostgreSQL error-class sentinels returned by default error classification.

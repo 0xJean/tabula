@@ -12,7 +12,7 @@ func TestUpdateWhereAndSetWhere(t *testing.T) {
 	reg := NewRegistry(RegistryConfig[customTenant]{
 		TenantID: func(s customTenant) any { return string(s) },
 	})
-	tbl := Define(reg, Table[customRow, int64, customTenant]{Name: "public.custom_items", Order: "id ASC"})
+	tbl := Define(reg, TableSpec[customRow, int64]{Name: "public.custom_items", Order: "id ASC"})
 	sess := &fakeSession{
 		tenant:   "t-1",
 		execRows: 1,
@@ -28,7 +28,7 @@ func TestUpdateWhereAndSetWhere(t *testing.T) {
 	rows := tbl.Bind(sess)
 
 	// Lock remembers once column; UpdateWhere enforces it.
-	locked, err := rows.Lock(t.Context(), "t-1", 10)
+	locked, err := rows.Lock(t.Context(), 10)
 	require.NoError(t, err)
 	locked.CreatedBy = "mallory"
 	locked.Version = 2
@@ -72,7 +72,7 @@ func TestControlledUpsert(t *testing.T) {
 	reg := NewRegistry(RegistryConfig[customTenant]{
 		TenantID: func(s customTenant) any { return string(s) },
 	})
-	tbl := Define(reg, Table[customRow, int64, customTenant]{Name: "public.custom_items"})
+	tbl := Define(reg, TableSpec[customRow, int64]{Name: "public.custom_items"})
 
 	// Validation rejects key, tenant, once, empty conflict, unknown cols, Where on DO NOTHING.
 	for _, tc := range []struct {
@@ -148,7 +148,7 @@ func TestInsertReturningSaveReturningAndInsertMany(t *testing.T) {
 	reg := NewRegistry(RegistryConfig[customTenant]{
 		TenantID: func(s customTenant) any { return string(s) },
 	})
-	tbl := Define(reg, Table[customRow, int64, customTenant]{Name: "public.custom_items"})
+	tbl := Define(reg, TableSpec[customRow, int64]{Name: "public.custom_items"})
 	sess := &fakeSession{
 		tenant:   "t-1",
 		execRows: 2,
@@ -184,7 +184,7 @@ func TestInsertReturningSaveReturningAndInsertMany(t *testing.T) {
 		{Tenant: "t-1", Code: "a", CreatedBy: "u", Version: 1},
 		{Tenant: "t-2", Code: "b", CreatedBy: "u", Version: 1},
 	})
-	require.ErrorIs(t, err, ErrRowCount)
+	require.ErrorIs(t, err, ErrScopeMismatch)
 
 	// InsertMany generates multi-row VALUES with sequential placeholders.
 	require.NoError(t, rows.InsertMany(t.Context(), []customRow{
@@ -215,7 +215,7 @@ func TestCompositeKeyTable(t *testing.T) {
 	reg := NewRegistry(RegistryConfig[customTenant]{
 		TenantID: func(s customTenant) any { return string(s) },
 	})
-	tbl := Define(reg, Table[pairRow, pairKey, customTenant]{
+	tbl := Define(reg, TableSpec[pairRow, pairKey]{
 		Name:  "public.chain_assets",
 		Order: "chain_code ASC, symbol ASC",
 	})
@@ -241,7 +241,7 @@ func TestCompositeKeyTable(t *testing.T) {
 	rows := tbl.Bind(sess)
 
 	// Lock + once tracking works with composite struct key.
-	locked, err := rows.Lock(t.Context(), "t-1", pairKey{Chain: "ETH", Symbol: "USDC"})
+	locked, err := rows.Lock(t.Context(), pairKey{Chain: "ETH", Symbol: "USDC"})
 	require.NoError(t, err)
 	require.Equal(t, "ETH", locked.Chain)
 	require.Equal(t, "USDC", locked.Symbol)
@@ -249,14 +249,14 @@ func TestCompositeKeyTable(t *testing.T) {
 	require.ErrorIs(t, rows.Save(t.Context(), *locked), ErrOnce)
 
 	// GetMany & LockMany use PostgreSQL tuple IN and composite ORDER BY ASC.
-	_, err = rows.GetMany(t.Context(), "t-1", []pairKey{
+	_, err = rows.GetMany(t.Context(), []pairKey{
 		{Chain: "ETH", Symbol: "USDC"},
 		{Chain: "SOL", Symbol: "USDT"},
 	})
 	require.NoError(t, err)
 	require.Contains(t, sess.lastQuery, "AND ((chain_code, symbol) IN (($2, $3), ($4, $5))) ORDER BY chain_code ASC, symbol ASC")
 
-	_, err = rows.LockMany(t.Context(), "t-1", []pairKey{{Chain: "ETH", Symbol: "USDC"}})
+	_, err = rows.LockMany(t.Context(), []pairKey{{Chain: "ETH", Symbol: "USDC"}})
 	require.NoError(t, err)
 	require.Contains(t, sess.lastQuery, "ORDER BY chain_code ASC, symbol ASC FOR UPDATE")
 
@@ -264,7 +264,7 @@ func TestCompositeKeyTable(t *testing.T) {
 	type badKey struct {
 		Chain string `db:"chain_code"`
 	}
-	_, err = TryDefine(reg, Table[pairRow, badKey, customTenant]{Name: "public.bad"})
+	_, err = TryDefine(reg, TableSpec[pairRow, badKey]{Name: "public.bad"})
 	require.ErrorContains(t, err, "missing key column symbol")
 }
 
@@ -277,7 +277,7 @@ func TestConfigurableSoftDelete(t *testing.T) {
 			Name      string `db:"name"`
 			IsDeleted bool   `db:"is_deleted,deleted"`
 		}
-		tbl := Define(reg, Table[boolRow, int64, struct{}]{Name: "public.bool_items"})
+		tbl := Define(reg, TableSpec[boolRow, int64]{Name: "public.bool_items"})
 		require.Equal(t, "SELECT id, name, is_deleted FROM public.bool_items WHERE id = $1 AND is_deleted = FALSE", tbl.Definition().Statements["get"])
 		require.Equal(t, "INSERT INTO public.bool_items (id, name, is_deleted) VALUES ($1, $2, $3)", tbl.Definition().Statements["insert"])
 
@@ -292,7 +292,7 @@ func TestConfigurableSoftDelete(t *testing.T) {
 			ID     int64  `db:"id,key"`
 			Status string `db:"status,deleted"`
 		}
-		tbl := Define(reg, Table[statusRow, int64, struct{}]{
+		tbl := Define(reg, TableSpec[statusRow, int64]{
 			Name:       "public.status_items",
 			SoftDelete: &SoftDelete{DeletedValue: "deleted"},
 		})
@@ -309,7 +309,7 @@ func TestConfigurableSoftDelete(t *testing.T) {
 			ID    int64 `db:"id,key"`
 			State int   `db:"state,deleted"`
 		}
-		tbl := Define(reg, Table[intStatusRow, int64, struct{}]{
+		tbl := Define(reg, TableSpec[intStatusRow, int64]{
 			Name:       "public.int_status_items",
 			SoftDelete: &SoftDelete{AliveValue: 1, DeletedValue: 9},
 		})
@@ -326,10 +326,10 @@ func TestConfigurableSoftDelete(t *testing.T) {
 			ID     int64  `db:"id,key"`
 			Status string `db:"status,deleted"`
 		}
-		_, err := TryDefine(reg, Table[statusRow, int64, struct{}]{Name: "public.s"})
+		_, err := TryDefine(reg, TableSpec[statusRow, int64]{Name: "public.s"})
 		require.ErrorContains(t, err, "requires SoftDelete.DeletedValue")
 
-		_, err = TryDefine(reg, Table[statusRow, int64, struct{}]{
+		_, err = TryDefine(reg, TableSpec[statusRow, int64]{
 			Name:       "public.s",
 			SoftDelete: &SoftDelete{AliveValue: "x", DeletedValue: "x"},
 		})
@@ -344,19 +344,19 @@ type noopSession struct {
 
 func (n *noopSession) Tenant() struct{} { return struct{}{} }
 func (n *noopSession) Platform() bool   { return false }
-func (n *noopSession) Exec(_ context.Context, _ struct{}, q string, _ ...any) (int64, error) {
+func (n *noopSession) Exec(_ context.Context, q string, _ ...any) (int64, error) {
 	n.lastSQL = q
 	return n.execRows, nil
 }
-func (n *noopSession) Scan(_ context.Context, _ struct{}, q string, _ []any, _ ...any) error {
+func (n *noopSession) Scan(_ context.Context, q string, _ []any, _ ...any) error {
 	n.lastSQL = q
 	return nil
 }
-func (n *noopSession) Returning(_ context.Context, _ struct{}, q string, _ []any, _ ...any) error {
+func (n *noopSession) Returning(_ context.Context, q string, _ []any, _ ...any) error {
 	n.lastSQL = q
 	return nil
 }
-func (n *noopSession) Each(_ context.Context, _ struct{}, q string, _ []any, _ func(func(...any) error) error) error {
+func (n *noopSession) Each(_ context.Context, q string, _ []any, _ func(func(...any) error) error) error {
 	n.lastSQL = q
 	return nil
 }

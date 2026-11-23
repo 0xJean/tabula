@@ -42,7 +42,7 @@ func TestReadOnlyAndPhysicalDelete(t *testing.T) {
 	})
 
 	// ReadOnly + AllowDelete cannot combine.
-	_, err := TryDefine(reg, Table[customRow, int64, customTenant]{
+	_, err := TryDefine(reg, TableSpec[customRow, int64]{
 		Name:        "public.bad",
 		ReadOnly:    true,
 		AllowDelete: true,
@@ -50,7 +50,7 @@ func TestReadOnlyAndPhysicalDelete(t *testing.T) {
 	require.ErrorContains(t, err, "ReadOnly cannot combine with AllowDelete")
 
 	// ReadOnly table derives only read statements & SELECT privilege, refuses writes.
-	ro := Define(reg, Table[customRow, int64, customTenant]{
+	ro := Define(reg, TableSpec[customRow, int64]{
 		Name:     "public.readonly_items",
 		ReadOnly: true,
 	})
@@ -79,12 +79,12 @@ func TestReadOnlyAndPhysicalDelete(t *testing.T) {
 	require.ErrorIs(t, err, ErrReadOnly)
 	_, err = roRows.SetWhere(t.Context(), row, []string{"code"}, "true")
 	require.ErrorIs(t, err, ErrReadOnly)
-	require.ErrorIs(t, roRows.Delete(t.Context(), "t-1", 1), ErrReadOnly)
-	_, err = roRows.DeleteWhere(t.Context(), "t-1", "id = ?", 1)
+	require.ErrorIs(t, roRows.Delete(t.Context(), 1), ErrReadOnly)
+	_, err = roRows.DeleteWhere(t.Context(), "id = ?", 1)
 	require.ErrorIs(t, err, ErrReadOnly)
 
 	// AllowDelete derives delete statements & DELETE privilege.
-	del := Define(reg, Table[customRow, int64, customTenant]{
+	del := Define(reg, TableSpec[customRow, int64]{
 		Name:        "public.ephemeral_items",
 		AllowDelete: true,
 	})
@@ -96,23 +96,23 @@ func TestReadOnlyAndPhysicalDelete(t *testing.T) {
 	require.Contains(t, delDef.Privileges, DefinedPrivilege{Privilege: "EXECUTE", Function: "public.cleanup_item(bigint)"})
 
 	delRows := del.Bind(sess)
-	require.NoError(t, delRows.Delete(t.Context(), "t-1", 42))
+	require.NoError(t, delRows.Delete(t.Context(), 42))
 	require.Equal(t, delDef.Statements["delete"], sess.lastQuery)
 	require.Len(t, sess.lastArgs, 2)
 	require.Equal(t, int64(42), *sess.lastArgs[0].(*int64))
 	require.Equal(t, "t-1", sess.lastArgs[1])
 
 	sess.execRows = 0
-	require.ErrorIs(t, delRows.Delete(t.Context(), "t-1", 42), ErrConflict)
+	require.ErrorIs(t, delRows.Delete(t.Context(), 42), ErrConflict)
 
 	sess.execRows = 3
-	n, err := delRows.DeleteWhere(t.Context(), "t-1", "code = ?", "expired")
+	n, err := delRows.DeleteWhere(t.Context(), "code = ?", "expired")
 	require.NoError(t, err)
 	require.Equal(t, int64(3), n)
 	require.Equal(t, "DELETE FROM public.ephemeral_items WHERE true AND (tenant_id = $1) AND (deleted_at IS NULL) AND (code = $2)", sess.lastQuery)
 
 	// Guard against accidental full-table delete or table without AllowDelete.
-	require.Panics(t, func() { _, _ = delRows.DeleteWhere(t.Context(), "t-1", "   ") })
-	noDel := Define(reg, Table[customRow, int64, customTenant]{Name: "public.no_delete_items"})
-	require.Panics(t, func() { _ = noDel.Bind(sess).Delete(t.Context(), "t-1", 1) })
+	require.Panics(t, func() { _, _ = delRows.DeleteWhere(t.Context(), "   ") })
+	noDel := Define(reg, TableSpec[customRow, int64]{Name: "public.no_delete_items"})
+	require.Panics(t, func() { _ = noDel.Bind(sess).Delete(t.Context(), 1) })
 }

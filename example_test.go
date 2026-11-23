@@ -17,7 +17,7 @@ func ExampleDefine() {
 	}
 
 	reg := tabula.NewRegistry(tabula.RegistryConfig[struct{}]{})
-	tbl := tabula.Define(reg, tabula.Table[item, int64, struct{}]{
+	tbl := tabula.Define(reg, tabula.TableSpec[item, int64]{
 		Name:  "public.items",
 		Order: "id ASC",
 	})
@@ -36,7 +36,7 @@ func ExampleTable_DefineUpsert() {
 	}
 
 	reg := tabula.NewRegistry(tabula.RegistryConfig[struct{}]{})
-	tbl := tabula.Define(reg, tabula.Table[setting, string, struct{}]{Name: "public.settings"})
+	tbl := tabula.Define(reg, tabula.TableSpec[setting, string]{Name: "public.settings"})
 	plan := tbl.DefineUpsert("upsert_setting", tabula.UpsertSpec{
 		Conflict: []string{"setting_key"},
 		Update:   []string{"setting_value"},
@@ -61,7 +61,7 @@ func ExampleDefineView() {
 	}
 
 	reg := tabula.NewRegistry(tabula.RegistryConfig[struct{}]{})
-	view := tabula.DefineView(reg, tabula.View[summary, struct{}]{Name: "public.order_summary"})
+	view := tabula.DefineView(reg, tabula.ViewSpec[summary]{Name: "public.order_summary"})
 
 	fmt.Println(view.SelectAs(map[string]string{"o_": "o", "c_": "c"}))
 	// Output:

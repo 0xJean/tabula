@@ -2,7 +2,7 @@ package tabula
 
 import (
 	"context"
-	"database/sql"
+
 	"errors"
 	"fmt"
 	"strings"
@@ -21,11 +21,12 @@ type UpsertSpec struct {
 
 // UpsertPlan is a validated, registered upsert statement bound to one Table.
 type UpsertPlan[T, K, S any] struct {
-	t      *Table[T, K, S]
-	key    string
-	sql    string
-	retIdx []int
-	meta   stmtMeta
+	t        *Table[T, K, S]
+	key      string
+	sql      string
+	conflict string
+	retIdx   []int
+	meta     stmtMeta
 }
 
 // SQL returns the derived INSERT ... ON CONFLICT statement.
@@ -50,12 +51,12 @@ func (t *Table[T, K, S]) DefineUpsert(key string, spec UpsertSpec, opts ...State
 // in the Registry.
 func (t *Table[T, K, S]) TryDefineUpsert(key string, spec UpsertSpec, opts ...StatementOption) (*UpsertPlan[T, K, S], error) {
 	if t.reg == nil {
-		return nil, errors.New("tabula.Upsert " + t.Name + ": table is not defined")
+		return nil, errors.New("tabula.Upsert " + t.name + ": table is not defined")
 	}
 	fail := func(format string, args ...any) error {
-		return fmt.Errorf(t.prefix()+".Upsert "+t.Name+": "+format, args...)
+		return fmt.Errorf(t.prefix()+".Upsert "+t.name+": "+format, args...)
 	}
-	if t.ReadOnly {
+	if t.readOnly {
 		return nil, fail("cannot define upsert on a ReadOnly table")
 	}
 	if key == "" {
@@ -76,7 +77,7 @@ func (t *Table[T, K, S]) TryDefineUpsert(key string, spec UpsertSpec, opts ...St
 	}
 
 	var b strings.Builder
-	b.WriteString(t.stmt.values)
+
 	b.WriteString(" ON CONFLICT (")
 	b.WriteString(strings.Join(spec.Conflict, ", "))
 	b.WriteString(") ")
@@ -109,12 +110,23 @@ func (t *Table[T, K, S]) TryDefineUpsert(key string, spec UpsertSpec, opts ...St
 		}
 		b.WriteString("DO UPDATE SET ")
 		b.WriteString(strings.Join(sets, ", "))
-		if w := strings.TrimSpace(spec.Where); w != "" {
+		where := strings.TrimSpace(spec.Where)
+		if t.tenant >= 0 && !seenConflict[t.cols[t.tenant].name] {
+			col := t.cols[t.tenant].name
+			tenantGuard := t.name + "." + col + " = EXCLUDED." + col
+			if where != "" {
+				where = "(" + where + ") AND " + tenantGuard
+			} else {
+				where = tenantGuard
+			}
+		}
+		if where != "" {
 			b.WriteString(" WHERE ")
-			b.WriteString(w)
+			b.WriteString(where)
 		}
 	}
 
+	conflict := b.String()
 	var retIdx []int
 	if len(spec.Returning) > 0 {
 		retIdx = make([]int, len(spec.Returning))
@@ -129,58 +141,39 @@ func (t *Table[T, K, S]) TryDefineUpsert(key string, spec UpsertSpec, opts ...St
 		b.WriteString(strings.Join(spec.Returning, ", "))
 	}
 
-	meta := stmtMeta{key: t.Name + "." + key}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(&meta)
-		}
-	}
-	return &UpsertPlan[T, K, S]{
-		t:      t,
-		key:    key,
-		sql:    b.String(),
-		retIdx: retIdx,
-		meta:   meta,
-	}, nil
+	return &UpsertPlan[T, K, S]{t: t, key: key, sql: t.stmt.values + b.String(), conflict: conflict, retIdx: retIdx, meta: statementMeta(t.name+"."+key, opts)}, nil
 }
 
 // Upsert executes a pre-declared UpsertPlan for row. Returns (true, nil) when
 // a row was inserted or updated, and (false, nil) when DO NOTHING or a DO UPDATE
 // WHERE guard skipped the write. Any Returning columns are scanned into row.
 func (r *Rows[T, K, S]) Upsert(ctx context.Context, plan *UpsertPlan[T, K, S], row *T) (bool, error) {
-	if plan == nil || plan.t != r.t {
-		panic(r.t.prefix() + ".Upsert " + r.t.Name + ": upsert plan does not belong to this table")
+	if err := r.CheckWrite(row); err != nil {
+		return false, err
 	}
-	guard := r.guard(row)
-	ctx, span := r.start(ctx, guard, "upsert", plan.meta.key)
-	args := r.Args(*row)
-	secret := r.t.insertSecretMask()
-
+	r.checkPlan(plan)
+	args, secret := r.Args(*row), r.t.insertSecretMask()
 	if len(plan.retIdx) > 0 {
-		dest := r.targets(row, plan.retIdx)
-		err := r.s.Returning(ctx, guard, plan.sql, args, dest...)
-		if errors.Is(err, sql.ErrNoRows) {
-			span.finish(ctx, plan.sql, 0, nil, args, secret, plan.meta.secret, plan.meta.quiet)
-			return false, nil
-		}
-		if err != nil {
-			span.finish(ctx, plan.sql, 0, err, args, secret, plan.meta.secret, plan.meta.quiet)
-			return false, r.fail(ctx, err)
-		}
-		span.finish(ctx, plan.sql, 1, nil, args, secret, plan.meta.secret, plan.meta.quiet)
-		return true, nil
+		return r.returning(ctx, "upsert", plan.meta, plan.sql, args, secret, nil, r.targets(row, plan.retIdx)...)
 	}
+	n, err := r.execWrite(ctx, "upsert", plan.meta, plan.sql, args, secret, 0, 1, r.t.reg.rowCountErr())
+	return n == 1 && err == nil, err
+}
 
-	n, err := r.s.Exec(ctx, guard, plan.sql, args...)
-	var retErr error
-	if err != nil {
-		retErr = r.fail(ctx, err)
-	} else if n > 1 {
-		retErr = r.t.reg.rowCountErr()
+// UpsertMany returns the number of inserted or updated rows, excluding
+// conflicts skipped by DO NOTHING or WHERE. The batch only returns a count:
+// it omits the plan's RETURNING list and leaves the input slice untouched.
+// On error the count covers successful chunks in the current transaction.
+func (r *Rows[T, K, S]) UpsertMany(ctx context.Context, plan *UpsertPlan[T, K, S], rows []T) (int64, error) {
+	if r.readOnly() {
+		return 0, ErrReadOnly
 	}
-	span.finish(ctx, plan.sql, n, logErr(err, retErr), args, secret, plan.meta.secret, plan.meta.quiet)
-	if retErr != nil {
-		return false, retErr
+	r.checkPlan(plan)
+	return r.writeMany(ctx, "upsert_many", plan.meta, plan.conflict, rows)
+}
+
+func (r *Rows[T, K, S]) checkPlan(plan *UpsertPlan[T, K, S]) {
+	if plan == nil || plan.t != r.t {
+		panic(r.t.prefix() + ".Upsert " + r.t.name + ": upsert plan does not belong to this table")
 	}
-	return n == 1, nil
 }

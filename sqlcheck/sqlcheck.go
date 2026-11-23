@@ -119,6 +119,13 @@ func DefaultTypeFamilies() map[string][]string {
 		"json.RawMessage":   {"jsonb", "json"},
 		"[]byte":            {"bytea"},
 		"[]string":          {"ARRAY"},
+		"[]int32":           {"ARRAY"},
+		"[]float64":         {"ARRAY"},
+		"[]bool":            {"ARRAY"},
+		"netip.Addr":        {"inet"},
+		"*netip.Addr":       {"inet"},
+		"netip.Prefix":      {"cidr", "inet"},
+		"*netip.Prefix":     {"cidr", "inet"},
 		"[]int64":           {"ARRAY"},
 	})
 }

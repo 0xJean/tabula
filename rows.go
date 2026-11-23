@@ -3,24 +3,26 @@ package tabula
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"database/sql/driver"
-	"errors"
+	"iter"
 	"log/slog"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
-// Rows is a Table bound to one transaction Session. Bind it once per
+// Rows is a Table bound to one Session. Bind it once per
 // transaction: it remembers the once columns of rows it locked, and Save /
 // UpdateWhere refuse a locked row whose once columns changed.
 type Rows[T, K, S any] struct {
-	t      *Table[T, K, S]
-	s      Session[S]
-	logger *slog.Logger
+	readBinding[T, S]
+	t     *Table[T, K, S]
+	locks *lockedRows
+}
 
+type lockedRows struct {
 	mu     sync.Mutex
 	locked map[any][]driver.Value
 }
@@ -28,84 +30,62 @@ type Rows[T, K, S any] struct {
 // WithLogger returns a Rows handle sharing the same Table and Session with a
 // per-binding logger override.
 func (r *Rows[T, K, S]) WithLogger(logger *slog.Logger) *Rows[T, K, S] {
-	return &Rows[T, K, S]{t: r.t, s: r.s, logger: logger}
+	copy := *r
+	copy.logger = logger
+	return &copy
 }
 
 // Listing is a List/Find page request: Order (table default when empty),
-// Size/Offset (all rows when Size <= 0), Lock (SELECT ... FOR UPDATE), and
+// Size/Offset (all rows when Size <= 0), Lock (a PostgreSQL row-lock mode), and
 // Count (CountExact default, CountNone, or CountEstimate).
 type Listing struct {
 	Order        string
 	Size, Offset int
-	Lock         bool
+	Lock         LockMode
 	Count        CountMode
-}
-
-func (r *Rows[T, K, S]) fillAddrs(dst []any, row *T) []any {
-	for i, c := range r.t.cols {
-		dst[i] = c.target(row)
-	}
-	return dst
-}
-
-func (r *Rows[T, K, S]) addrs(row *T) []any {
-	return r.fillAddrs(make([]any, len(r.t.cols)), row)
 }
 
 func (r *Rows[T, K, S]) name(i int) string { return r.t.cols[i].name }
 
-func (r *Rows[T, K, S]) fail(ctx context.Context, err error) error {
-	return r.t.reg.classifyErr(ctx, err)
-}
-
-func (r *Rows[T, K, S]) start(ctx context.Context, scope S, action, key string) (context.Context, opSpan[S]) {
-	return r.t.reg.startOp(ctx, r.logger, scope, r.t.Name, action, key)
-}
-
-func (r *Rows[T, K, S]) one(ctx context.Context, tenant S, action, key, query string, args []any) (*T, error) {
-	ctx, span := r.start(ctx, tenant, action, key)
-	var row T
-	err := r.s.Scan(ctx, tenant, query, args, r.addrs(&row)...)
-	if errors.Is(err, sql.ErrNoRows) {
-		span.finish(ctx, query, 0, nil, args, nil, false, false)
-		return nil, nil
-	}
-	if err != nil {
-		span.finish(ctx, query, 0, err, args, nil, false, false)
-		return nil, r.fail(ctx, err)
-	}
-	span.finish(ctx, query, 1, nil, args, nil, false, false)
-	return &row, nil
-}
-
-func (r *Rows[T, K, S]) byKey(tenant S, key K, lock bool) (string, []any) {
-	args := make([]any, 0, len(r.t.keys)+1)
+func (r *Rows[T, K, S]) keyArgs(key K) (args []any, scoped bool) {
+	args = make([]any, 0, len(r.t.keys)+1)
 	for _, bind := range r.t.keyBinders {
 		args = append(args, bind(&key))
 	}
-	if r.t.tenant < 0 || r.s.Platform() {
+	scoped = r.t.tenant >= 0 && !r.s.Platform()
+	if scoped {
+		args = append(args, r.t.reg.tenantValue(r.s.Tenant()))
+	}
+	return args, scoped
+}
+
+func (r *Rows[T, K, S]) byKey(key K, lock bool) (string, []any) {
+	args, scoped := r.keyArgs(key)
+	if scoped {
 		if lock {
-			return r.t.stmt.platformLock, args
+			return r.t.stmt.lock, args
 		}
-		return r.t.stmt.platformGet, args
+		return r.t.stmt.get, args
 	}
-	args = append(args, r.t.reg.tenantValue(tenant))
 	if lock {
-		return r.t.stmt.lock, args
+		return r.t.stmt.platformLock, args
 	}
-	return r.t.stmt.get, args
+	return r.t.stmt.platformGet, args
 }
 
 // Get reads the undeleted row key without a lock; nil when missing.
-func (r *Rows[T, K, S]) Get(ctx context.Context, tenant S, key K) (*T, error) {
-	query, args := r.byKey(tenant, key, false)
-	return r.one(ctx, tenant, "get", r.t.Name+".get", query, args)
+func (r *Rows[T, K, S]) Get(ctx context.Context, key K) (*T, error) {
+	query, args := r.byKey(key, false)
+	return r.one(ctx, "get", stmtMeta{key: r.t.name + ".get"}, query, args)
 }
 
 // Lock reads the undeleted row key FOR UPDATE; nil when missing.
-func (r *Rows[T, K, S]) Lock(ctx context.Context, tenant S, key K) (*T, error) {
-	query, args := r.byKey(tenant, key, true)
-	row, err := r.one(ctx, tenant, "lock", r.t.Name+".lock", query, args)
+func (r *Rows[T, K, S]) Lock(ctx context.Context, key K) (*T, error) {
+	if r.readOnly() {
+		return nil, ErrReadOnly
+	}
+	query, args := r.byKey(key, true)
+	row, err := r.one(ctx, "lock", stmtMeta{key: r.t.name + ".lock"}, query, args)
 	if row != nil {
 		r.remember(*row)
 	}
@@ -114,20 +94,23 @@ func (r *Rows[T, K, S]) Lock(ctx context.Context, tenant S, key K) (*T, error) {
 
 // GetBy reads the first undeleted row (in Order) matching where; nil when
 // missing. where is a static predicate over bound "?" markers.
-func (r *Rows[T, K, S]) GetBy(ctx context.Context, tenant S, where string, values ...any) (*T, error) {
+func (r *Rows[T, K, S]) GetBy(ctx context.Context, where string, values ...any) (*T, error) {
 	f := r.Scope()
 	f.And(where, values...)
 	query := r.t.stmt.list + f.Where() + r.orderBy("") + " LIMIT 1"
-	return r.one(ctx, tenant, "get_by", r.t.Name+".get_by", query, f.Args())
+	return r.one(ctx, "get_by", stmtMeta{key: r.t.name + ".get_by"}, query, f.Args())
 }
 
 // LockBy reads and locks (FOR UPDATE) the first undeleted row (in Order)
 // matching where; nil when missing. The row's once columns are remembered.
-func (r *Rows[T, K, S]) LockBy(ctx context.Context, tenant S, where string, values ...any) (*T, error) {
+func (r *Rows[T, K, S]) LockBy(ctx context.Context, where string, values ...any) (*T, error) {
+	if r.readOnly() {
+		return nil, ErrReadOnly
+	}
 	f := r.Scope()
 	f.And(where, values...)
 	query := r.t.stmt.list + f.Where() + r.orderBy("") + " LIMIT 1 FOR UPDATE"
-	row, err := r.one(ctx, tenant, "lock_by", r.t.Name+".lock_by", query, f.Args())
+	row, err := r.one(ctx, "lock_by", stmtMeta{key: r.t.name + ".lock_by"}, query, f.Args())
 	if row != nil {
 		r.remember(*row)
 	}
@@ -136,7 +119,7 @@ func (r *Rows[T, K, S]) LockBy(ctx context.Context, tenant S, where string, valu
 
 // GetMany reads all undeleted rows whose key is in keys within the session
 // scope. An empty keys slice returns nil, nil without issuing SQL.
-func (r *Rows[T, K, S]) GetMany(ctx context.Context, tenant S, keys []K) ([]T, error) {
+func (r *Rows[T, K, S]) GetMany(ctx context.Context, keys []K) ([]T, error) {
 	if len(keys) == 0 {
 		return nil, nil
 	}
@@ -145,13 +128,16 @@ func (r *Rows[T, K, S]) GetMany(ctx context.Context, tenant S, keys []K) ([]T, e
 		return nil, r.fail(ctx, err)
 	}
 	query := r.t.stmt.list + f.Where() + r.orderBy("")
-	return r.selectOp(ctx, tenant, "get_many", r.t.Name+".get_many", query, f.Args(), false, false)
+	return r.selectOp(ctx, "get_many", stmtMeta{key: r.t.name + ".get_many"}, query, f.Args())
 }
 
 // LockMany reads and locks (FOR UPDATE) all undeleted rows whose key is in
 // keys in deterministic ascending key order to avoid deadlocks across
 // concurrent transactions. Once columns of every locked row are remembered.
-func (r *Rows[T, K, S]) LockMany(ctx context.Context, tenant S, keys []K) ([]T, error) {
+func (r *Rows[T, K, S]) LockMany(ctx context.Context, keys []K) ([]T, error) {
+	if r.readOnly() {
+		return nil, ErrReadOnly
+	}
 	if len(keys) == 0 {
 		return nil, nil
 	}
@@ -164,7 +150,7 @@ func (r *Rows[T, K, S]) LockMany(ctx context.Context, tenant S, keys []K) ([]T, 
 		orderCols[i] = r.name(keyIdx) + " ASC"
 	}
 	query := r.t.stmt.list + f.Where() + " ORDER BY " + strings.Join(orderCols, ", ") + " FOR UPDATE"
-	rows, err := r.selectOp(ctx, tenant, "lock_many", r.t.Name+".lock_many", query, f.Args(), false, false)
+	rows, err := r.selectOp(ctx, "lock_many", stmtMeta{key: r.t.name + ".lock_many"}, query, f.Args())
 	if err != nil {
 		return nil, err
 	}
@@ -254,7 +240,7 @@ func (r *Rows[T, K, S]) Scope() *Filter {
 
 func (r *Rows[T, K, S]) orderBy(order string) string {
 	if order == "" {
-		order = r.t.Order
+		order = r.t.order
 	}
 	if order == "" {
 		return ""
@@ -264,16 +250,16 @@ func (r *Rows[T, K, S]) orderBy(order string) string {
 
 // ExistsBy reports whether any undeleted row in the session's row scope
 // matches where (a static predicate over bound "?" markers).
-func (r *Rows[T, K, S]) ExistsBy(ctx context.Context, tenant S, where string, values ...any) (bool, error) {
-	ctx, span := r.start(ctx, tenant, "exists", r.t.Name+".exists")
+func (r *Rows[T, K, S]) ExistsBy(ctx context.Context, where string, values ...any) (bool, error) {
+	ctx, span := r.start(ctx, "exists", r.t.name+".exists")
 	f := r.Scope()
 	if where != "" {
 		f.And(where, values...)
 	}
 	var found bool
-	query := "SELECT EXISTS (SELECT 1 FROM " + r.t.Name + " WHERE true" + f.Where() + ")"
+	query := "SELECT EXISTS (SELECT 1 FROM " + r.t.name + " WHERE true" + f.Where() + ")"
 	args := f.Args()
-	err := r.s.Scan(ctx, tenant, query, args, &found)
+	err := r.s.Scan(ctx, query, args, &found)
 	rows := int64(0)
 	if err == nil && found {
 		rows = 1
@@ -288,35 +274,28 @@ func (r *Rows[T, K, S]) ExistsBy(ctx context.Context, tenant S, where string, va
 // List reads undeleted rows matching where for the listing plus total count
 // according to l.Count (CountExact default, CountNone returns -1, CountEstimate
 // reads PostgreSQL pg_class.reltuples).
-func (r *Rows[T, K, S]) List(ctx context.Context, tenant S, where func(*Filter), l Listing) ([]T, int64, error) {
+func (r *Rows[T, K, S]) List(ctx context.Context, where func(*Filter), l Listing) ([]T, int64, error) {
+	if l.Lock != LockNone && r.readOnly() {
+		return nil, 0, ErrReadOnly
+	}
+	_ = l.Lock.clause()
 	f := r.Scope()
 	if where != nil {
 		where(f)
 	}
-	var total int64
-	switch l.Count {
-	case CountNone:
-		total = -1
-	case CountEstimate:
-		estCtx, estSpan := r.start(ctx, tenant, "count_estimate", r.t.Name+".count_estimate")
-		estQuery := "SELECT greatest(reltuples::bigint, 0) FROM pg_class WHERE oid = $1::regclass"
-		estArgs := []any{r.t.Name}
-		err := r.s.Scan(estCtx, tenant, estQuery, estArgs, &total)
-		estSpan.finish(estCtx, estQuery, -1, err, estArgs, nil, false, false)
-		if err != nil {
-			return nil, 0, r.fail(ctx, err)
+	total := int64(-1)
+	if l.Count != CountNone {
+		action, query, args := "count", r.t.stmt.count+f.Where(), f.Args()
+		if l.Count == CountEstimate {
+			action = "count_estimate"
+			query = "SELECT greatest(reltuples::bigint, 0) FROM pg_class WHERE oid = $1::regclass"
+			args = []any{r.t.name}
 		}
-	default:
-		cntCtx, cntSpan := r.start(ctx, tenant, "count", r.t.Name+".count")
-		countQuery := r.t.stmt.count + f.Where()
-		countArgs := f.Args()
-		err := r.s.Scan(cntCtx, tenant, countQuery, countArgs, &total)
-		cntSpan.finish(cntCtx, countQuery, -1, err, countArgs, nil, false, false)
-		if err != nil {
-			return nil, 0, r.fail(ctx, err)
+		if err := r.scan(ctx, action, stmtMeta{key: r.t.name + "." + action}, query, args, &total); err != nil {
+			return nil, 0, err
 		}
 	}
-	rows, err := r.findWithFilter(ctx, tenant, "list", f, l)
+	rows, err := collect(r.iterListing(ctx, "list", f, l))
 	if err != nil {
 		return nil, 0, err
 	}
@@ -324,66 +303,67 @@ func (r *Rows[T, K, S]) List(ctx context.Context, tenant S, where func(*Filter),
 }
 
 // Find reads undeleted rows matching where without running COUNT(*).
-func (r *Rows[T, K, S]) Find(ctx context.Context, tenant S, where func(*Filter), l Listing) ([]T, error) {
+func (r *Rows[T, K, S]) Find(ctx context.Context, where func(*Filter), l Listing) ([]T, error) {
 	f := r.Scope()
 	if where != nil {
 		where(f)
 	}
-	return r.findWithFilter(ctx, tenant, "find", f, l)
+	return collect(r.iterListing(ctx, "find", f, l))
 }
 
-func (r *Rows[T, K, S]) findWithFilter(ctx context.Context, tenant S, action string, f *Filter, l Listing) ([]T, error) {
-	query := r.t.stmt.list + f.Where() + r.orderBy(l.Order)
-	if l.Size > 0 {
-		query += f.Page(l.Size, l.Offset)
+// Iter streams a Find query, applying the same scope, ordering, paging and lock
+// mode. Breaking the range closes the cursor. Locked rows retain once-column snapshots.
+func (r *Rows[T, K, S]) Iter(ctx context.Context, where func(*Filter), l Listing) iter.Seq2[T, error] {
+	return func(yield func(T, error) bool) {
+		f := r.Scope()
+		if where != nil {
+			where(f)
+		}
+		r.iterListing(ctx, "iter", f, l)(yield)
 	}
-	if l.Lock {
-		query += " FOR UPDATE"
-	}
-	rows, err := r.selectOp(ctx, tenant, action, r.t.Name+"."+action, query, f.Args(), false, false)
-	if l.Lock {
-		for _, row := range rows {
-			r.remember(row)
+}
+
+func (r *Rows[T, K, S]) iterListing(ctx context.Context, action string, f *Filter, l Listing) iter.Seq2[T, error] {
+	return func(yield func(T, error) bool) {
+		if l.Lock != LockNone && r.readOnly() {
+			var zero T
+			yield(zero, ErrReadOnly)
+			return
+		}
+		query := r.t.stmt.list + f.Where() + r.orderBy(l.Order)
+		if l.Size > 0 {
+			query += f.Page(l.Size, l.Offset)
+		}
+		query += l.Lock.clause()
+		seq := r.stream(ctx, action, stmtMeta{key: r.t.name + "." + action}, query, f.Args())
+		if l.Lock == LockNone {
+			seq(yield)
+			return
+		}
+		for row, err := range seq {
+			if err == nil {
+				r.remember(row)
+			}
+			if !yield(row, err) {
+				return
+			}
 		}
 	}
-	return rows, err
 }
 
 // Scan runs a hand-written single-row SELECT.
-func (r *Rows[T, K, S]) Scan(ctx context.Context, tenant S, query string, args []any, dest ...any) error {
-	meta := r.t.lookupMeta(query, "scan")
-	ctx, span := r.start(ctx, tenant, "scan", meta.key)
-	err := r.s.Scan(ctx, tenant, query, args, dest...)
-	span.finish(ctx, query, -1, err, args, nil, meta.secret, meta.quiet)
-	if err != nil {
-		return r.fail(ctx, err)
-	}
-	return nil
+func (r *Rows[T, K, S]) Scan(ctx context.Context, query string, args []any, dest ...any) error {
+	return r.scan(ctx, "scan", r.t.lookupMeta(query, "scan"), query, args, dest...)
 }
 
 // Select scans every row of a hand-written SELECT over Table.Cols().
-func (r *Rows[T, K, S]) Select(ctx context.Context, tenant S, query string, args ...any) ([]T, error) {
-	meta := r.t.lookupMeta(query, "select")
-	return r.selectOp(ctx, tenant, "select", meta.key, query, args, meta.secret, meta.quiet)
+func (r *Rows[T, K, S]) Select(ctx context.Context, query string, args ...any) ([]T, error) {
+	return r.selectOp(ctx, "select", r.t.lookupMeta(query, "select"), query, args)
 }
 
-func (r *Rows[T, K, S]) selectOp(ctx context.Context, tenant S, action, key, query string, args []any, allSecret, quiet bool) ([]T, error) {
-	ctx, span := r.start(ctx, tenant, action, key)
-	var out []T
-	dst := make([]any, len(r.t.cols))
-	err := r.s.Each(ctx, tenant, query, args, func(scan func(...any) error) error {
-		var row T
-		if err := scan(r.fillAddrs(dst, &row)...); err != nil {
-			return err
-		}
-		out = append(out, row)
-		return nil
-	})
-	span.finish(ctx, query, int64(len(out)), err, args, nil, allSecret, quiet)
-	if err != nil {
-		return nil, r.fail(ctx, err)
-	}
-	return out, nil
+// SelectIter streams a hand-written SELECT over Table.Cols().
+func (r *Rows[T, K, S]) SelectIter(ctx context.Context, query string, args ...any) iter.Seq2[T, error] {
+	return r.stream(ctx, "select_iter", r.t.lookupMeta(query, "select_iter"), query, args)
 }
 
 // Args returns bound values matching Table.Insert().
@@ -397,25 +377,33 @@ func (r *Rows[T, K, S]) Args(row T) []any {
 }
 
 // Exec runs a hand-written write and confirms its row count (when want >= 0).
-func (r *Rows[T, K, S]) Exec(ctx context.Context, tenant S, want int64, query string, args ...any) error {
-	meta := r.t.lookupMeta(query, "exec")
-	ctx, span := r.start(ctx, tenant, "exec", meta.key)
-	n, err := r.s.Exec(ctx, tenant, query, args...)
-	var retErr error
-	if err != nil {
-		retErr = r.fail(ctx, err)
-	} else if want >= 0 && n != want {
-		retErr = r.t.reg.rowCountErr()
+func (r *Rows[T, K, S]) Exec(ctx context.Context, want int64, query string, args ...any) error {
+	if r.readOnly() {
+		return ErrReadOnly
 	}
-	span.finish(ctx, query, n, logErr(err, retErr), args, nil, meta.secret, meta.quiet)
-	return retErr
+	_, err := r.execWrite(ctx, "exec", r.t.lookupMeta(query, "exec"), query, args, nil, want, want, r.t.reg.rowCountErr())
+	return err
 }
 
-func (r *Rows[T, K, S]) guard(row *T) S {
-	if r.t.tenant < 0 || r.s.Platform() {
-		return r.s.Tenant()
+func (r *Rows[T, K, S]) readOnly() bool {
+	return r.t.readOnly || r.directReadOnly
+}
+
+// CheckWrite validates the table mode and row tenant for a write. Driver
+// adapters use it when sending rows through a bulk protocol such as COPY.
+func (r *Rows[T, K, S]) CheckWrite(row *T) error {
+	if r.readOnly() {
+		return ErrReadOnly
 	}
-	return r.rowTenant(row)
+	if r.t.tenant < 0 || r.s.Platform() {
+		return nil
+	}
+	want := r.t.reg.tenantValue(r.s.Tenant())
+	got := r.t.reg.tenantValue(r.rowTenant(row))
+	if !reflect.DeepEqual(want, got) {
+		return ErrScopeMismatch
+	}
+	return nil
 }
 
 func (r *Rows[T, K, S]) rowTenant(row *T) S {
@@ -465,18 +453,21 @@ func (r *Rows[T, K, S]) remember(row T) {
 	if err != nil {
 		return
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.locked == nil {
-		r.locked = map[any][]driver.Value{}
+	r.locks.mu.Lock()
+	defer r.locks.mu.Unlock()
+	if r.locks.locked == nil {
+		r.locks.locked = map[any][]driver.Value{}
 	}
-	r.locked[r.key(&row)] = values
+	r.locks.locked[r.key(&row)] = values
 }
 
 func (r *Rows[T, K, S]) unchanged(ctx context.Context, row T) error {
-	r.mu.Lock()
-	before, ok := r.locked[r.key(&row)]
-	r.mu.Unlock()
+	if r.locks == nil {
+		return nil
+	}
+	r.locks.mu.Lock()
+	before, ok := r.locks.locked[r.key(&row)]
+	r.locks.mu.Unlock()
 	if !ok {
 		return nil
 	}

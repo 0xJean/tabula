@@ -23,7 +23,7 @@ func TestViewDefineColsAndSelect(t *testing.T) {
 			return func(p any) any { return p }, nil
 		},
 	})
-	v := DefineView(reg, View[projectionRow, customTenant]{Name: "public.join_view"})
+	v := DefineView(reg, ViewSpec[projectionRow]{Name: "public.join_view"})
 	require.Equal(t, "id, code, note, tags", v.Cols())
 	require.Equal(t, "c.id, c.code, c.note, c.tags", v.ColsAs("c"))
 	require.Equal(t, "id, code, note, tags", v.ColsAs(""))
@@ -34,12 +34,12 @@ func TestViewDefineColsAndSelect(t *testing.T) {
 	require.Empty(t, reg.Defined(), "views stay separate from table Defined()")
 
 	// Invalid declarations fail cleanly.
-	_, err := TryDefineView(reg, View[projectionRow, customTenant]{})
+	_, err := TryDefineView(reg, ViewSpec[projectionRow]{})
 	require.EqualError(t, err, "tabula.DefineView: name is required")
 	type badRole struct {
 		ID int64 `db:"id,key"`
 	}
-	_, err = TryDefineView(reg, View[badRole, customTenant]{Name: "v"})
+	_, err = TryDefineView(reg, ViewSpec[badRole]{Name: "v"})
 	require.EqualError(t, err, "tabula.DefineView v: column id: option key is not supported on a View")
 
 	// Verify Bind + One/Select/Scan dispatch SQL cleanly.
@@ -64,12 +64,12 @@ func TestViewDefineColsAndSelect(t *testing.T) {
 			})
 		},
 	}
-	one, err := v.Bind(rec).One(t.Context(), "t-1", stmt, "BTC")
+	one, err := v.Bind(rec).One(t.Context(), stmt, "BTC")
 	require.NoError(t, err)
 	require.Equal(t, stmt, scannedQuery)
 	require.Equal(t, &projectionRow{ID: 9, Code: "BTC", Note: "", Tags: []string{"r1"}}, one)
 
-	list, err := v.Bind(rec).Select(t.Context(), "t-1", stmt, "ETH")
+	list, err := v.Bind(rec).Select(t.Context(), stmt, "ETH")
 	require.NoError(t, err)
 	require.Equal(t, []projectionRow{{ID: 7, Code: "ETH", Note: "mainnet", Tags: []string{"https://rpc"}}}, list)
 }
@@ -83,7 +83,7 @@ func TestLockByGetManyAndLockMany(t *testing.T) {
 			return v
 		},
 	})
-	tbl := Define(reg, Table[customRow, int64, customTenant]{Name: "public.custom_items", Order: "id DESC"})
+	tbl := Define(reg, TableSpec[customRow, int64]{Name: "public.custom_items", Order: "id DESC"})
 	sess := &fakeSession{
 		tenant:   "t-1",
 		execRows: 1,
@@ -103,17 +103,17 @@ func TestLockByGetManyAndLockMany(t *testing.T) {
 	rows := tbl.Bind(sess)
 
 	// Empty GetMany / LockMany issue no SQL.
-	got, err := rows.GetMany(t.Context(), "t-1", nil)
+	got, err := rows.GetMany(t.Context(), nil)
 	require.NoError(t, err)
 	require.Nil(t, got)
 	require.Empty(t, sess.lastQuery)
-	got, err = rows.LockMany(t.Context(), "t-1", []int64{})
+	got, err = rows.LockMany(t.Context(), []int64{})
 	require.NoError(t, err)
 	require.Nil(t, got)
 	require.Empty(t, sess.lastQuery)
 
 	// LockBy applies scope + LIMIT 1 FOR UPDATE and remembers once columns.
-	locked, err := rows.LockBy(t.Context(), "t-1", "code = ?", "beta")
+	locked, err := rows.LockBy(t.Context(), "code = ?", "beta")
 	require.NoError(t, err)
 	require.Equal(t, int64(10), locked.ID)
 	require.Contains(t, sess.lastQuery, "AND (tenant_id = $1) AND (deleted_at IS NULL) AND (code = $2) ORDER BY id DESC LIMIT 1 FOR UPDATE")
@@ -121,14 +121,14 @@ func TestLockByGetManyAndLockMany(t *testing.T) {
 	require.ErrorIs(t, rows.Save(t.Context(), *locked), ErrOnce)
 
 	// GetMany uses table order + ANY($n) through ArrayArg.
-	got, err = rows.GetMany(t.Context(), "t-1", []int64{20, 10})
+	got, err = rows.GetMany(t.Context(), []int64{20, 10})
 	require.NoError(t, err)
 	require.Len(t, got, 2)
 	require.Contains(t, sess.lastQuery, "AND (id = ANY($2)) ORDER BY id DESC")
 	require.Equal(t, []int64{20, 10}, wrappedSlices[0])
 
 	// LockMany forces deterministic ORDER BY key ASC FOR UPDATE and remembers once columns.
-	lockedBatch, err := rows.LockMany(t.Context(), "t-1", []int64{20, 10})
+	lockedBatch, err := rows.LockMany(t.Context(), []int64{20, 10})
 	require.NoError(t, err)
 	require.Len(t, lockedBatch, 2)
 	require.Contains(t, sess.lastQuery, "AND (id = ANY($2)) ORDER BY id ASC FOR UPDATE")
@@ -142,11 +142,11 @@ type recordingSession struct {
 	onEach func(query string, args []any, fn func(...any) error) error
 }
 
-func (r *recordingSession) Scan(_ context.Context, _ customTenant, query string, args []any, dest ...any) error {
+func (r *recordingSession) Scan(_ context.Context, query string, args []any, dest ...any) error {
 	return r.onScan(query, args, dest...)
 }
 
-func (r *recordingSession) Each(_ context.Context, _ customTenant, query string, args []any, visit func(func(...any) error) error) error {
+func (r *recordingSession) Each(_ context.Context, query string, args []any, visit func(func(...any) error) error) error {
 	return r.onEach(query, args, func(fn ...any) error {
 		return visit(fn[0].(func(...any) error))
 	})

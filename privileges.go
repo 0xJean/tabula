@@ -51,46 +51,36 @@ func derivePrivileges(name string, columns []DefinedColumn, s statements, readOn
 	return out
 }
 
-// Requires records a table or column privilege a hand-written statement of this
-// table needs beyond the derived ones, on this or another table. SELECT, INSERT,
-// and UPDATE require column names; DELETE is table-level and takes no columns.
+// Requires registers an additional privilege required by this descriptor.
 func (t *Table[T, K, S]) Requires(table, privilege string, columns ...string) *Table[T, K, S] {
-	p, err := buildPrivilege(table, privilege, columns)
-	if err != nil {
-		panic(fmt.Sprintf("%s.Requires %s: %v", t.prefix(), t.Name, err))
-	}
-	if t.reg == nil || t.defID <= 0 {
-		panic(t.prefix() + ".Requires " + t.Name + ": table is not defined")
-	}
-	t.reg.mu.Lock()
-	defer t.reg.mu.Unlock()
-	if t.defID > len(t.reg.defs) {
-		panic(t.prefix() + ".Requires " + t.Name + ": table is not defined")
-	}
-	t.reg.defs[t.defID-1].Privileges = append(t.reg.defs[t.defID-1].Privileges, p)
+	t.require(buildPrivilege(table, privilege, columns))
 	return t
 }
 
-// RequiresFunction records an EXECUTE privilege need on a PostgreSQL function
-// signature (e.g. "public.apply_credit(uuid, numeric)") for sqlcheck.
+// RequiresFunction registers an additional privilege required by this descriptor.
 func (t *Table[T, K, S]) RequiresFunction(signature string) *Table[T, K, S] {
+	t.require(functionPrivilege(signature))
+	return t
+}
+
+// Requires registers an additional privilege required by this descriptor.
+func (v *View[T, S]) Requires(table, privilege string, columns ...string) *View[T, S] {
+	v.require(buildPrivilege(table, privilege, columns))
+	return v
+}
+
+// RequiresFunction registers an additional privilege required by this descriptor.
+func (v *View[T, S]) RequiresFunction(signature string) *View[T, S] {
+	v.require(functionPrivilege(signature))
+	return v
+}
+
+func functionPrivilege(signature string) (DefinedPrivilege, error) {
 	sig := strings.TrimSpace(signature)
 	if sig == "" || !strings.Contains(sig, "(") || !strings.HasSuffix(sig, ")") {
-		panic(fmt.Sprintf("%s.RequiresFunction %s: invalid function signature %q", t.prefix(), t.Name, signature))
+		return DefinedPrivilege{}, fmt.Errorf("invalid function signature %q", sig)
 	}
-	if t.reg == nil || t.defID <= 0 {
-		panic(t.prefix() + ".RequiresFunction " + t.Name + ": table is not defined")
-	}
-	t.reg.mu.Lock()
-	defer t.reg.mu.Unlock()
-	if t.defID > len(t.reg.defs) {
-		panic(t.prefix() + ".RequiresFunction " + t.Name + ": table is not defined")
-	}
-	t.reg.defs[t.defID-1].Privileges = append(t.reg.defs[t.defID-1].Privileges, DefinedPrivilege{
-		Privilege: "EXECUTE",
-		Function:  sig,
-	})
-	return t
+	return DefinedPrivilege{Privilege: "EXECUTE", Function: sig}, nil
 }
 
 func buildPrivilege(table, privilege string, columns []string) (DefinedPrivilege, error) {

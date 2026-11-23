@@ -32,25 +32,25 @@ type fakeSession struct {
 
 func (f *fakeSession) Tenant() customTenant { return f.tenant }
 func (f *fakeSession) Platform() bool       { return f.platform }
-func (f *fakeSession) Exec(_ context.Context, _ customTenant, query string, args ...any) (int64, error) {
+func (f *fakeSession) Exec(_ context.Context, query string, args ...any) (int64, error) {
 	f.lastQuery, f.lastArgs = query, args
 	return f.execRows, nil
 }
-func (f *fakeSession) Scan(_ context.Context, _ customTenant, query string, args []any, dest ...any) error {
+func (f *fakeSession) Scan(_ context.Context, query string, args []any, dest ...any) error {
 	f.lastQuery, f.lastArgs = query, args
 	if f.scanFn != nil {
 		return f.scanFn(dest...)
 	}
 	return nil
 }
-func (f *fakeSession) Returning(_ context.Context, _ customTenant, query string, args []any, dest ...any) error {
+func (f *fakeSession) Returning(_ context.Context, query string, args []any, dest ...any) error {
 	f.lastQuery, f.lastArgs = query, args
 	if f.scanFn != nil {
 		return f.scanFn(dest...)
 	}
 	return nil
 }
-func (f *fakeSession) Each(_ context.Context, _ customTenant, query string, args []any, decode func(func(...any) error) error) error {
+func (f *fakeSession) Each(_ context.Context, query string, args []any, decode func(func(...any) error) error) error {
 	f.lastQuery, f.lastArgs = query, args
 	for _, r := range f.eachRows {
 		if err := decode(func(dest ...any) error {
@@ -82,7 +82,7 @@ func TestStandaloneRegistryAndRowsFlow(t *testing.T) {
 	reg := NewRegistry(RegistryConfig[customTenant]{
 		TenantID: func(s customTenant) any { return string(s) },
 	})
-	tbl := Define(reg, Table[customRow, int64, customTenant]{
+	tbl := Define(reg, TableSpec[customRow, int64]{
 		Name:  "public.custom_items",
 		Order: "id ASC",
 	})
@@ -120,14 +120,14 @@ func TestStandaloneRegistryAndRowsFlow(t *testing.T) {
 	rows := tbl.Bind(sess)
 
 	// ExistsBy automatically applies tenant + soft-delete scope.
-	ok, err := rows.ExistsBy(t.Context(), "t-1", "code = ?", "alpha")
+	ok, err := rows.ExistsBy(t.Context(), "code = ?", "alpha")
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, "SELECT EXISTS (SELECT 1 FROM public.custom_items WHERE true AND (tenant_id = $1) AND (deleted_at IS NULL) AND (code = $2))", sess.lastQuery)
 	require.Equal(t, []any{"t-1", "alpha"}, sess.lastArgs)
 
 	// Find skips COUNT(*) and applies order + paging.
-	got, err := rows.Find(t.Context(), "t-1", func(f *Filter) {
+	got, err := rows.Find(t.Context(), func(f *Filter) {
 		f.And("code = ?", "alpha")
 	}, Listing{Order: "id DESC", Size: 10, Offset: 0})
 	require.NoError(t, err)
@@ -136,7 +136,7 @@ func TestStandaloneRegistryAndRowsFlow(t *testing.T) {
 	require.Contains(t, sess.lastQuery, "ORDER BY id DESC LIMIT $3 OFFSET $4")
 
 	// Lock remembers once columns; Save refuses mutated once column with ErrOnce.
-	locked, err := rows.Lock(t.Context(), "t-1", 42)
+	locked, err := rows.Lock(t.Context(), 42)
 	require.NoError(t, err)
 	require.Equal(t, "alice", locked.CreatedBy)
 

@@ -1,223 +1,79 @@
-// Package pqdriver provides PostgreSQL SQLSTATE helpers and lib/pq-backed
-// array column converters for tabula. Isolating lib/pq here keeps tabula
-// itself driver-agnostic (so a pgxdriver can sit alongside without changing
-// the core descriptor engine).
+// Package pqdriver provides lib/pq-backed array converters for Tabula.
 package pqdriver
 
 import (
 	"database/sql/driver"
-	"errors"
 	"fmt"
 	"reflect"
 
 	"github.com/lib/pq"
 )
 
-// SQLState returns the five-character PostgreSQL SQLSTATE code carried by err
-// (compatible with both lib/pq and pgx errors implementing SQLState() string),
-// or "" when err carries none.
-func SQLState(err error) string {
-	if pg, ok := errors.AsType[interface {
-		error
-		SQLState() string
-	}](err); ok {
-		return pg.SQLState()
-	}
-	return ""
-}
+// TextArray addresses a text[] column, including named string elements.
+func TextArray[E ~string](p *[]E) any { return arrayOf[string](reflect.TypeFor[[]E]())(p) }
 
-// IsUniqueViolation reports PostgreSQL unique_violation (SQLSTATE 23505).
-func IsUniqueViolation(err error) bool { return SQLState(err) == "23505" }
-
-// IsForeignKeyViolation reports PostgreSQL foreign_key_violation (SQLSTATE 23503).
-func IsForeignKeyViolation(err error) bool { return SQLState(err) == "23503" }
-
-// IsCheckViolation reports PostgreSQL check_violation (SQLSTATE 23514).
-func IsCheckViolation(err error) bool { return SQLState(err) == "23514" }
-
-// IsNotNullViolation reports PostgreSQL not_null_violation (SQLSTATE 23502).
-func IsNotNullViolation(err error) bool { return SQLState(err) == "23502" }
-
-// IsSerializationFailure reports PostgreSQL serialization_failure (SQLSTATE 40001).
-func IsSerializationFailure(err error) bool { return SQLState(err) == "40001" }
-
-// IsDeadlock reports PostgreSQL deadlock_detected (SQLSTATE 40P01).
-func IsDeadlock(err error) bool { return SQLState(err) == "40P01" }
-
-// IsQueryCanceled reports PostgreSQL query_canceled (SQLSTATE 57014).
-func IsQueryCanceled(err error) bool { return SQLState(err) == "57014" }
-
-// IsRejectedValue reports a value refused by column definitions: string data
-// right truncation (22001), numeric value out of range (22003), not_null
-// violation (23502), check violation (23514), or invalid text representation
-// (22P02).
-func IsRejectedValue(err error) bool {
-	switch SQLState(err) {
-	case "22001", "22003", "23502", "23514", "22P02":
-		return true
-	}
-	return false
-}
-
-// IsNumericOutOfRange reports SQLSTATE 22003.
-func IsNumericOutOfRange(err error) bool { return SQLState(err) == "22003" }
-
-// TextArray addresses a PostgreSQL text[] / varchar[] column held as a slice
-// of string or named string enum type (e.g. []core.Factor). NULL scans as nil.
-func TextArray[E ~string](p *[]E) any { return &textArrayValue[E]{p} }
-
-type textArrayValue[E ~string] struct{ p *[]E }
-
-func (a *textArrayValue[E]) Scan(src any) error {
-	if src == nil {
-		*a.p = nil
-		return nil
-	}
-	var raw pq.StringArray
-	if err := raw.Scan(src); err != nil {
-		return err
-	}
-	out := make([]E, len(raw))
-	for i, s := range raw {
-		out[i] = E(s)
-	}
-	*a.p = out
-	return nil
-}
-
-func (a *textArrayValue[E]) Value() (driver.Value, error) {
-	if *a.p == nil {
-		return nil, nil
-	}
-	raw := make(pq.StringArray, len(*a.p))
-	for i, e := range *a.p {
-		raw[i] = string(e)
-	}
-	return raw.Value()
-}
-
-// Int64Array addresses a PostgreSQL bigint[] column held as a slice of int64
-// or named int64 type. NULL scans as nil.
-func Int64Array[E ~int64](p *[]E) any { return &int64ArrayValue[E]{p} }
-
-type int64ArrayValue[E ~int64] struct{ p *[]E }
-
-func (a *int64ArrayValue[E]) Scan(src any) error {
-	if src == nil {
-		*a.p = nil
-		return nil
-	}
-	var raw pq.Int64Array
-	if err := raw.Scan(src); err != nil {
-		return err
-	}
-	out := make([]E, len(raw))
-	for i, n := range raw {
-		out[i] = E(n)
-	}
-	*a.p = out
-	return nil
-}
-
-func (a *int64ArrayValue[E]) Value() (driver.Value, error) {
-	if *a.p == nil {
-		return nil, nil
-	}
-	raw := make(pq.Int64Array, len(*a.p))
-	for i, e := range *a.p {
-		raw[i] = int64(e)
-	}
-	return raw.Value()
-}
+// Int64Array addresses a bigint[] column, including named int64 elements.
+func Int64Array[E ~int64](p *[]E) any { return arrayOf[int64](reflect.TypeFor[[]E]())(p) }
 
 // Array wraps a Go slice for PostgreSQL "= ANY($n)" binding via lib/pq.
 func Array(v any) any { return pq.Array(v) }
 
-// ArrayColumn resolves a db:"...,array" column's Go slice type ([]~string or
-// []~int64) into a lib/pq-backed sql.Scanner / driver.Valuer converter.
+// ArrayColumn resolves one-dimensional string, int32, int64, float64 and bool
+// slices. Named slice and element types retain their Go types when scanned.
 func ArrayColumn(ft reflect.Type) (func(any) any, error) {
 	if ft.Kind() != reflect.Slice {
 		return nil, fmt.Errorf("array option requires a slice type, got %s", ft)
 	}
-	elem := ft.Elem()
-	switch elem.Kind() {
+	switch ft.Elem().Kind() {
 	case reflect.String:
-		return func(p any) any { return &reflectStringArray{ptr: p, sliceType: ft, elemType: elem} }, nil
+		return arrayOf[string](ft), nil
+	case reflect.Int32:
+		return arrayOf[int32](ft), nil
 	case reflect.Int64:
-		return func(p any) any { return &reflectInt64Array{ptr: p, sliceType: ft, elemType: elem} }, nil
+		return arrayOf[int64](ft), nil
+	case reflect.Float64:
+		return arrayOf[float64](ft), nil
+	case reflect.Bool:
+		return arrayOf[bool](ft), nil
 	default:
-		return nil, fmt.Errorf("array option supports []~string or []~int64, got %s", ft)
+		return nil, fmt.Errorf("unsupported array element type %s", ft.Elem())
 	}
 }
 
-type reflectStringArray struct {
-	ptr       any
-	sliceType reflect.Type
-	elemType  reflect.Type
+// lib/pq provides optimized scanners for the built-in slice types.
+func arrayOf[E any](ft reflect.Type) func(any) any {
+	if ft == reflect.TypeFor[[]E]() {
+		return func(p any) any { return pq.Array(p) }
+	}
+	return func(p any) any { return namedArray[E]{reflect.ValueOf(p).Elem()} }
 }
 
-func (a *reflectStringArray) Scan(src any) error {
-	rv := reflect.ValueOf(a.ptr).Elem()
-	if src == nil {
-		rv.Set(reflect.Zero(a.sliceType))
-		return nil
-	}
-	var raw pq.StringArray
-	if err := raw.Scan(src); err != nil {
+type namedArray[E any] struct{ dst reflect.Value }
+
+func (a namedArray[E]) Scan(src any) error {
+	var values []E
+	if err := pq.Array(&values).Scan(src); err != nil {
 		return err
 	}
-	out := reflect.MakeSlice(a.sliceType, len(raw), len(raw))
-	for i, s := range raw {
-		out.Index(i).Set(reflect.ValueOf(s).Convert(a.elemType))
+	if values == nil {
+		a.dst.SetZero()
+		return nil
 	}
-	rv.Set(out)
+	out := reflect.MakeSlice(a.dst.Type(), len(values), len(values))
+	for i, v := range values {
+		out.Index(i).Set(reflect.ValueOf(v).Convert(out.Type().Elem()))
+	}
+	a.dst.Set(out)
 	return nil
 }
 
-func (a *reflectStringArray) Value() (driver.Value, error) {
-	rv := reflect.ValueOf(a.ptr).Elem()
-	if rv.IsNil() {
+func (a namedArray[E]) Value() (driver.Value, error) {
+	if a.dst.IsNil() {
 		return nil, nil
 	}
-	raw := make(pq.StringArray, rv.Len())
-	for i := range rv.Len() {
-		raw[i] = rv.Index(i).String()
+	out := make([]E, a.dst.Len())
+	for i := range out {
+		out[i] = a.dst.Index(i).Convert(reflect.TypeFor[E]()).Interface().(E)
 	}
-	return raw.Value()
-}
-
-type reflectInt64Array struct {
-	ptr       any
-	sliceType reflect.Type
-	elemType  reflect.Type
-}
-
-func (a *reflectInt64Array) Scan(src any) error {
-	rv := reflect.ValueOf(a.ptr).Elem()
-	if src == nil {
-		rv.Set(reflect.Zero(a.sliceType))
-		return nil
-	}
-	var raw pq.Int64Array
-	if err := raw.Scan(src); err != nil {
-		return err
-	}
-	out := reflect.MakeSlice(a.sliceType, len(raw), len(raw))
-	for i, n := range raw {
-		out.Index(i).Set(reflect.ValueOf(n).Convert(a.elemType))
-	}
-	rv.Set(out)
-	return nil
-}
-
-func (a *reflectInt64Array) Value() (driver.Value, error) {
-	rv := reflect.ValueOf(a.ptr).Elem()
-	if rv.IsNil() {
-		return nil, nil
-	}
-	raw := make(pq.Int64Array, rv.Len())
-	for i := range rv.Len() {
-		raw[i] = rv.Index(i).Int()
-	}
-	return raw.Value()
+	return pq.Array(out).Value()
 }

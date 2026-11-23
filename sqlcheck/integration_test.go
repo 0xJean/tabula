@@ -60,7 +60,7 @@ func TestVerifyAgainstPostgres(t *testing.T) {
 	})
 
 	reg := tabula.NewRegistry(tabula.RegistryConfig[scope]{TenantID: func(s scope) any { return string(s) }})
-	tbl := tabula.Define(reg, tabula.Table[item, int64, scope]{Name: schema + ".items", Order: "id ASC"})
+	tbl := tabula.Define(reg, tabula.TableSpec[item, int64]{Name: schema + ".items", Order: "id ASC"})
 	tbl.Statement("by_code", "SELECT "+tbl.Cols()+" FROM "+schema+".items WHERE code = $1")
 	tbl.DefineUpsert("upsert_id", tabula.UpsertSpec{
 		Conflict:  []string{"id"},
@@ -146,9 +146,9 @@ func TestVerifyAgainstPostgres(t *testing.T) {
 			Code string `db:"code,zero"`
 		}
 		vReg := tabula.NewRegistry(tabula.RegistryConfig[scope]{TenantID: func(s scope) any { return string(s) }})
-		v1 := tabula.DefineView(vReg, tabula.View[summaryView, scope]{Name: schema + ".active_items"})
+		v1 := tabula.DefineView(vReg, tabula.ViewSpec[summaryView]{Name: schema + ".active_items"})
 		v1.Statement("all", "SELECT "+v1.Cols()+" FROM "+schema+".active_items")
-		v2 := tabula.DefineView(vReg, tabula.View[summaryView, scope]{Name: schema + ".mv_items"})
+		v2 := tabula.DefineView(vReg, tabula.ViewSpec[summaryView]{Name: schema + ".mv_items"})
 		v2.Statement("all", "SELECT "+v2.Cols()+" FROM "+schema+".mv_items")
 
 		// Verify regular view and materialized view schemas and statements.
@@ -170,7 +170,7 @@ func TestVerifyAgainstPostgres(t *testing.T) {
 
 		// DELETE and function EXECUTE privileges checked accurately.
 		delReg := tabula.NewRegistry(tabula.RegistryConfig[scope]{TenantID: func(s scope) any { return string(s) }})
-		delTbl := tabula.Define(delReg, tabula.Table[item, int64, scope]{Name: schema + ".items", AllowDelete: true})
+		delTbl := tabula.Define(delReg, tabula.TableSpec[item, int64]{Name: schema + ".items", AllowDelete: true})
 		delTbl.RequiresFunction(schema + ".count_items(text)")
 		delNeeds, _ := CollectPrivilegeNeeds(delReg.Defined())
 		missing, _, err := CheckRolePrivileges(ctx, db, delNeeds, app)

@@ -100,13 +100,13 @@ func BenchmarkPG_Select100_TabulaStdSQL(b *testing.B) {
 	db, schema := setupBenchDB(b)
 	ctx := b.Context()
 	reg := tabula.NewRegistry(tabula.RegistryConfig[struct{}]{})
-	tbl := tabula.Define(reg, tabula.Table[pgBenchRow, int64, struct{}]{Name: schema + ".items", Order: "id ASC"})
+	tbl := tabula.Define(reg, tabula.TableSpec[pgBenchRow, int64]{Name: schema + ".items", Order: "id ASC"})
 	runner := stdsql.NewRunner(db, stdsql.NoScopePolicy())
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
 		err := runner.WithinReadOnly(ctx, struct{}{}, func(ctx context.Context, s *stdsql.Session[struct{}]) error {
-			out, err := tbl.Bind(s).Find(ctx, struct{}{}, nil, tabula.Listing{})
+			out, err := tbl.Bind(s).Find(ctx, nil, tabula.Listing{})
 			if err != nil || len(out) != 100 {
 				return fmt.Errorf("len=%d err=%w", len(out), err)
 			}
@@ -122,7 +122,7 @@ func BenchmarkPG_InsertMany1000_TabulaStdSQL(b *testing.B) {
 	db, schema := setupBenchDB(b)
 	ctx := b.Context()
 	reg := tabula.NewRegistry(tabula.RegistryConfig[struct{}]{})
-	tbl := tabula.Define(reg, tabula.Table[pgBenchRow, int64, struct{}]{Name: schema + ".items"})
+	tbl := tabula.Define(reg, tabula.TableSpec[pgBenchRow, int64]{Name: schema + ".items"})
 	runner := stdsql.NewRunner(db, stdsql.NoScopePolicy())
 
 	batch := make([]pgBenchRow, 1000)

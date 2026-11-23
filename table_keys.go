@@ -9,7 +9,7 @@ import (
 )
 
 // SoftDelete configures status-value soft deletion on a ",deleted" column.
-// Leave Table.SoftDelete nil for *time.Time (deleted_at IS NULL) or bool
+// Leave TableSpec.SoftDelete nil for *time.Time (deleted_at IS NULL) or bool
 // (is_deleted = FALSE).
 type SoftDelete struct {
 	// DeletedValue is the sentinel value written to mark a row deleted
@@ -134,9 +134,9 @@ func (t *Table[T, K, S]) bindKeys(fail func(string, ...any) error) error {
 	return nil
 }
 
-func (t *Table[T, K, S]) bindSoftDelete(fail func(string, ...any) error) error {
+func (t *Table[T, K, S]) bindSoftDelete(spec *SoftDelete, fail func(string, ...any) error) error {
 	if t.deleted < 0 {
-		if t.SoftDelete != nil {
+		if spec != nil {
 			return fail("SoftDelete config requires a deleted column")
 		}
 		return nil
@@ -145,7 +145,7 @@ func (t *Table[T, K, S]) bindSoftDelete(fail func(string, ...any) error) error {
 	ft := col.goType
 	switch {
 	case ft == reflect.TypeFor[*time.Time]():
-		if t.SoftDelete != nil {
+		if spec != nil {
 			return fail("SoftDelete config is not used with *time.Time deleted column %s", col.name)
 		}
 		t.del = deleteSpec{
@@ -155,7 +155,7 @@ func (t *Table[T, K, S]) bindSoftDelete(fail func(string, ...any) error) error {
 		}
 		return nil
 	case ft.Kind() == reflect.Bool:
-		if t.SoftDelete != nil {
+		if spec != nil {
 			return fail("SoftDelete config is not used with bool deleted column %s", col.name)
 		}
 		t.del = deleteSpec{
@@ -164,16 +164,16 @@ func (t *Table[T, K, S]) bindSoftDelete(fail func(string, ...any) error) error {
 		}
 		return nil
 	case ft.Kind() == reflect.String || integer(ft):
-		if t.SoftDelete == nil || t.SoftDelete.DeletedValue == nil {
+		if spec == nil || spec.DeletedValue == nil {
 			return fail("deleted column %s (%s) requires SoftDelete.DeletedValue", col.name, ft)
 		}
-		delVal, delLit, err := coerceDeleteLiteral(t.SoftDelete.DeletedValue, ft)
+		delVal, delLit, err := coerceDeleteLiteral(spec.DeletedValue, ft)
 		if err != nil {
 			return fail("SoftDelete.DeletedValue for %s: %w", col.name, err)
 		}
 		aliveSQL := col.name + " <> " + delLit
-		if t.SoftDelete.AliveValue != nil {
-			aliveVal, aliveLit, err := coerceDeleteLiteral(t.SoftDelete.AliveValue, ft)
+		if spec.AliveValue != nil {
+			aliveVal, aliveLit, err := coerceDeleteLiteral(spec.AliveValue, ft)
 			if err != nil {
 				return fail("SoftDelete.AliveValue for %s: %w", col.name, err)
 			}
@@ -255,7 +255,7 @@ func (t *Table[T, K, S]) resolveReturningColumns(columns []string) []int {
 	for n, name := range columns {
 		idx, ok := t.byName[name]
 		if !ok {
-			panic(t.prefix() + ".Table " + t.Name + ": column not declared: " + name)
+			panic(t.prefix() + ".Table " + t.name + ": column not declared: " + name)
 		}
 		out[n] = idx
 	}

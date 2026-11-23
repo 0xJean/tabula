@@ -21,10 +21,10 @@ type benchSession struct {
 
 func (b *benchSession) Tenant() customTenant { return "t1" }
 func (b *benchSession) Platform() bool       { return false }
-func (b *benchSession) Exec(_ context.Context, _ customTenant, _ string, _ ...any) (int64, error) {
+func (b *benchSession) Exec(_ context.Context, _ string, _ ...any) (int64, error) {
 	return 1, nil
 }
-func (b *benchSession) Scan(_ context.Context, _ customTenant, _ string, _ []any, dest ...any) error {
+func (b *benchSession) Scan(_ context.Context, _ string, _ []any, dest ...any) error {
 	*dest[0].(*int64) = 42
 	*dest[1].(*customTenant) = "t1"
 	*dest[2].(*string) = "BTC"
@@ -34,10 +34,10 @@ func (b *benchSession) Scan(_ context.Context, _ customTenant, _ string, _ []any
 	*dest[6].(*int) = 1
 	return nil
 }
-func (b *benchSession) Returning(ctx context.Context, s customTenant, q string, args []any, dest ...any) error {
-	return b.Scan(ctx, s, q, args, dest...)
+func (b *benchSession) Returning(ctx context.Context, q string, args []any, dest ...any) error {
+	return b.Scan(ctx, q, args, dest...)
 }
-func (b *benchSession) Each(_ context.Context, _ customTenant, _ string, _ []any, decode func(func(...any) error) error) error {
+func (b *benchSession) Each(_ context.Context, _ string, _ []any, decode func(func(...any) error) error) error {
 	scan := func(dest ...any) error {
 		*dest[0].(*int64) = 42
 		*dest[1].(*customTenant) = "t1"
@@ -86,13 +86,13 @@ func BenchmarkRowsGet_Tabula(b *testing.B) {
 	reg := NewRegistry(RegistryConfig[customTenant]{
 		TenantID: func(s customTenant) any { return string(s) },
 	})
-	tbl := Define(reg, Table[benchRow, int64, customTenant]{Name: "public.bench_items"})
+	tbl := Define(reg, TableSpec[benchRow, int64]{Name: "public.bench_items"})
 	rows := tbl.Bind(&benchSession{})
 	ctx := b.Context()
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		got, err := rows.Get(ctx, "t1", 42)
+		got, err := rows.Get(ctx, 42)
 		if err != nil || got.ID != 42 {
 			b.Fatal(err)
 		}
@@ -107,7 +107,7 @@ func BenchmarkRowsGet_RawManualScan(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		var row benchRow
-		if err := sess.Scan(ctx, "t1", query, []any{int64(42), "t1"},
+		if err := sess.Scan(ctx, query, []any{int64(42), "t1"},
 			&row.ID, &row.Tenant, &row.Code, &row.Name, &row.Amount, &row.CreatedBy, &row.Version); err != nil || row.ID != 42 {
 			b.Fatal(err)
 		}
@@ -118,7 +118,7 @@ func BenchmarkRowsSelect100_Tabula(b *testing.B) {
 	reg := NewRegistry(RegistryConfig[customTenant]{
 		TenantID: func(s customTenant) any { return string(s) },
 	})
-	tbl := Define(reg, Table[benchRow, int64, customTenant]{Name: "public.bench_items"})
+	tbl := Define(reg, TableSpec[benchRow, int64]{Name: "public.bench_items"})
 	sess := &benchSession{rows: make([][]any, 100)}
 	rows := tbl.Bind(sess)
 	ctx := b.Context()
@@ -126,7 +126,7 @@ func BenchmarkRowsSelect100_Tabula(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		out, err := rows.Select(ctx, "t1", q, "t1")
+		out, err := rows.Select(ctx, q, "t1")
 		if err != nil || len(out) != 100 {
 			b.Fatal(err)
 		}
@@ -141,7 +141,7 @@ func BenchmarkRowsSelect100_RawManualScan(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		var out []benchRow
-		err := sess.Each(ctx, "t1", q, []any{"t1"}, func(scan func(...any) error) error {
+		err := sess.Each(ctx, q, []any{"t1"}, func(scan func(...any) error) error {
 			var row benchRow
 			if err := scan(&row.ID, &row.Tenant, &row.Code, &row.Name, &row.Amount, &row.CreatedBy, &row.Version); err != nil {
 				return err

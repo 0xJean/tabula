@@ -3,6 +3,7 @@ package pqdriver
 import (
 	"database/sql/driver"
 	"fmt"
+	"github.com/0xJean/tabula"
 	"reflect"
 	"testing"
 
@@ -17,23 +18,23 @@ func (e fakePGError) SQLState() string { return string(e) }
 type rowScanner interface{ Scan(any) error }
 
 func TestSQLStateClassifiers(t *testing.T) {
-	require.Equal(t, "23505", SQLState(fmt.Errorf("wrap: %w", fakePGError("23505"))))
-	require.Equal(t, "", SQLState(fmt.Errorf("plain")))
-	require.True(t, IsUniqueViolation(fakePGError("23505")))
-	require.False(t, IsUniqueViolation(fakePGError("23503")))
-	require.True(t, IsForeignKeyViolation(fakePGError("23503")))
-	require.True(t, IsCheckViolation(fakePGError("23514")))
-	require.True(t, IsNotNullViolation(fakePGError("23502")))
-	require.True(t, IsSerializationFailure(fakePGError("40001")))
-	require.True(t, IsDeadlock(fakePGError("40P01")))
-	require.True(t, IsQueryCanceled(fakePGError("57014")))
+	require.Equal(t, "23505", tabula.SQLState(fmt.Errorf("wrap: %w", fakePGError("23505"))))
+	require.Equal(t, "", tabula.SQLState(fmt.Errorf("plain")))
+	require.True(t, tabula.IsUniqueViolation(fakePGError("23505")))
+	require.False(t, tabula.IsUniqueViolation(fakePGError("23503")))
+	require.True(t, tabula.IsForeignKeyViolation(fakePGError("23503")))
+	require.True(t, tabula.IsCheckViolation(fakePGError("23514")))
+	require.True(t, tabula.IsNotNullViolation(fakePGError("23502")))
+	require.True(t, tabula.IsSerializationFailure(fakePGError("40001")))
+	require.True(t, tabula.IsDeadlock(fakePGError("40P01")))
+	require.True(t, tabula.IsQueryCanceled(fakePGError("57014")))
 
 	for _, code := range []string{"22001", "22003", "23502", "23514", "22P02"} {
-		require.True(t, IsRejectedValue(fakePGError(code)), code)
+		require.True(t, tabula.IsRejectedValue(fakePGError(code)), code)
 	}
-	require.False(t, IsRejectedValue(fakePGError("23505")))
-	require.True(t, IsNumericOutOfRange(fakePGError("22003")))
-	require.False(t, IsNumericOutOfRange(fakePGError("23514")))
+	require.False(t, tabula.IsRejectedValue(fakePGError("23505")))
+	require.True(t, tabula.IsNumericOutOfRange(fakePGError("22003")))
+	require.False(t, tabula.IsNumericOutOfRange(fakePGError("23514")))
 }
 
 func TestArrayConverters(t *testing.T) {
@@ -87,6 +88,6 @@ func TestArrayColumnReflectionResolver(t *testing.T) {
 
 	_, err = ArrayColumn(reflect.TypeFor[string]())
 	require.EqualError(t, err, "array option requires a slice type, got string")
-	_, err = ArrayColumn(reflect.TypeFor[[]bool]())
-	require.EqualError(t, err, "array option supports []~string or []~int64, got []bool")
+	_, err = ArrayColumn(reflect.TypeFor[[]int16]())
+	require.EqualError(t, err, "unsupported array element type int16")
 }

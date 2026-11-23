@@ -35,8 +35,8 @@ type KeysetListing struct {
 	// Limit is the maximum number of items to return (must be > 0). The engine
 	// fetches Limit+1 rows to determine HasMore accurately.
 	Limit int
-	// Lock appends FOR UPDATE to the query and remembers once columns.
-	Lock bool
+	// Lock selects the row-lock clause and remembers locked rows for once checks.
+	Lock LockMode
 }
 
 // KeysetPage is one cursor-paginated slice plus whether another page exists.
@@ -47,23 +47,23 @@ type KeysetPage[T any] struct {
 
 // ListKeyset reads one cursor-paginated page of undeleted rows matching where
 // in deterministic (SortColumn, key...) order without OFFSET.
-func (r *Rows[T, K, S]) ListKeyset(ctx context.Context, tenant S, where func(*Filter), l KeysetListing) (KeysetPage[T], error) {
+func (r *Rows[T, K, S]) ListKeyset(ctx context.Context, where func(*Filter), l KeysetListing) (KeysetPage[T], error) {
 	if l.Limit <= 0 {
-		panic(r.t.prefix() + ".ListKeyset " + r.t.Name + ": Limit must be positive")
+		panic(r.t.prefix() + ".ListKeyset " + r.t.name + ": Limit must be positive")
 	}
 	dir := strings.ToUpper(strings.TrimSpace(l.Direction))
 	if dir == "" {
 		dir = "ASC"
 	}
 	if dir != "ASC" && dir != "DESC" {
-		panic(fmt.Sprintf("%s.ListKeyset %s: invalid direction %q", r.t.prefix(), r.t.Name, l.Direction))
+		panic(fmt.Sprintf("%s.ListKeyset %s: invalid direction %q", r.t.prefix(), r.t.name, l.Direction))
 	}
 
 	tupleIdx := make([]int, 0, len(r.t.keys)+1)
 	if l.SortColumn != "" {
 		idx, ok := r.t.byName[l.SortColumn]
 		if !ok {
-			panic(r.t.prefix() + ".ListKeyset " + r.t.Name + ": sort column not declared: " + l.SortColumn)
+			panic(r.t.prefix() + ".ListKeyset " + r.t.name + ": sort column not declared: " + l.SortColumn)
 		}
 		tupleIdx = append(tupleIdx, idx)
 	}
@@ -79,7 +79,7 @@ func (r *Rows[T, K, S]) ListKeyset(ctx context.Context, tenant S, where func(*Fi
 	}
 	if len(l.After) > 0 {
 		if len(l.After) != len(tupleIdx) {
-			panic(fmt.Sprintf("%s.ListKeyset %s: After cursor has %d values, expected %d", r.t.prefix(), r.t.Name, len(l.After), len(tupleIdx)))
+			panic(fmt.Sprintf("%s.ListKeyset %s: After cursor has %d values, expected %d", r.t.prefix(), r.t.name, len(l.After), len(tupleIdx)))
 		}
 		op := ">"
 		if dir == "DESC" {
@@ -103,10 +103,11 @@ func (r *Rows[T, K, S]) ListKeyset(ctx context.Context, tenant S, where func(*Fi
 		orderParts[i] = r.name(idx) + " " + dir
 	}
 	query := r.t.stmt.list + f.Where() + " ORDER BY " + strings.Join(orderParts, ", ") + " LIMIT " + f.Arg(l.Limit+1)
-	if l.Lock {
-		query += " FOR UPDATE"
+	if l.Lock != LockNone && r.readOnly() {
+		return KeysetPage[T]{}, ErrReadOnly
 	}
-	rows, err := r.selectOp(ctx, tenant, "list_keyset", r.t.Name+".list_keyset", query, f.Args(), false, false)
+	query += l.Lock.clause()
+	rows, err := r.selectOp(ctx, "list_keyset", stmtMeta{key: r.t.name + ".list_keyset"}, query, f.Args())
 	if err != nil {
 		return KeysetPage[T]{}, err
 	}
@@ -115,10 +116,38 @@ func (r *Rows[T, K, S]) ListKeyset(ctx context.Context, tenant S, where func(*Fi
 		hasMore = true
 		rows = rows[:l.Limit]
 	}
-	if l.Lock {
+	if l.Lock != LockNone {
 		for _, row := range rows {
 			r.remember(row)
 		}
 	}
 	return KeysetPage[T]{Items: rows, HasMore: hasMore}, nil
+}
+
+// LockMode selects the PostgreSQL row-lock clause of a listing.
+type LockMode uint8
+
+const (
+	LockNone       LockMode = iota
+	LockUpdate              // FOR UPDATE
+	LockSkipLocked          // FOR UPDATE SKIP LOCKED
+	LockNoWait              // FOR UPDATE NOWAIT
+	LockShare               // FOR SHARE
+)
+
+func (m LockMode) clause() string {
+	switch m {
+	case LockNone:
+		return ""
+	case LockUpdate:
+		return " FOR UPDATE"
+	case LockSkipLocked:
+		return " FOR UPDATE SKIP LOCKED"
+	case LockNoWait:
+		return " FOR UPDATE NOWAIT"
+	case LockShare:
+		return " FOR SHARE"
+	default:
+		panic(fmt.Sprintf("tabula: invalid lock mode %d", m))
+	}
 }

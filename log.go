@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"math"
 	"reflect"
-	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -92,33 +91,6 @@ type stmtMeta struct {
 	key    string
 	quiet  bool
 	secret bool
-}
-
-type stmtMetaStore struct {
-	mu    sync.RWMutex
-	bySQL map[string]stmtMeta
-}
-
-func newStmtMetaStore() *stmtMetaStore {
-	return &stmtMetaStore{bySQL: map[string]stmtMeta{}}
-}
-
-func (s *stmtMetaStore) put(sql string, meta stmtMeta) {
-	s.mu.Lock()
-	s.bySQL[sql] = meta
-	s.mu.Unlock()
-}
-
-func (s *stmtMetaStore) get(sql, fallbackKey string) stmtMeta {
-	if s != nil {
-		s.mu.RLock()
-		m, ok := s.bySQL[sql]
-		s.mu.RUnlock()
-		if ok {
-			return m
-		}
-	}
-	return stmtMeta{key: fallbackKey}
 }
 
 type logEvent struct {

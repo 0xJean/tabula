@@ -1,5 +1,5 @@
 // Package stdsql provides ready-to-use database/sql transaction sessions,
-// scope/RLS plug-ins, savepoints, and serialization-retry helpers for tabula.
+// scope/RLS plug-ins, savepoints, and read-only Direct pools for tabula.
 // It depends only on the Go standard library and github.com/0xJean/tabula.
 package stdsql
 
@@ -53,10 +53,10 @@ func quoteIdent(ident string) string {
 
 // Session implements tabula.Session[S] over one database/sql *sql.Tx.
 type Session[S any] struct {
+	readQueries
 	tx       *sql.Tx
 	scope    S
 	platform bool
-	guard    func(string) error
 }
 
 // NewSession wraps an existing *sql.Tx with scope and policy.
@@ -69,10 +69,10 @@ func NewSession[S any](tx *sql.Tx, scope S, policy ScopePolicy[S]) *Session[S] {
 		platform = policy.IsPlatform(scope)
 	}
 	return &Session[S]{
-		tx:       tx,
-		scope:    scope,
-		platform: platform,
-		guard:    policy.GuardQuery,
+		tx:          tx,
+		scope:       scope,
+		platform:    platform,
+		readQueries: readQueries{db: tx, guard: policy.GuardQuery},
 	}
 }
 
@@ -85,7 +85,7 @@ func (s *Session[S]) Tenant() S { return s.scope }
 // Platform reports whether this session runs in platform/cross-tenant mode.
 func (s *Session[S]) Platform() bool { return s.platform }
 
-func (s *Session[S]) check(query string) error {
+func (s readQueries) check(query string) error {
 	if s.guard != nil {
 		return s.guard(query)
 	}
@@ -93,7 +93,7 @@ func (s *Session[S]) check(query string) error {
 }
 
 // Exec executes a statement and returns its affected row count.
-func (s *Session[S]) Exec(ctx context.Context, _ S, query string, args ...any) (int64, error) {
+func (s *Session[S]) Exec(ctx context.Context, query string, args ...any) (int64, error) {
 	if err := s.check(query); err != nil {
 		return 0, err
 	}
@@ -105,27 +105,24 @@ func (s *Session[S]) Exec(ctx context.Context, _ S, query string, args ...any) (
 }
 
 // Scan executes a single-row query and scans into dest.
-func (s *Session[S]) Scan(ctx context.Context, _ S, query string, args []any, dest ...any) error {
+func (s readQueries) Scan(ctx context.Context, query string, args []any, dest ...any) error {
 	if err := s.check(query); err != nil {
 		return err
 	}
-	return s.tx.QueryRowContext(ctx, query, args...).Scan(dest...)
+	return s.db.QueryRowContext(ctx, query, args...).Scan(dest...)
 }
 
 // Returning executes a write with RETURNING and scans the returned row into dest.
-func (s *Session[S]) Returning(ctx context.Context, _ S, query string, args []any, dest ...any) error {
-	if err := s.check(query); err != nil {
-		return err
-	}
-	return s.tx.QueryRowContext(ctx, query, args...).Scan(dest...)
+func (s *Session[S]) Returning(ctx context.Context, query string, args []any, dest ...any) error {
+	return s.Scan(ctx, query, args, dest...)
 }
 
 // Each streams all rows of query through decode.
-func (s *Session[S]) Each(ctx context.Context, _ S, query string, args []any, decode func(func(...any) error) error) error {
+func (s readQueries) Each(ctx context.Context, query string, args []any, decode func(func(...any) error) error) error {
 	if err := s.check(query); err != nil {
 		return err
 	}
-	rows, err := s.tx.QueryContext(ctx, query, args...)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return err
 	}

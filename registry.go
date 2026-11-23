@@ -19,16 +19,19 @@ import (
 	"time"
 )
 
-// Session is the narrow transaction-bound executor a Rows handle drives.
+// Session executes SQL under a single fixed scope. Transaction adapters and
+// Direct pools implement this interface. Each must close its cursor and stop
+// on the first callback error. A session may implement ReadOnly() bool to
+// decline derived writes and locking reads before any SQL is sent.
 // S is the host application's scope value (for example a tenant scope, or
 // struct{} for applications without row-level tenant scoping).
 type Session[S any] interface {
 	Tenant() S
 	Platform() bool
-	Exec(ctx context.Context, scope S, query string, args ...any) (int64, error)
-	Scan(ctx context.Context, scope S, query string, args []any, dest ...any) error
-	Returning(ctx context.Context, scope S, query string, args []any, dest ...any) error
-	Each(ctx context.Context, scope S, query string, args []any, decode func(func(...any) error) error) error
+	Exec(ctx context.Context, query string, args ...any) (int64, error)
+	Scan(ctx context.Context, query string, args []any, dest ...any) error
+	Returning(ctx context.Context, query string, args []any, dest ...any) error
+	Each(ctx context.Context, query string, args []any, decode func(func(...any) error) error) error
 }
 
 // ErrorPolicy maps execution and write-guard failures into the host's own
@@ -47,7 +50,7 @@ type RegistryConfig[S any] struct {
 	// Prefix labels panic and declaration error messages (defaults to "tabula").
 	Prefix string
 	// TenantID extracts the raw SQL bind argument from a scope value S.
-	// Required when a table declares a ",tenant" column.
+	// When omitted, the scope value itself identifies the tenant.
 	TenantID func(S) any
 	// TenantWrap wraps a *S pointer into a sql.Scanner / driver.Valuer.
 	// Optional when S already implements sql.Scanner and driver.Valuer.
@@ -90,8 +93,8 @@ type Registry[S any] struct {
 	mu    sync.RWMutex
 	types map[reflect.Type]func(any) any
 	zeros map[reflect.Type]func(any) any
-	defs  []Definition
-	views []ViewDefinition
+	defs  []*registration
+	views []*registration
 }
 
 // NewRegistry creates a Registry preloaded with built-in scalar zero
@@ -112,7 +115,7 @@ func NewRegistry[S any](cfg RegistryConfig[S]) *Registry[S] {
 		log:        newLogState(cfg.Log),
 		tracer:     cfg.Tracer,
 		metrics:    cfg.Metrics,
-		types:      map[reflect.Type]func(any) any{},
+		types:      networkTypes(),
 		zeros: map[reflect.Type]func(any) any{
 			reflect.TypeFor[string]():    zeroOf[string],
 			reflect.TypeFor[bool]():      zeroOf[bool],
@@ -156,36 +159,40 @@ func RegisterZero[S, V any](r *Registry[S]) {
 func (r *Registry[S]) Defined() []Definition {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	out := make([]Definition, len(r.defs))
-	for i, d := range r.defs {
-		out[i] = cloneDefinition(d)
-	}
-	return out
+	return snapshots[Definition](r.defs)
 }
 
-func (r *Registry[S]) record(name string, cols []DefinedColumn, stmts map[string]string, privs []DefinedPrivilege) int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.defs = append(r.defs, Definition{Name: name, Columns: cols, Statements: stmts, Privileges: privs})
-	return len(r.defs)
-}
-
-// DefinedViews lists every read-only View defined in r in definition order.
+// DefinedViews returns snapshots of all registered views in definition order.
 func (r *Registry[S]) DefinedViews() []ViewDefinition {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	out := make([]ViewDefinition, len(r.views))
-	for i, v := range r.views {
-		out[i] = cloneViewDefinition(v)
+	return snapshots[ViewDefinition](r.views)
+}
+
+func snapshots[D Definition | ViewDefinition](entries []*registration) []D {
+	out := make([]D, len(entries))
+	for i, e := range entries {
+		out[i] = D(cloneDefinition(e.def))
 	}
 	return out
 }
 
-func (r *Registry[S]) recordView(name string, cols []DefinedColumn) int {
+// registration belongs to the Registry. All accesses use the registry mutex.
+type registration struct {
+	def   Definition
+	bySQL map[string]stmtMeta
+}
+
+func (r *Registry[S]) record(def Definition, view bool) *registration {
+	e := &registration{def: def, bySQL: make(map[string]stmtMeta)}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.views = append(r.views, ViewDefinition{Name: name, Columns: cols, Statements: map[string]string{}})
-	return len(r.views)
+	if view {
+		r.views = append(r.views, e)
+	} else {
+		r.defs = append(r.defs, e)
+	}
+	return e
 }
 
 func (r *Registry[S]) arrayArg(slice any) any {
@@ -248,10 +255,14 @@ func (r *Registry[S]) tenantValue(s S) any {
 }
 
 func cloneDefinition(d Definition) Definition {
+	privs := slices.Clone(d.Privileges)
+	for i := range privs {
+		privs[i].Columns = slices.Clone(privs[i].Columns)
+	}
 	return Definition{
 		Name:       d.Name,
 		Columns:    slices.Clone(d.Columns),
 		Statements: maps.Clone(d.Statements),
-		Privileges: slices.Clone(d.Privileges),
+		Privileges: privs,
 	}
 }

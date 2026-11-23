@@ -25,20 +25,20 @@ type pgTxSession[S any] struct {
 
 func (s *pgTxSession[S]) Tenant() S      { return s.tenant }
 func (s *pgTxSession[S]) Platform() bool { return s.platform }
-func (s *pgTxSession[S]) Exec(ctx context.Context, _ S, query string, args ...any) (int64, error) {
+func (s *pgTxSession[S]) Exec(ctx context.Context, query string, args ...any) (int64, error) {
 	res, err := s.tx.ExecContext(ctx, query, args...)
 	if err != nil {
 		return 0, err
 	}
 	return res.RowsAffected()
 }
-func (s *pgTxSession[S]) Scan(ctx context.Context, _ S, query string, args []any, dest ...any) error {
+func (s *pgTxSession[S]) Scan(ctx context.Context, query string, args []any, dest ...any) error {
 	return s.tx.QueryRowContext(ctx, query, args...).Scan(dest...)
 }
-func (s *pgTxSession[S]) Returning(ctx context.Context, _ S, query string, args []any, dest ...any) error {
+func (s *pgTxSession[S]) Returning(ctx context.Context, query string, args []any, dest ...any) error {
 	return s.tx.QueryRowContext(ctx, query, args...).Scan(dest...)
 }
-func (s *pgTxSession[S]) Each(ctx context.Context, _ S, query string, args []any, decode func(func(...any) error) error) error {
+func (s *pgTxSession[S]) Each(ctx context.Context, query string, args []any, decode func(func(...any) error) error) error {
 	rows, err := s.tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return err
@@ -129,7 +129,7 @@ func TestV03AgainstRealPostgres(t *testing.T) {
 		ArrayArg:    pqdriver.Array,
 		ArrayColumn: pqdriver.ArrayColumn,
 	})
-	items := tabula.Define(reg, tabula.Table[itemRow, int64, tenantScope]{
+	items := tabula.Define(reg, tabula.TableSpec[itemRow, int64]{
 		Name:  schema + ".items",
 		Order: "id ASC",
 	})
@@ -194,7 +194,7 @@ func TestV03AgainstRealPostgres(t *testing.T) {
 		require.True(t, ok)
 		require.Equal(t, row.ID, up.ID)
 
-		got, err := r.Get(ctx, "t1", row.ID)
+		got, err := r.Get(ctx, row.ID)
 		require.NoError(t, err)
 		require.Equal(t, "alice", got.CreatedBy, "once column was not overwritten by upsert")
 		require.Equal(t, 500, got.Amount)
@@ -205,7 +205,7 @@ func TestV03AgainstRealPostgres(t *testing.T) {
 			{Tenant: "t1", Code: "eth", Amount: 10, CreatedBy: "alice", Version: 1, CreatedAt: time.Now().UTC()},
 			{Tenant: "t1", Code: "sol", Amount: 20, CreatedBy: "alice", Version: 1, CreatedAt: time.Now().UTC()},
 		}))
-		all, err := r.Find(ctx, "t1", nil, tabula.Listing{})
+		all, err := r.Find(ctx, nil, tabula.Listing{})
 		require.NoError(t, err)
 		require.Len(t, all, 3)
 
@@ -239,7 +239,7 @@ func TestV03AgainstRealPostgres(t *testing.T) {
 			Decimals  int    `db:"decimals"`
 			CreatedBy string `db:"created_by,once"`
 		}
-		pairs := tabula.Define(noTenantReg, tabula.Table[pairRow, pairKey, struct{}]{
+		pairs := tabula.Define(noTenantReg, tabula.TableSpec[pairRow, pairKey]{
 			Name:  schema + ".pairs",
 			Order: "chain_code ASC, symbol ASC",
 		})
@@ -249,7 +249,7 @@ func TestV03AgainstRealPostgres(t *testing.T) {
 			Name      string `db:"name"`
 			IsDeleted bool   `db:"is_deleted,deleted"`
 		}
-		flags := tabula.Define(noTenantReg, tabula.Table[flagRow, int64, struct{}]{
+		flags := tabula.Define(noTenantReg, tabula.TableSpec[flagRow, int64]{
 			Name: schema + ".flags",
 		})
 
@@ -258,7 +258,7 @@ func TestV03AgainstRealPostgres(t *testing.T) {
 			Code   string `db:"code"`
 			Status string `db:"status,deleted"`
 		}
-		orders := tabula.Define(noTenantReg, tabula.Table[orderRow, int64, struct{}]{
+		orders := tabula.Define(noTenantReg, tabula.TableSpec[orderRow, int64]{
 			Name:       schema + ".orders",
 			SoftDelete: &tabula.SoftDelete{DeletedValue: "deleted"},
 		})
@@ -273,7 +273,7 @@ func TestV03AgainstRealPostgres(t *testing.T) {
 			{Chain: "ETH", Symbol: "USDC", Decimals: 6, CreatedBy: "sys"},
 			{Chain: "SOL", Symbol: "USDT", Decimals: 6, CreatedBy: "sys"},
 		}))
-		locked, err := pr.LockMany(ctx, struct{}{}, []pairKey{
+		locked, err := pr.LockMany(ctx, []pairKey{
 			{Chain: "SOL", Symbol: "USDT"},
 			{Chain: "ETH", Symbol: "USDC"},
 		})
@@ -282,7 +282,7 @@ func TestV03AgainstRealPostgres(t *testing.T) {
 		require.Equal(t, "ETH", locked[0].Chain)
 		locked[0].Decimals = 18
 		require.NoError(t, pr.Save(ctx, locked[0]))
-		gotPair, err := pr.Get(ctx, struct{}{}, pairKey{Chain: "ETH", Symbol: "USDC"})
+		gotPair, err := pr.Get(ctx, pairKey{Chain: "ETH", Symbol: "USDC"})
 		require.NoError(t, err)
 		require.Equal(t, 18, gotPair.Decimals)
 
@@ -292,7 +292,7 @@ func TestV03AgainstRealPostgres(t *testing.T) {
 		require.NoError(t, fr.Insert(ctx, &fRow))
 		fRow.IsDeleted = true
 		require.NoError(t, fr.SoftDelete(ctx, fRow))
-		missingFlag, err := fr.Get(ctx, struct{}{}, fRow.ID)
+		missingFlag, err := fr.Get(ctx, fRow.ID)
 		require.NoError(t, err)
 		require.Nil(t, missingFlag)
 
@@ -300,12 +300,12 @@ func TestV03AgainstRealPostgres(t *testing.T) {
 		or := orders.Bind(sess)
 		oRow := orderRow{Code: "ord-1", Status: "pending"}
 		require.NoError(t, or.Insert(ctx, &oRow))
-		foundOrder, err := or.Get(ctx, struct{}{}, oRow.ID)
+		foundOrder, err := or.Get(ctx, oRow.ID)
 		require.NoError(t, err)
 		require.NotNil(t, foundOrder)
 		oRow.Status = "deleted"
 		require.NoError(t, or.SoftDelete(ctx, oRow))
-		missingOrder, err := or.Get(ctx, struct{}{}, oRow.ID)
+		missingOrder, err := or.Get(ctx, oRow.ID)
 		require.NoError(t, err)
 		require.Nil(t, missingOrder)
 	})
@@ -329,7 +329,7 @@ func TestV03AgainstRealPostgres(t *testing.T) {
 		}))
 
 		// Keyset DESC on (amount, id): page 1 gets a4 (30) and a3 (20), HasMore=true.
-		p1, err := r.ListKeyset(ctx, "tk", nil, tabula.KeysetListing{SortColumn: "amount", Direction: "DESC", Limit: 2})
+		p1, err := r.ListKeyset(ctx, nil, tabula.KeysetListing{SortColumn: "amount", Direction: "DESC", Limit: 2})
 		require.NoError(t, err)
 		require.True(t, p1.HasMore)
 		require.Len(t, p1.Items, 2)
@@ -338,7 +338,7 @@ func TestV03AgainstRealPostgres(t *testing.T) {
 
 		// Page 2 resumes from last item's (amount, id) cursor without duplicates.
 		last := p1.Items[len(p1.Items)-1]
-		p2, err := r.ListKeyset(ctx, "tk", nil, tabula.KeysetListing{
+		p2, err := r.ListKeyset(ctx, nil, tabula.KeysetListing{
 			SortColumn: "amount",
 			Direction:  "DESC",
 			After:      []any{last.Amount, last.ID},
@@ -351,14 +351,14 @@ func TestV03AgainstRealPostgres(t *testing.T) {
 		require.Equal(t, "a1", p2.Items[1].Code)
 
 		// CountNone and CountEstimate.
-		listNone, totalNone, err := r.List(ctx, "tk", func(f *tabula.Filter) {
+		listNone, totalNone, err := r.List(ctx, func(f *tabula.Filter) {
 			f.In("code", "a1", "a4")
 		}, tabula.Listing{Count: tabula.CountNone})
 		require.NoError(t, err)
 		require.Equal(t, int64(-1), totalNone)
 		require.Len(t, listNone, 2)
 
-		_, totalEst, err := r.List(ctx, "tk", nil, tabula.Listing{Count: tabula.CountEstimate})
+		_, totalEst, err := r.List(ctx, nil, tabula.Listing{Count: tabula.CountEstimate})
 		require.NoError(t, err)
 		require.GreaterOrEqual(t, totalEst, int64(0))
 
@@ -374,10 +374,10 @@ func TestV03AgainstRealPostgres(t *testing.T) {
 			Item   itemPart   `db:"i_"`
 			Parent parentPart `db:"p_"`
 		}
-		joinView := tabula.DefineView(reg, tabula.View[itemWithParent, tenantScope]{Name: schema + ".items_with_parent"})
+		joinView := tabula.DefineView(reg, tabula.ViewSpec[itemWithParent]{Name: schema + ".items_with_parent"})
 		sel := joinView.SelectAs(map[string]string{"i_": "i", "p_": "p"})
 		q := "SELECT " + sel + " FROM " + schema + ".items i JOIN " + schema + ".parents p ON p.id = i.parent_id WHERE i.tenant_id = $1 ORDER BY i.code ASC"
-		joined, err := joinView.Bind(sess).Select(ctx, "tk", q, "tk")
+		joined, err := joinView.Bind(sess).Select(ctx, q, "tk")
 		require.NoError(t, err)
 		require.Len(t, joined, 4)
 		require.Equal(t, "a1", joined[0].Item.Code)
@@ -392,11 +392,11 @@ func TestV03AgainstRealPostgres(t *testing.T) {
 			Tenant tenantScope `db:"tenant_id,tenant"`
 			Code   string      `db:"code"`
 		}
-		tokTbl := tabula.Define(reg, tabula.Table[tokenRow, int64, tenantScope]{
+		tokTbl := tabula.Define(reg, tabula.TableSpec[tokenRow, int64]{
 			Name:        schema + ".tokens",
 			AllowDelete: true,
 		})
-		roTbl := tabula.Define(reg, tabula.Table[tokenRow, int64, tenantScope]{
+		roTbl := tabula.Define(reg, tabula.TableSpec[tokenRow, int64]{
 			Name:     schema + ".tokens",
 			ReadOnly: true,
 		})
@@ -415,16 +415,16 @@ func TestV03AgainstRealPostgres(t *testing.T) {
 		require.NoError(t, tr.Insert(ctx, &t3))
 
 		// ReadOnly table can read but refuses writes.
-		got, err := roTbl.Bind(sess).Get(ctx, "td", t1.ID)
+		got, err := roTbl.Bind(sess).Get(ctx, t1.ID)
 		require.NoError(t, err)
 		require.Equal(t, "k1", got.Code)
-		require.ErrorIs(t, roTbl.Bind(sess).Delete(ctx, "td", t1.ID), tabula.ErrReadOnly)
+		require.ErrorIs(t, roTbl.Bind(sess).Delete(ctx, t1.ID), tabula.ErrReadOnly)
 
 		// Physical Delete by key and DeleteWhere.
-		require.NoError(t, tr.Delete(ctx, "td", t1.ID))
-		require.ErrorIs(t, tr.Delete(ctx, "td", t1.ID), tabula.ErrConflict)
+		require.NoError(t, tr.Delete(ctx, t1.ID))
+		require.ErrorIs(t, tr.Delete(ctx, t1.ID), tabula.ErrConflict)
 
-		deleted, err := tr.DeleteWhere(ctx, "td", "code = ?", "k2")
+		deleted, err := tr.DeleteWhere(ctx, "code = ?", "k2")
 		require.NoError(t, err)
 		require.Equal(t, int64(2), deleted)
 	})

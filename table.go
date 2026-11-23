@@ -4,12 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"slices"
 	"strconv"
 	"strings"
 )
 
-// Column is an escape-hatch column of a row type T (Table.Columns): its name
+// Column is an escape-hatch column of a row type T (TableSpec.Columns): its name
 // and the address of the value that holds it, for a column the db tags do not
 // declare (a legacy conversion, a generated column, or an array wrapper).
 type Column[T any] struct {
@@ -30,11 +29,11 @@ func (c Column[T]) Once() Column[T] { c.once = true; return c }
 // LogConfig.Values is ValuesAllowed.
 func (c Column[T]) Secret() Column[T] { c.secret = true; return c }
 
-// Table describes one table of rows T keyed by K under scope S: the qualified
+// TableSpec declares one table of rows T keyed by K: the qualified
 // name, the default order of List, optional SoftDelete config, and the row
 // type's db tags, read once by Define.
 // Tag options: key, serial, tenant, deleted, version, once, json, zero, array, secret.
-type Table[T, K, S any] struct {
+type TableSpec[T, K any] struct {
 	Name, Order string
 	Columns     []Column[T]
 	SoftDelete  *SoftDelete
@@ -44,10 +43,14 @@ type Table[T, K, S any] struct {
 	// AllowDelete opts this table into physical DELETE statements (Delete / DeleteWhere)
 	// and derives the table-level DELETE privilege for sqlcheck. Cannot combine with ReadOnly.
 	AllowDelete bool
+}
 
-	reg                      *Registry[S]
-	cols                     []column[T]
-	byName                   map[string]int
+// Table is the compiled handle for a TableSpec. Its column bindings, SQL and
+// access modes are fixed by Define.
+type Table[T, K, S any] struct {
+	descriptor[T, S]
+	order                    string
+	readOnly, allowDelete    bool
 	keys                     []int
 	keyBinders               []func(*K) any
 	keyBuilder               func(*T) K
@@ -55,13 +58,12 @@ type Table[T, K, S any] struct {
 	del                      deleteSpec
 	serial                   bool
 	stmt                     statements
-	defID                    int // 1-based index in reg.defs; 0 when undefined
-	meta                     *stmtMetaStore
 }
 
 type statements struct {
 	columns, get, lock, insert, update, count, list string
-	values                                          string
+	values, insertPrefix                            string
+	keyWhere, platformKeyWhere                      string
 	deleteStmt, platformDelete                      string
 	platformGet, platformLock                       string
 	insertColumns, setColumns, onceColumns          []int
@@ -80,6 +82,7 @@ const (
 type column[T any] struct {
 	name      string
 	fieldName string
+	prefix    string
 	role      role
 	once      bool
 	secret    bool
@@ -108,69 +111,69 @@ type DefinedColumn struct {
 	Secret   bool
 }
 
-// Define validates t against r (panicking on declaration mistakes at package
+// Define validates spec against r (panicking on declaration mistakes at package
 // initialization), derives its statements and column privileges, and records
 // it in r.
-func Define[T, K, S any](r *Registry[S], t Table[T, K, S]) *Table[T, K, S] {
-	d, err := TryDefine(r, t)
+func Define[T, K, S any](r *Registry[S], spec TableSpec[T, K]) *Table[T, K, S] {
+	d, err := TryDefine(r, spec)
 	if err != nil {
 		panic(err)
 	}
-	cols := make([]DefinedColumn, len(d.cols))
-	for i, c := range d.cols {
-		cols[i] = DefinedColumn{Name: c.name, GoType: c.goType.String(), Nullable: c.nullable, Role: string(c.role), Once: c.once, Secret: c.secret}
-	}
+	cols := d.definedColumns()
 	stmts := map[string]string{
 		"get": d.stmt.get, "count": d.stmt.count, "list": d.stmt.list,
 	}
-	if !d.ReadOnly {
+	if !d.readOnly {
 		stmts["lock"] = d.stmt.lock
 		stmts["insert"] = d.stmt.insert
 		stmts["update"] = d.stmt.update
 	}
 	if d.stmt.platformGet != d.stmt.get {
 		stmts["platform_get"] = d.stmt.platformGet
-		if !d.ReadOnly {
+		if !d.readOnly {
 			stmts["platform_lock"] = d.stmt.platformLock
 		}
 	}
-	if d.AllowDelete {
+	if d.allowDelete {
 		stmts["delete"] = d.stmt.deleteStmt
 		if d.stmt.platformDelete != d.stmt.deleteStmt {
 			stmts["platform_delete"] = d.stmt.platformDelete
 		}
 	}
-	d.defID = r.record(d.Name, cols, stmts, derivePrivileges(d.Name, cols, d.stmt, d.ReadOnly, d.AllowDelete))
+	d.entry = r.record(Definition{
+		Name: d.name, Columns: cols, Statements: stmts,
+		Privileges: derivePrivileges(d.name, cols, d.stmt, d.readOnly, d.allowDelete),
+	}, false)
 	return d
 }
 
-// TryDefine validates and derives statements for t without recording it in r.
-func TryDefine[T, K, S any](r *Registry[S], t Table[T, K, S]) (*Table[T, K, S], error) {
+// TryDefine validates spec and returns a compiled table without registering it.
+func TryDefine[T, K, S any](r *Registry[S], spec TableSpec[T, K]) (*Table[T, K, S], error) {
 	if r == nil {
 		return nil, errors.New("tabula.Define: registry is required")
 	}
-	if t.Name == "" {
+	if spec.Name == "" {
 		return nil, errors.New(r.prefix + ".Define: name is required")
 	}
 	fail := func(format string, args ...any) error {
-		return fmt.Errorf(r.prefix+".Define "+t.Name+": "+format, args...)
+		return fmt.Errorf(r.prefix+".Define "+spec.Name+": "+format, args...)
 	}
-	if t.ReadOnly && t.AllowDelete {
+	if spec.ReadOnly && spec.AllowDelete {
 		return nil, fail("ReadOnly cannot combine with AllowDelete")
 	}
 	rt := reflect.TypeFor[T]()
 	if rt.Kind() != reflect.Struct {
 		return nil, fail("row type %s is not a struct", rt)
 	}
-	t.reg = r
-	t.cols, t.byName, t.keys = nil, map[string]int{}, nil
-	t.tenant, t.deleted, t.version, t.serial, t.defID = -1, -1, -1, false, 0
-	t.del = deleteSpec{}
-	t.meta = newStmtMetaStore()
-	if err := t.fields(rt, nil, true, fail); err != nil {
+	t := &Table[T, K, S]{
+		descriptor: newDescriptor[T](r, spec.Name),
+		order:      spec.Order, readOnly: spec.ReadOnly, allowDelete: spec.AllowDelete,
+		tenant: -1, deleted: -1, version: -1,
+	}
+	if err := walkFields(rt, nil, "", nil, func(f reflect.StructField, idx []int, _, tag string) error { return t.tagged(f, idx, tag, fail) }, fail); err != nil {
 		return nil, err
 	}
-	for _, c := range t.Columns {
+	for _, c := range spec.Columns {
 		if err := t.escape(c, fail); err != nil {
 			return nil, err
 		}
@@ -178,37 +181,11 @@ func TryDefine[T, K, S any](r *Registry[S], t Table[T, K, S]) (*Table[T, K, S], 
 	if err := t.bindKeys(fail); err != nil {
 		return nil, err
 	}
-	if err := t.bindSoftDelete(fail); err != nil {
+	if err := t.bindSoftDelete(spec.SoftDelete, fail); err != nil {
 		return nil, err
 	}
 	t.derive()
-	return &t, nil
-}
-
-func (t *Table[T, K, S]) fields(rt reflect.Type, prefix []int, top bool, fail func(string, ...any) error) error {
-	for i := range rt.NumField() {
-		f := rt.Field(i)
-		if !f.IsExported() {
-			continue
-		}
-		index := append(slices.Clone(prefix), i)
-		tag, tagged := f.Tag.Lookup("db")
-		switch {
-		case tag == "-":
-			continue
-		case !tagged && top && f.Anonymous && f.Type.Kind() == reflect.Struct:
-			if err := t.fields(f.Type, index, false, fail); err != nil {
-				return err
-			}
-			continue
-		case !tagged:
-			return fail(`exported field %s has no db tag (use db:"-" to skip)`, f.Name)
-		}
-		if err := t.tagged(f, index, tag, fail); err != nil {
-			return err
-		}
-	}
-	return nil
+	return t, nil
 }
 
 type parsedTag struct {
@@ -283,7 +260,7 @@ func (t *Table[T, K, S]) tagged(f reflect.StructField, index []int, tag string, 
 	field := fieldAccessor[T](reflect.TypeFor[T](), index)
 	return t.add(column[T]{
 		name: name, fieldName: f.Name, role: r, once: options["once"], secret: options["secret"], field: field,
-		goType: f.Type, nullable: f.Type.Kind() == reflect.Pointer || options["zero"] || options["array"],
+		goType: f.Type, nullable: networkType(f.Type) || f.Type.Kind() == reflect.Pointer || options["zero"] || options["array"],
 		target: func(row *T) any { return wrap(field(row)) }, wrap: wrap,
 	}, fail)
 }
@@ -313,39 +290,6 @@ func (t *Table[T, K, S]) role(name string, r role, ft reflect.Type, fail func(st
 		return fail("%s column declared twice", r)
 	}
 	*slot = len(t.cols)
-	return nil
-}
-
-func (t *Table[T, K, S]) escape(c Column[T], fail func(string, ...any) error) error {
-	if c.Name == "" || c.Addr == nil {
-		return fail("Col %q needs a name and an address", c.Name)
-	}
-	target := c.Addr
-	vt := reflect.TypeOf(c.Addr(new(T)))
-	if !scanner(vt) {
-		if vt == nil || vt.Kind() != reflect.Pointer {
-			return fail("column %s: Col must address a field, got %v", c.Name, vt)
-		}
-		wrap, err := t.reg.Resolve(vt.Elem(), false, false)
-		if err != nil {
-			return fail("column %s: %w", c.Name, err)
-		}
-		target = func(row *T) any { return wrap(c.Addr(row)) }
-	}
-	held := vt
-	if held.Kind() == reflect.Pointer {
-		held = held.Elem()
-	}
-	nullable := held.Kind() == reflect.Pointer || strings.HasPrefix(held.Name(), "Null")
-	return t.add(column[T]{name: c.Name, once: c.once, secret: c.secret, target: target, goType: held, nullable: nullable}, fail)
-}
-
-func (t *Table[T, K, S]) add(c column[T], fail func(string, ...any) error) error {
-	if _, ok := t.byName[c.name]; ok {
-		return fail("column %s declared twice", c.name)
-	}
-	t.byName[c.name] = len(t.cols)
-	t.cols = append(t.cols, c)
 	return nil
 }
 
@@ -391,9 +335,10 @@ func (t *Table[T, K, S]) derive() {
 		where = byKey + " AND " + names[t.tenant] + " = $" + strconv.Itoa(next) + alive
 		next++
 	}
-	t.stmt.get = "SELECT " + t.stmt.columns + " FROM " + t.Name + where
+	t.stmt.keyWhere, t.stmt.platformKeyWhere = where, byKey+alive
+	t.stmt.get = "SELECT " + t.stmt.columns + " FROM " + t.name + where
 	t.stmt.lock = t.stmt.get + " FOR UPDATE"
-	t.stmt.platformGet = "SELECT " + t.stmt.columns + " FROM " + t.Name + byKey + alive
+	t.stmt.platformGet = "SELECT " + t.stmt.columns + " FROM " + t.name + byKey + alive
 	t.stmt.platformLock = t.stmt.platformGet + " FOR UPDATE"
 
 	insertNames, holders := make([]string, 0, len(names)), make([]string, 0, len(names))
@@ -401,7 +346,11 @@ func (t *Table[T, K, S]) derive() {
 		insertNames = append(insertNames, names[i])
 		holders = append(holders, "$"+strconv.Itoa(len(holders)+1))
 	}
-	t.stmt.values = "INSERT INTO " + t.Name + " (" + strings.Join(insertNames, ", ") + ") VALUES (" + strings.Join(holders, ", ") + ")"
+	t.stmt.insertPrefix = "INSERT INTO " + t.name + " (" + strings.Join(insertNames, ", ") + ") VALUES "
+	t.stmt.values = t.stmt.insertPrefix + "(" + strings.Join(holders, ", ") + ")"
+	if len(insertNames) == 0 {
+		t.stmt.values = "INSERT INTO " + t.name + " DEFAULT VALUES"
+	}
 	t.stmt.insert = t.stmt.values
 	if t.serial {
 		t.stmt.insert += " RETURNING " + names[t.keys[0]]
@@ -417,18 +366,11 @@ func (t *Table[T, K, S]) derive() {
 		}
 		next++
 	}
-	t.stmt.update = "UPDATE " + t.Name + " SET " + strings.Join(sets, ", ") + where + cas
-	t.stmt.deleteStmt = "DELETE FROM " + t.Name + where
-	t.stmt.platformDelete = "DELETE FROM " + t.Name + byKey + alive
-	t.stmt.count = "SELECT count(*) FROM " + t.Name + " WHERE true"
-	t.stmt.list = "SELECT " + t.stmt.columns + " FROM " + t.Name + " WHERE true"
-}
-
-func (t *Table[T, K, S]) prefix() string {
-	if t.reg != nil {
-		return t.reg.prefix
-	}
-	return "tabula"
+	t.stmt.update = "UPDATE " + t.name + " SET " + strings.Join(sets, ", ") + where + cas
+	t.stmt.deleteStmt = "DELETE FROM " + t.name + where
+	t.stmt.platformDelete = "DELETE FROM " + t.name + byKey + alive
+	t.stmt.count = "SELECT count(*) FROM " + t.name + " WHERE true"
+	t.stmt.list = "SELECT " + t.stmt.columns + " FROM " + t.name + " WHERE true"
 }
 
 // Cols is the select list, for hand-written statements scanned with Rows.Select.
@@ -447,53 +389,16 @@ func (t *Table[T, K, S]) InsertColumns() []string {
 }
 
 // Bind binds the table to a transaction session.
-func (t *Table[T, K, S]) Bind(s Session[S]) *Rows[T, K, S] { return &Rows[T, K, S]{t: t, s: s} }
-
-// Statement records a hand-written statement under key on this table's own
-// Definition. Optional StatementOptions (Quiet, Secret) configure logging for
-// this statement. Declaring a key twice or calling on an undefined table panics.
-func (t *Table[T, K, S]) Statement(key, sql string, opts ...StatementOption) string {
-	if t.reg == nil || t.defID <= 0 {
-		panic(t.prefix() + ".Statement " + t.Name + ": table is not defined")
+func (t *Table[T, K, S]) Bind(s Session[S]) *Rows[T, K, S] {
+	r := &Rows[T, K, S]{t: t, readBinding: bindReader(&t.descriptor, s)}
+	if len(t.stmt.onceColumns) > 0 {
+		r.locks = &lockedRows{}
 	}
-	t.reg.mu.Lock()
-	if t.defID > len(t.reg.defs) {
-		t.reg.mu.Unlock()
-		panic(t.prefix() + ".Statement " + t.Name + ": table is not defined")
-	}
-	d := &t.reg.defs[t.defID-1]
-	if _, ok := d.Statements[key]; ok {
-		t.reg.mu.Unlock()
-		panic(fmt.Sprintf("%s.Statement %s: key %s declared twice", t.prefix(), t.Name, key))
-	}
-	d.Statements[key] = sql
-	t.reg.mu.Unlock()
-
-	meta := stmtMeta{key: t.Name + "." + key}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(&meta)
-		}
-	}
-	if t.meta != nil {
-		t.meta.put(sql, meta)
-	}
-	return sql
+	return r
 }
 
-func (t *Table[T, K, S]) lookupMeta(query, fallbackAction string) stmtMeta {
-	return t.meta.get(query, t.Name+"."+fallbackAction)
-}
+// ReadOnly reports whether the declaration permits only reads.
+func (t *Table[T, K, S]) ReadOnly() bool { return t.readOnly }
 
-// Definition returns a deep copy of this table's own registered Definition.
-func (t *Table[T, K, S]) Definition() Definition {
-	if t.reg == nil || t.defID <= 0 {
-		panic(t.prefix() + ".Definition " + t.Name + ": table is not defined")
-	}
-	t.reg.mu.RLock()
-	defer t.reg.mu.RUnlock()
-	if t.defID > len(t.reg.defs) {
-		panic(t.prefix() + ".Definition " + t.Name + ": table is not defined")
-	}
-	return cloneDefinition(t.reg.defs[t.defID-1])
-}
+// AllowsDelete reports whether the table permits physical deletes.
+func (t *Table[T, K, S]) AllowsDelete() bool { return t.allowDelete }

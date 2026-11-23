@@ -38,7 +38,7 @@ func TestCLICheckAgainstRealPostgres(t *testing.T) {
 		Code string `db:"code"`
 	}
 	reg := tabula.NewRegistry(tabula.RegistryConfig[struct{}]{})
-	tabula.Define(reg, tabula.Table[widget, int64, struct{}]{Name: schema + ".widgets"})
+	tabula.Define(reg, tabula.TableSpec[widget, int64]{Name: schema + ".widgets"})
 
 	dir := t.TempDir()
 	goodSnap := filepath.Join(dir, "good.sql")

@@ -29,7 +29,7 @@ func TestCountModesAndKeysetPagination(t *testing.T) {
 	reg := NewRegistry(RegistryConfig[customTenant]{
 		TenantID: func(s customTenant) any { return string(s) },
 	})
-	tbl := Define(reg, Table[customRow, int64, customTenant]{
+	tbl := Define(reg, TableSpec[customRow, int64]{
 		Name:  "public.custom_items",
 		Order: "id ASC",
 	})
@@ -53,7 +53,7 @@ func TestCountModesAndKeysetPagination(t *testing.T) {
 	rows := tbl.Bind(sess)
 
 	// CountNone skips COUNT(*) and returns -1.
-	got, total, err := rows.List(t.Context(), "t-1", nil, Listing{Count: CountNone})
+	got, total, err := rows.List(t.Context(), nil, Listing{Count: CountNone})
 	require.NoError(t, err)
 	require.Equal(t, int64(-1), total)
 	require.Len(t, got, 3)
@@ -61,7 +61,7 @@ func TestCountModesAndKeysetPagination(t *testing.T) {
 
 	// CountEstimate queries pg_class.reltuples.
 	queries = nil
-	_, total, err = rows.List(t.Context(), "t-1", nil, Listing{Count: CountEstimate})
+	_, total, err = rows.List(t.Context(), nil, Listing{Count: CountEstimate})
 	require.NoError(t, err)
 	require.Equal(t, int64(1234), total)
 	require.Len(t, queries, 2)
@@ -69,7 +69,7 @@ func TestCountModesAndKeysetPagination(t *testing.T) {
 
 	// ListKeyset fetches Limit+1, sets HasMore=true, and builds tuple cursor.
 	queries = nil
-	page, err := rows.ListKeyset(t.Context(), "t-1", nil, KeysetListing{
+	page, err := rows.ListKeyset(t.Context(), nil, KeysetListing{
 		SortColumn: "code",
 		Direction:  "DESC",
 		After:      []any{"c9", int64(99)},
@@ -84,7 +84,7 @@ func TestCountModesAndKeysetPagination(t *testing.T) {
 
 	// Single-column keyset omits tuple parens.
 	queries = nil
-	page, err = rows.ListKeyset(t.Context(), "t-1", nil, KeysetListing{
+	page, err = rows.ListKeyset(t.Context(), nil, KeysetListing{
 		Direction: "ASC",
 		After:     []any{int64(5)},
 		Limit:     5,
@@ -100,14 +100,14 @@ type queryRecorderSession struct {
 	onQuery func(string)
 }
 
-func (q *queryRecorderSession) Scan(ctx context.Context, s customTenant, query string, args []any, dest ...any) error {
+func (q *queryRecorderSession) Scan(ctx context.Context, query string, args []any, dest ...any) error {
 	q.onQuery(query)
-	return q.fakeSession.Scan(ctx, s, query, args, dest...)
+	return q.fakeSession.Scan(ctx, query, args, dest...)
 }
 
-func (q *queryRecorderSession) Each(ctx context.Context, s customTenant, query string, args []any, decode func(func(...any) error) error) error {
+func (q *queryRecorderSession) Each(ctx context.Context, query string, args []any, decode func(func(...any) error) error) error {
 	q.onQuery(query)
-	return q.fakeSession.Each(ctx, s, query, args, decode)
+	return q.fakeSession.Each(ctx, query, args, decode)
 }
 
 func TestViewNestedStructPrefixes(t *testing.T) {
@@ -126,7 +126,7 @@ func TestViewNestedStructPrefixes(t *testing.T) {
 	}
 
 	reg := NewRegistry(RegistryConfig[customTenant]{})
-	v := DefineView(reg, View[joinedRow, customTenant]{Name: "public.orders_with_customers"})
+	v := DefineView(reg, ViewSpec[joinedRow]{Name: "public.orders_with_customers"})
 	require.Equal(t, "o_id, o_code, c_id, c_name, total", v.Cols())
 	require.Equal(t,
 		"o.id AS o_id, o.code AS o_code, c.id AS c_id, c.name AS c_name, total",
@@ -143,7 +143,7 @@ func TestViewNestedStructPrefixes(t *testing.T) {
 			return nil
 		},
 	}
-	got, err := v.Bind(rec).One(t.Context(), "t-1", "SELECT "+v.SelectAs(map[string]string{"o_": "o", "c_": "c"}))
+	got, err := v.Bind(rec).One(t.Context(), "SELECT "+v.SelectAs(map[string]string{"o_": "o", "c_": "c"}))
 	require.NoError(t, err)
 	require.Equal(t, &joinedRow{
 		Order:    orderPart{ID: 11, Code: "ORD-11"},
@@ -208,7 +208,7 @@ func TestTracerAndMetricsHooks(t *testing.T) {
 		Tracer:  tracer,
 		Metrics: metrics,
 	})
-	tbl := Define(reg, Table[customRow, int64, customTenant]{Name: "public.custom_items"})
+	tbl := Define(reg, TableSpec[customRow, int64]{Name: "public.custom_items"})
 
 	var seenTraceKey any
 	sess := &ctxCaptureSession{
@@ -230,7 +230,7 @@ func TestTracerAndMetricsHooks(t *testing.T) {
 
 	// Error populates ErrorClass on Metrics and err on Tracer.
 	sess.scanErr = pgStateErr{"40P01", "deadlock"}
-	_, err := rows.Get(t.Context(), "t-7", 1)
+	_, err := rows.Get(t.Context(), 1)
 	require.ErrorIs(t, err, ErrDeadlock)
 	require.Len(t, metrics.obs, 2)
 	require.Equal(t, ClassDeadlock, metrics.obs[1].errClass)
@@ -242,7 +242,7 @@ type ctxCaptureSession struct {
 	onCtx func(context.Context)
 }
 
-func (c *ctxCaptureSession) Returning(ctx context.Context, s customTenant, q string, args []any, dest ...any) error {
+func (c *ctxCaptureSession) Returning(ctx context.Context, q string, args []any, dest ...any) error {
 	c.onCtx(ctx)
-	return c.errSession.Returning(ctx, s, q, args, dest...)
+	return c.errSession.Returning(ctx, q, args, dest...)
 }

@@ -47,7 +47,7 @@ func TestRunnerScopeSavepointAndRetry(t *testing.T) {
 	reg := tabula.NewRegistry(tabula.RegistryConfig[tenant]{
 		TenantID: func(s tenant) any { return string(s) },
 	})
-	notes := tabula.Define(reg, tabula.Table[note, int64, tenant]{Name: schema + ".notes", Order: "id ASC"})
+	notes := tabula.Define(reg, tabula.TableSpec[note, int64]{Name: schema + ".notes", Order: "id ASC"})
 
 	runner := stdsql.NewRunner(db, stdsql.ScopePolicy[tenant]{
 		SetupTx: func(ctx context.Context, tx *sql.Tx, scope tenant) error {
@@ -64,7 +64,7 @@ func TestRunnerScopeSavepointAndRetry(t *testing.T) {
 	// Scope SetupTx + Savepoint rollback keeps outer transaction intact.
 	require.NoError(t, runner.Within(ctx, "t-1", func(ctx context.Context, s *stdsql.Session[tenant]) error {
 		var current string
-		require.NoError(t, s.Scan(ctx, "t-1", "SELECT current_setting('app.current_tenant')", nil, &current))
+		require.NoError(t, s.Scan(ctx, "SELECT current_setting('app.current_tenant')", nil, &current))
 		require.Equal(t, "t-1", current)
 
 		r := notes.Bind(s)
@@ -80,10 +80,10 @@ func TestRunnerScopeSavepointAndRetry(t *testing.T) {
 		require.ErrorContains(t, spErr, "abort inner")
 
 		// GuardQuery blocks forbidden SQL.
-		_, err := s.Exec(ctx, "t-1", "SET ROLE postgres")
+		_, err := s.Exec(ctx, "SET ROLE postgres")
 		require.ErrorContains(t, err, "forbidden statement")
 
-		all, err := r.Find(ctx, "t-1", nil, tabula.Listing{})
+		all, err := r.Find(ctx, nil, tabula.Listing{})
 		require.NoError(t, err)
 		require.Len(t, all, 1)
 		require.Equal(t, "kept", all[0].Body)
@@ -100,7 +100,7 @@ func TestRunnerScopeSavepointAndRetry(t *testing.T) {
 	// WithinIsolation works with Serializable + Retry helper.
 	require.NoError(t, tabula.Retry(ctx, tabula.RetryConfig{MaxAttempts: 3}, func(ctx context.Context) error {
 		return runner.WithinIsolation(ctx, "t-1", sql.LevelSerializable, func(ctx context.Context, s *stdsql.Session[tenant]) error {
-			rows, err := notes.Bind(s).Find(ctx, "t-1", nil, tabula.Listing{})
+			rows, err := notes.Bind(s).Find(ctx, nil, tabula.Listing{})
 			require.NoError(t, err)
 			require.Len(t, rows, 1)
 			return nil
