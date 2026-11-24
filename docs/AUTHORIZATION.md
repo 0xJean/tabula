@@ -1,10 +1,12 @@
 # PostgreSQL authorization and RLS verification
 
-The current v0.3 development API lets an application audit all its handwritten SQL against a disposable installation of its PostgreSQL schema. The application owns the roles, the mapping from entry points to roles, the expected grants, policy categories, exceptions and test data. Tabula supplies the collectors, comparators and rollback-based probes.
+Tabula v0.3 lets an application audit its configured SQL call sites against a disposable installation of its PostgreSQL schema. The application owns the roles, the mapping from entry points to roles, the expected grants, policy categories, exceptions and test data. Tabula supplies the collectors, comparators and rollback-based probes.
 
 ## Collect the workload
 
 Run `tabula inventory --config inventory.json` in the application checkout. `Dir` is relative to the working directory. For example, this configuration collects the SQL argument of `(*sql.Tx).QueryContext` and `(*sql.Tx).ExecContext`.
+
+`inventory.json`
 
 ```json
 {
@@ -25,6 +27,8 @@ Assign each site ID to an entry such as `{"Roles":["docs_reader"]}` in a binding
 
 Consumers can also supply ordinary named statements under each execution role. Both routes use the same workload format.
 
+`workload.json`
+
 ```json
 {
   "docs_reader": [
@@ -40,7 +44,16 @@ Consumers can also supply ordinary named statements under each execution role. B
 
 ## Report grant drift before narrowing access
 
-Select schemas and direct grantees in `scope.json`. For example, `{"Schemas":["docs"],"Roles":["docs_reader","docs_writer","PUBLIC"]}` includes the two application roles and grants made to everyone. All relations in those schemas are in scope, including objects with no Tabula descriptor.
+Select schemas and direct grantees in `scope.json`. This scope includes the two application roles and grants made to everyone. It covers all relations in the selected schema, including objects with no Tabula descriptor.
+
+`scope.json`
+
+```json
+{
+  "Schemas": ["docs"],
+  "Roles": ["docs_reader", "docs_writer", "PUBLIC"]
+}
+```
 
 ```sh
 tabula catalog --config scope.json --section grants.json
@@ -48,6 +61,8 @@ tabula grants --config privileges.json
 ```
 
 A grant manifest contains the same scope plus its expected entries. This small declaration expects exactly one column grant for one role.
+
+`privileges.json`
 
 ```json
 {
@@ -64,6 +79,8 @@ A grant manifest contains the same scope plus its expected entries. This small d
 ## Trial each revocation
 
 Pass one role, its schemas and its named statements to `tabula minimize --config trials.json`. The maintenance connection needs authority to assume the role and alter its grants in a disposable clone.
+
+`trials.json`
 
 ```json
 {
@@ -97,11 +114,14 @@ The four lists contain policy identities and predicates, FORCE RLS relations, di
 
 `tabula check-policies --config policies.json` accepts the catalog scope plus `Rules`. A rule can specify `Command`, `Permissive`, an exact role set, identifier patterns (`SchemaPattern`, `TablePattern`, `NamePattern`) and Go regular expressions for `Using` and `Check`. Conditions are combined. `Entries` restricts a category to registered schema/table/policy identities. `UnregisteredOnly` lets a general category exclude the exception registry.
 
+`policies.json`
+
 ```json
 {
-  "Schemas":["docs"], "Roles":["docs_reader"],
+  "Schemas":["docs"], "Roles":["docs_reader","docs_writer"],
   "Rules":[
     {"Name":"reader","Command":"SELECT","Roles":["docs_reader"],"UnregisteredOnly":true},
+    {"Name":"writer","Command":"INSERT","Roles":["docs_writer"],"UnregisteredOnly":true},
     {"Name":"registered","Permissive":false,"Entries":[{"Schema":"docs","Table":"notes","Name":"scope_fence"}]}
   ]
 }
@@ -111,9 +131,11 @@ Each policy must match exactly one rule. Unmatched policies, overlapping matches
 
 ## Check command coverage and exercise rows
 
-`tabula check-coverage --config workload.json` checks catalog policy coverage on RLS-enabled tables. It accounts for permissive policies, `ALL`, `PUBLIC`, inherited roles, FORCE and role bypass. `INSERT … RETURNING` requires SELECT coverage. Targeted `ON CONFLICT` needs SELECT coverage and `DO UPDATE` also needs UPDATE. Locking reads need UPDATE coverage. For joins, CTEs, multi-source writes and other complex SQL, supply the full reviewed `Access` list on the statement, for example `[{"Table":"docs.notes","Command":"SELECT"}]`. Qualify relations for the application search path. Review view-owner and function execution contexts separately. Pair structural checks with role verification so that PostgreSQL also validates the SQL and the referenced objects. [PostgreSQL policy command rules](https://www.postgresql.org/docs/17/sql-createpolicy.html)
+`tabula check-coverage --config workload.json` checks catalog policy coverage on RLS-enabled tables. It accounts for permissive policies, `ALL`, `PUBLIC`, inherited roles, FORCE and role bypass. `INSERT … RETURNING` requires SELECT coverage. In the example workload, a writer with the required column grants and only an INSERT policy can pass `verify-roles`. Running `check-coverage` then reports a missing SELECT policy for `add-note`. Targeted `ON CONFLICT` needs SELECT coverage and `DO UPDATE` also needs UPDATE. Locking reads need UPDATE coverage. For joins, CTEs, multi-source writes and other complex SQL, supply the full reviewed `Access` list on the statement, for example `[{"Table":"docs.notes","Command":"SELECT"}]`. Qualify relations for the application search path. Review view-owner and function execution contexts separately. Pair structural checks with role verification so that PostgreSQL also validates the SQL and the referenced objects. [PostgreSQL policy command rules](https://www.postgresql.org/docs/17/sql-createpolicy.html)
 
 `tabula test-rls --config behavior.json` or `RunRLSMatrix` executes the role × scope × statement matrix. Every cell must have one expectation. `Rows` compares a multiset of text values and SQL nulls, or checks order with `Ordered`. `Affected` asserts a write count. `Denied` accepts `rls_denied` or `insufficient_privilege`. Invisible rows commonly yield an empty result or zero affected rows.
+
+`behavior.json`
 
 ```json
 {

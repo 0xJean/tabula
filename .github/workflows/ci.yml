@@ -115,5 +115,6 @@ jobs:
       - name: Verify standalone modules against an unpublished core
         if: matrix.module == '.'
         run: |
-          scripts/release.sh prepare v0.0.0
-          scripts/release.sh verify v0.0.0
+          candidate="$(scripts/docs.sh --series).999999"
+          scripts/release.sh prepare "$candidate"
+          scripts/release.sh verify "$candidate"

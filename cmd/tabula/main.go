@@ -1,19 +1,12 @@
-// Command tabula verifies committed Tabula SQL snapshots and PostgreSQL RLS
-// configuration against a real PostgreSQL database.
-//
-// Usage:
-//
-//	tabula check --dsn "$POSTGRES_DSN" --snapshot path/to/defined-statements.sql [--role app_role]
-//	tabula check-rls --dsn "$POSTGRES_DSN" [--schema public] [--tables a,b] [--force] [--restrictive] [--forbid-roles r1,r2]
-//	tabula inventory --config inventory.json [--bindings bindings.json]
-//	tabula {verify-roles|grants|minimize|catalog|check-policies|check-coverage|test-rls} --config file.json
-//
-// Database commands accept TABULA_DSN. See docs/AUTHORIZATION.md for the JSON formats.
+// Command tabula verifies SQL and PostgreSQL authorization. Run tabula --help
+// for the command list and tabula <command> -h for its flags. Database commands
+// accept TABULA_DSN. See docs/AUTHORIZATION.md for the configuration formats.
 package main
 
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -29,45 +22,70 @@ func main() {
 	os.Exit(run(context.Background(), os.Args[1:], os.Stdout, os.Stderr))
 }
 
+type command struct {
+	name, summary string
+	run           func(context.Context, string, []string, io.Writer, io.Writer) int
+}
+
+func commands() []command {
+	return []command{
+		{"check", "Prepare and explain statements from a SQL snapshot.", runCheck},
+		{"check-rls", "Check row-level security settings on tables.", runCheckRLS},
+		{"inventory", "Collect SQL call sites and their role assignments from Go source.", runAudit},
+		{"verify-roles", "Prepare and explain each role's workload.", runAudit},
+		{"grants", "Compare direct grants with a manifest and report reconciliation SQL.", runAudit},
+		{"minimize", "Trial grant removals in a rolled-back transaction.", runAudit},
+		{"catalog", "Snapshot the PostgreSQL authorization catalog or compare saved snapshots.", runAudit},
+		{"check-policies", "Classify installed policies using application rules.", runAudit},
+		{"check-coverage", "Check RLS command coverage for a role workload.", runAudit},
+		{"test-rls", "Run a role and scope matrix against expected rows or denials.", runAudit},
+	}
+}
+
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		printUsage(stderr)
 		return 2
 	}
 	switch args[0] {
-	case "inventory", "verify-roles", "grants", "minimize", "catalog", "check-policies", "check-coverage", "test-rls":
-		return runAudit(ctx, args[0], args[1:], stdout, stderr)
-	case "check":
-		return runCheck(ctx, args[1:], stdout, stderr)
-	case "check-rls":
-		return runCheckRLS(ctx, args[1:], stdout, stderr)
 	case "-h", "--help", "help":
 		printUsage(stdout)
 		return 0
-	default:
-		_, _ = fmt.Fprintf(stderr, "tabula: unknown subcommand %q\n", args[0])
-		printUsage(stderr)
-		return 2
 	}
+	for _, c := range commands() {
+		if args[0] == c.name {
+			return c.run(ctx, c.name, args[1:], stdout, stderr)
+		}
+	}
+	_, _ = fmt.Fprintf(stderr, "tabula: unknown subcommand %q\n", args[0])
+	printUsage(stderr)
+	return 2
 }
 
 func printUsage(w io.Writer) {
-	_, _ = fmt.Fprintln(w, "usage:")
-	_, _ = fmt.Fprintln(w, "  tabula inventory --config <file> [--bindings <file>]")
-	_, _ = fmt.Fprintln(w, "  tabula {verify-roles|grants|minimize|check-policies|check-coverage|test-rls} --config <file> --dsn <postgres-dsn>")
-	_, _ = fmt.Fprintln(w, "  tabula catalog --config <file> --dsn <postgres-dsn> [--section <file>] [--against <directory>]")
-	_, _ = fmt.Fprintln(w, "  tabula check --dsn <postgres-dsn> --snapshot <file> [--role <role>]")
-	_, _ = fmt.Fprintln(w, "  tabula check-rls --dsn <postgres-dsn> [--schema public] [--tables t1,t2] [--force] [--restrictive] [--forbid-roles r1,r2]")
+	_, _ = fmt.Fprintln(w, "Usage: tabula <command> [flags]")
+	for _, c := range commands() {
+		_, _ = fmt.Fprintf(w, "  tabula %-15s %s\n", c.name, c.summary)
+	}
+	_, _ = fmt.Fprintln(w, "Use tabula <command> -h for flags.")
 }
 
-func runCheck(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("check", flag.ContinueOnError)
+func flagExitCode(err error) int {
+	if errors.Is(err, flag.ErrHelp) {
+		return 0
+	}
+	return 2
+}
+
+func runCheck(ctx context.Context, name string, args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	dsn := fs.String("dsn", os.Getenv("TABULA_DSN"), "PostgreSQL DSN (defaults to TABULA_DSN)")
+	dsn := fs.String("dsn", "", "PostgreSQL DSN (defaults to TABULA_DSN)")
+	*dsn = os.Getenv("TABULA_DSN")
 	snapshotPath := fs.String("snapshot", "", "path to a sqlcheck snapshot file")
 	role := fs.String("role", "", "optional PostgreSQL role to SET LOCAL ROLE before PREPARE/EXPLAIN")
 	if err := fs.Parse(args); err != nil {
-		return 2
+		return flagExitCode(err)
 	}
 	if *dsn == "" {
 		_, _ = fmt.Fprintln(stderr, "tabula check: --dsn (or TABULA_DSN) is required")
@@ -122,17 +140,18 @@ func runCheck(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	return 0
 }
 
-func runCheckRLS(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("check-rls", flag.ContinueOnError)
+func runCheckRLS(ctx context.Context, name string, args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	dsn := fs.String("dsn", os.Getenv("TABULA_DSN"), "PostgreSQL DSN (defaults to TABULA_DSN)")
+	dsn := fs.String("dsn", "", "PostgreSQL DSN (defaults to TABULA_DSN)")
+	*dsn = os.Getenv("TABULA_DSN")
 	schema := fs.String("schema", "public", "PostgreSQL schema to audit")
 	tablesCSV := fs.String("tables", "", "comma-separated table names that must have RLS enabled (default: all RLS tables in schema)")
 	force := fs.Bool("force", true, "require FORCE ROW LEVEL SECURITY")
 	restrictive := fs.Bool("restrictive", false, "require at least one RESTRICTIVE policy per table")
 	forbidCSV := fs.String("forbid-roles", "", "comma-separated role names forbidden from appearing directly in policies")
 	if err := fs.Parse(args); err != nil {
-		return 2
+		return flagExitCode(err)
 	}
 	if *dsn == "" {
 		_, _ = fmt.Fprintln(stderr, "tabula check-rls: --dsn (or TABULA_DSN) is required")

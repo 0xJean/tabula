@@ -49,7 +49,7 @@ func runAudit(ctx context.Context, name string, args []string, stdout, stderr io
 		fs.StringVar(&opts.against, "against", "", "compare with committed snapshot directory")
 	}
 	if err := fs.Parse(args); err != nil {
-		return 2
+		return flagExitCode(err)
 	}
 	if dsn == "" {
 		dsn = os.Getenv("TABULA_DSN")
@@ -170,7 +170,7 @@ func audit(ctx context.Context, name string, db *sql.DB, raw []byte, opts auditO
 		}
 		f, err := sqlcheck.RunRLSMatrix(ctx, db, m)
 		return f, f, err
-	default:
+	case "catalog":
 		c, err := decodeConfig[sqlcheck.CatalogScope](raw)
 		if err != nil {
 			return nil, nil, err
@@ -180,6 +180,8 @@ func audit(ctx context.Context, name string, db *sql.DB, raw []byte, opts auditO
 			return nil, nil, err
 		}
 		return catalogReport(catalog, opts.section, opts.against)
+	default:
+		return nil, nil, fmt.Errorf("unknown audit command %q", name)
 	}
 }
 

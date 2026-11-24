@@ -5,7 +5,7 @@
 #   scripts/check.sh [--static | --unit | --all]
 #
 # Modes:
-#   --static  Formatting, dependency/module boundaries, go vet, CLI & example builds.
+#   --static  Formatting, dependency/module boundaries, go vet, public reference and builds.
 #   --unit    --static plus unit tests (-race) and 1s fuzz runs across all targets.
 #   --all     --unit plus real PostgreSQL integration tests (-race), coverage gate,
 #             and comparison benchmark smoke test (requires TABULA_TEST_DSN).
@@ -62,12 +62,14 @@ for mod in . pgxdriver benchmarks; do
   )
 done
 
-echo "==> Running go vet and building CLI & example"
+echo "==> Running go vet and building the example"
 for mod in . pgxdriver benchmarks; do
   (cd "$mod" && go vet -tags=integration ./...)
 done
-go build -o /dev/null ./cmd/tabula
 go build -o /dev/null ./examples/multitenant
+
+echo "==> Checking the integration guide and generated public reference"
+scripts/docs.sh --check
 
 if [[ "$mode" == --static ]]; then
   echo "==> Static checks passed"

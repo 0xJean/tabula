@@ -46,11 +46,20 @@ done
 go test -run='^$' -fuzz='^FuzzParseSnapshot$' -fuzztime=1s ./sqlcheck
 ```
 
+## Keep each version's docs with its code
+
+Edit documentation in the same change as the behavior it describes. A release tag captures the code, guides, reference and examples together. Link between files with relative paths so readers stay on that revision.
+
+- The [integration guide](docs/INTEGRATION.md) maps application tasks to packages and commands. Update it when a capability is added, renamed or removed.
+- Go declarations, GoDoc and CLI flag definitions own signatures and defaults. Run `scripts/docs.sh --write` after changing them and review [the generated reference](docs/REFERENCE.md). The static gate regenerates it and checks that every public package and command has an entry in the guide.
+- Keep examples and behavioral details in the relevant guide. The [cookbook](docs/COOKBOOK.md) covers runtime use, [authorization](docs/AUTHORIZATION.md) covers workload and policy configurations, and [logging](docs/LOGGING.md) covers telemetry. Link to these from other pages. Update an executable example or behavioral test when a contract changes.
+- Put upgrade instructions in the [migration guide](docs/MIGRATION.md), history in the [changelog](CHANGELOG.md) and proposed features in the [roadmap](ROADMAP.md). Check the old tag when describing a previous signature.
+
 ## Releasing the modules
 
 Release tooling requires Git, Go and jq. The benchmark module is a development harness. Only the core and pgxdriver receive version tags.
 
-1. Run `scripts/release.sh plan vX.Y.Z` to print the intended operations. Finalize and commit the core sources and changelog before preparing the child manifests.
+1. Run `scripts/release.sh plan vX.Y.Z` to print the intended operations. Finalize and commit the core sources, integration guide, reference and changelog before preparing the child manifests. The guide title identifies the release series (for example `v0.3`).
 2. Run `scripts/release.sh prepare vX.Y.Z`. In a temporary Git clone and module cache, Go builds the candidate core archive from HEAD. With `GOWORK=off`, the script removes core replacements, pins the candidate and runs `go mod tidy` for each child. Review and commit both manifests and their checksums.
-3. Run `scripts/release.sh verify vX.Y.Z` to check the pins, checksums and standalone builds against the committed core. If the core changes, rerun preparation. Go excludes nested modules from the core archive, so committing the prepared child manifests preserves its checksum.
+3. Run `scripts/release.sh verify vX.Y.Z` to check the guide series, generated reference, pins, checksums and standalone builds against the candidate. If the core changes, rerun preparation. Go excludes nested modules from the core archive, so committing the prepared child manifests preserves its checksum.
 4. When ready to publish, `scripts/release.sh publish vX.Y.Z` repeats verification on clean `main`. It rejects replacement directives in all three manifests and sends the verified commit to `main`, `vX.Y.Z` and `pgxdriver/vX.Y.Z` in one atomic push. CI only exercises preparation and verification.

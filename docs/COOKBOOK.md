@@ -40,6 +40,8 @@ type Record struct {
     ID           int64      `db:"id,key,serial"`
     Tenant       TenantID   `db:"tenant_id,scope"`
     Code         string     `db:"code"`
+    Status       string     `db:"status"`
+    CreatedAt    time.Time  `db:"created_at,once"`
     PasswordHash string     `db:"password_hash,secret"`
     CreatedBy    string     `db:"created_by,once"`
     Version      int        `db:"version,version"`
@@ -67,8 +69,8 @@ err = r.Save(ctx, *row) // checks version CAS and once columns
 ## 3. Conditional state transitions (`UpdateWhere` / `SetWhere`)
 
 ```go
-row.Status = "published"
-matched, err := r.SetWhere(ctx, row, []string{"status"}, "status = ?", "draft")
+change := Record{ID: id, Tenant: sess.Scope(), Status: "published"}
+matched, err := r.SetWhere(ctx, change, []string{"status"}, "status = ?", "draft")
 if err != nil {
     return err
 }
@@ -154,16 +156,16 @@ n, err := pgxdriver.CopyFrom(ctx, pgxSession, records, batch)
 ## 9. CI verification with `tabula check`
 
 Commit the rendered SQL snapshot from your tests (`sqlcheck.RenderSnapshot(reg.Defined())`),
-then run in CI against a migrated database:
+then run the CLI built from the same Tabula revision against a migrated test database:
 
 ```sh
-go run ./cmd/tabula check \
+tabula check \
   --dsn "$POSTGRES_DSN" \
   --snapshot test/sqlprepare/testdata/defined-statements.sql \
   --role app_user
 
 # Also audit Row-Level Security (ENABLE + FORCE + RESTRICTIVE):
-go run ./cmd/tabula check-rls \
+tabula check-rls \
   --dsn "$POSTGRES_DSN" \
   --schema public \
   --force \
@@ -182,7 +184,7 @@ for job, err := range jobs.Bind(sess).Iter(ctx, nil, tabula.Listing{
 // The cursor is closed. Process the claimed IDs in the same transaction.
 ```
 
-Each iteration executes the query in the bound session. A break releases the cursor. Finish the range or break before issuing another statement on the same transaction. PostgreSQL retains row locks until the transaction ends. Streaming a locked table with `once` columns retains a snapshot per locked row. Unlocked exports decode one row at a time. For hand-written SQL over the table columns use `rows.SelectIter(ctx, query, args...)`. For a projection, use `view.Bind(sess).Iter(ctx, query, args...)`.
+Starting a range executes one query in the bound session. Each yielded row comes from that cursor. A break releases it. Finish the range or break before issuing another statement on the same transaction. PostgreSQL retains row locks until the transaction ends. Streaming a locked table with `once` columns retains a snapshot per locked row. Unlocked exports decode one row at a time. For hand-written SQL over the table columns use `rows.SelectIter(ctx, query, args...)`. For a projection, use `view.Bind(sess).Iter(ctx, query, args...)`.
 
 ## 11. Batch upserts and atomic updates
 

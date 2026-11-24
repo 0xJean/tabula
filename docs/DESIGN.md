@@ -26,9 +26,9 @@ pull request.
    The number of queries and their SQL are always visible in the caller.
 2. **No DDL.** No AutoMigrate, no schema generation. The library may only check that code
    and schema agree.
-3. **No hidden state or hooks.** No global registry, no implicit callbacks, no
-   `time.Now()` inside the library. Clocks, tracers, loggers, scopes and error policies
-   are passed in.
+3. **No hidden state or hooks.** The application supplies the registry, scope and error
+   policy and owns lifecycle decisions. Opt-in logging and metrics use `LogConfig.Now`
+   for statement duration, with `time.Now` as the default.
 
 ## Core rules
 
@@ -38,10 +38,9 @@ pull request.
 - **Writes confirm what they changed.** A write that must touch one row fails unless it
   touched exactly one; insert-only (`once`) columns and optimistic `version` columns are
   guarded by default.
-- **Errors are classified, not translated.** The library reports unique, foreign-key,
-  check and not-null violations, serialization failures, deadlocks and cancellation as
-  distinct errors; the application maps them to its own error model through an
-  `ErrorPolicy`.
+- **Errors retain their database meaning.** `ClassifyError` exposes the PostgreSQL
+  error class and sentinel. Applications map them to their own errors through an
+  `ErrorPolicy`. The [core reference](REFERENCE.md#tabula) lists the classes.
 - **Scope is generic.** The scope type `S` (for example a tenant, workspace, or org ID) is opaque to the engine.
   Row-scope predicates, row-level security variables and similar policies are supplied by the
   application binding.

@@ -59,7 +59,7 @@ func (l *LogLevelVar) Level() LogLevel { return LogLevel(l.v.Load()) }
 func (l *LogLevelVar) Set(level LogLevel) { l.v.Store(int32(level)) }
 
 // LogConfig configures opt-in structured logging via log/slog on a Registry.
-// When Logger is nil, logging is completely off and costs one nil check.
+// Logging requires a registry or binding logger and a level other than LogOff.
 type LogConfig struct {
 	Logger        *slog.Logger
 	Level         LogLevel
@@ -71,8 +71,8 @@ type LogConfig struct {
 	Sample float64
 	// SQL includes the statement SQL as "tabula.sql" when Level is LogAll.
 	SQL bool
-	// Now overrides the clock used to measure statement duration (optional;
-	// defaults to time.Now only when Logger is non-nil).
+	// Now supplies the clock for statement duration, defaulting to time.Now.
+	// Active logging or a Metrics hook enables timing.
 	Now func() time.Time
 }
 

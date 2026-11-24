@@ -1,24 +1,25 @@
-# Migrating to the development API
+# Migrating to Tabula v0.3
 
-The current checkout contains the next minor release. The published v0.2.0 tag has the previous signatures.
+Follow this guide when upgrading an application to v0.3. For the full surface after the upgrade, see the [integration guide](INTEGRATION.md).
 
-## From Tabula v0.2 or an earlier development checkout
+## From the v0.2.0 release
 
-| Previous call or declaration | Current form |
+| v0.2.0 declaration or call | v0.3 equivalent |
 | --- | --- |
-| `Define(reg, Table[Order, int64, Tenant]{…})` | `Define(reg, TableSpec[Order, int64]{…})` |
-| `DefineView(reg, View[Summary, Tenant]{…})` | `DefineView(reg, ViewSpec[Summary]{…})` |
+| `Define(reg, Table[Record, int64, Scope]{…})` | `Define(reg, TableSpec[Record, int64]{…})` |
+| `DefineView(reg, View[Summary, Scope]{…})` | `DefineView(reg, ViewSpec[Summary]{…})` |
 | `` `db:"tenant_id,tenant"` `` | `` `db:"tenant_id,scope"` `` |
 | `RegistryConfig{TenantID: …, TenantWrap: …}` | `RegistryConfig{ScopeID: …, ScopeWrap: …}` |
-| `ScopePolicy{IsPlatform: …}`, `sess.Tenant()`, `sess.Platform()` | `ScopePolicy{IsUnscoped: …}`, `sess.Scope()`, `sess.Unscoped()` |
-| `tbl.Name`, `tbl.ReadOnly`, `tbl.AllowDelete` | `tbl.Name()`, `tbl.ReadOnly()`, `tbl.AllowsDelete()` |
-| `rows.Get(ctx, scope, id)`, `rows.Delete(ctx, scope, id)` | `rows.Get(ctx, id)`, `rows.Delete(ctx, id)` |
+| `sess.Tenant()`, `sess.Platform()` | `sess.Scope()`, `sess.Unscoped()` |
+| `tbl.Name` | `tbl.Name()` |
+| `rows.Get(ctx, scope, id)`, `rows.Lock(ctx, scope, id)` | `rows.Get(ctx, id)`, `rows.Lock(ctx, id)` |
 | `rows.List(ctx, scope, where, page)` | `rows.List(ctx, where, page)` |
 | `view.One(ctx, scope, sql, args…)` | `view.One(ctx, sql, args…)` |
 | `session.Exec(ctx, scope, sql, args…)` | `session.Exec(ctx, sql, args…)` |
-| `Listing{Lock: true}`, `KeysetListing{Lock: true}` | `Listing{Lock: LockUpdate}`, `KeysetListing{Lock: LockUpdate}` |
-| `stdsql.Retry`, `stdsql.RetryConfig`, `stdsql.IsRetryable` | `tabula.Retry`, `tabula.RetryConfig`, `tabula.IsRetryable` |
-| `pqdriver.IsUniqueViolation`, `pgxdriver.SQLState` | `tabula.IsUniqueViolation`, `tabula.SQLState`. The other SQLSTATE helpers move in the same way. |
+| `Listing{Lock: true}` | `Listing{Lock: LockUpdate}` |
+| `pqdriver.SQLState`, `pqdriver.IsUniqueViolation` | `tabula.SQLState`, `tabula.IsUniqueViolation`. Other SQLSTATE predicates also live in the root package. |
+
+v0.3 adds the `stdsql` and `pgxdriver` session adapters, driver-independent `tabula.Retry`, `KeysetListing`, `TableSpec.ReadOnly` and opt-in physical delete through `TableSpec.AllowDelete`. The [changelog](../CHANGELOG.md) lists additions separately from changes to existing calls.
 
 Declare the name, default order, escape columns, soft-delete policy and write permissions in the spec. The registry supplies the scope type. The compiled table or view keeps its own bindings. `Definition()` returns a snapshot. `Statement`, `Requires`, `RequiresFunction` and `DefineUpsert` register additional SQL and privilege metadata during application initialization.
 

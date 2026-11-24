@@ -39,7 +39,7 @@ Run locally via [scripts/check.sh](../scripts/check.sh):
 
 ```sh
 scripts/workspace.sh
-scripts/check.sh --static   # gofmt, stdlib-only core check, module boundaries, go vet, builds
+scripts/check.sh --static   # gofmt, module boundaries, stdlib-only core, go vet, builds and reference drift
 scripts/check.sh --unit     # --static + unit tests (-race) + 1s fuzzing
 TABULA_TEST_DSN='postgres://...' scripts/check.sh --all  # full gate including PG integration & coverage
 ```
@@ -51,7 +51,13 @@ CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) additionally runs:
 - **Lint**: `golangci-lint` (v2) with [.golangci.yml](../.golangci.yml) across `.`, `pgxdriver`, and `benchmarks`
 - **Security**: `govulncheck -test -tags=integration ./...` across all three modules
 - **Example E2E**: `examples/multitenant` migrated and executed against PostgreSQL 17
-- **Release rehearsal**: `scripts/release.sh prepare v0.0.0` + `scripts/release.sh verify v0.0.0` with `GOWORK=off`
+- **Release rehearsal**: prepare and verify a synthetic patch of the documented minor version. The release script checks the standalone module pins with `GOWORK=off` and regenerates the reference against the candidate modules.
+
+## Documentation checks
+
+`scripts/docs.sh --check` runs inside the static gate. It compares the committed reference with `go doc -all` for every public product package and the built CLI's help for every registered command. It compares the integration guide’s package and command links in both directions, catching omitted entries and links to retired ones. Use `scripts/docs.sh --write` to regenerate the reference after a reviewed API change.
+
+`TestAuthorizationGuide` runs the named JSON configurations from [the authorization guide](AUTHORIZATION.md) through the CLI against disposable PostgreSQL, including an expected coverage finding. The [GoDoc examples](../example_test.go) and [multitenant application](../examples/multitenant/README.md) provide executable runtime examples. Behavioral changes also require review of the explanatory text and migration instructions.
 
 ## Authorization fixtures
 

@@ -14,6 +14,8 @@ v1.0 a minor version may contain breaking changes.
 
 ### Additions
 
+- A [v0.3 integration guide](docs/INTEGRATION.md) maps application tasks to the complete [Go API and CLI reference](docs/REFERENCE.md). CI checks reference drift and runs the authorization guide's JSON examples. Release verification checks the guide's version series and the candidate reference. `tabula --help` lists individual commands. Every subcommand's `-h` prints its flags and exits successfully without displaying the configured DSN.
+
 - PostgreSQL authorization auditing covers typed Go source inventory, per-role workloads, exact direct grant manifests, transactional privilege trials, four catalog snapshots, policy classification, command coverage and rollback-based RLS behavior matrices. The CLI accepts application-owned JSON configurations. [Authorization guide](docs/AUTHORIZATION.md)
 - Added `tabula.NewSessionGuard` and separate SQLSTATE 42501 classes and sentinels for RLS denials and insufficient privileges.
 - The standard-library `postgresfixture` package caches installation templates and clones an isolated database for each test.

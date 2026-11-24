@@ -2,7 +2,7 @@
 
 # Tabula
 
-[![CI](https://github.com/0xJean/tabula/actions/workflows/ci.yml/badge.svg)](https://github.com/0xJean/tabula/actions/workflows/ci.yml) [![Go Reference](https://pkg.go.dev/badge/github.com/0xJean/tabula.svg)](https://pkg.go.dev/github.com/0xJean/tabula) [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![CI](https://github.com/0xJean/tabula/actions/workflows/ci.yml/badge.svg)](https://github.com/0xJean/tabula/actions/workflows/ci.yml) [![Go Reference](https://pkg.go.dev/badge/github.com/0xJean/tabula.svg)](docs/REFERENCE.md) [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 Declarative descriptors, explicit SQL, verified against a real PostgreSQL.
 
@@ -11,7 +11,9 @@ plain single-table statements from them, decodes the rows of hand-written SQL, a
 checks every registered statement against a real database. It is not an ORM: it never
 builds joins, never generates DDL, and never runs hidden callbacks.
 
-> The latest tagged core release is v0.2.0. This checkout contains the development API for v0.3. See the [migration guide](docs/MIGRATION.md) and [changelog](CHANGELOG.md).
+**Integrating v0.3?** Start with the [application integration guide](docs/INTEGRATION.md). It maps each task to its package or command. The [complete Go API and CLI reference](docs/REFERENCE.md) is generated from this checkout.
+
+Read the README at the Git tag or commit your application builds. The [migration guide](docs/MIGRATION.md) covers upgrading to v0.3. The [changelog](CHANGELOG.md) records release status.
 
 ## Try it locally
 
@@ -23,20 +25,6 @@ docker compose up -d --wait && go run .
 ```
 
 The example verifies the schema, executes scoped writes and shows what each tenant can read through a PostgreSQL RLS policy. [Example and expected output](examples/multitenant/README.md)
-
-## What it does
-
-| Need | Tabula |
-| --- | --- |
-| Single-table CRUD | `Define(reg, TableSpec[T, K]{…})` derives get, lock, insert, save, set, soft/physical delete, count and list from `db` tags (`key`, `serial`, `scope`, `deleted`, `version`, `once`, `json`, `zero`, `array`, `secret`), including composite struct keys and timestamp/bool/status soft delete |
-| Conditional, upsert, delete & batch writes | `UpdateWhere`, `SetWhere`, `DefineUpsert`/`Upsert`, `Delete`/`DeleteWhere`, `InsertReturning`, `SaveReturning`, `InsertMany`, `UpsertMany`, `SetExpr` |
-| Rows of hand-written SQL (joins, views, materialized views) | `DefineView(reg, ViewSpec[T]{…})` with nested struct prefixes, `SelectAs`, `Requires`, and `RequiresFunction`: you write the SQL, Tabula decodes the rows |
-| Batch, locked & keyset reads | `GetMany`, `LockMany` (fixed key order), `Iter`, `LockBy`, `LockMode` (including `SKIP LOCKED` and `NOWAIT`), `ListKeyset`, `CountExact`/`CountNone`/`CountEstimate` |
-| Safe dynamic parts & guards | `Filter` (`And`, `AndIf`, `In`, `Range`, `??` escape), `OrderSpec` (whitelisted sort columns), `GuardNoSessionEscape`, `NewSessionGuard` (protected GUC prefixes, role and session changes) |
-| Sessions, scope & retries | `stdsql` (`*sql.DB`/`*sql.Tx` Runner, `ScopePolicy` RLS plug-in, `Savepoint`, read-only `Direct` pool) and `pgxdriver` (`pgx/v5` Runner, Session, Direct & binary COPY), with driver-independent `tabula.Retry` |
-| Error classification | Distinct PostgreSQL sentinels & classes (`unique`, `foreign_key`, `check`, `not_null`, `serialization`, `deadlock`, `canceled`, `rls_denied`, `insufficient_privilege`) |
-| Observability | Opt-in `log/slog` ([spec](docs/LOGGING.md)), `Tracer`, and `Metrics` interfaces on `RegistryConfig` |
-| Verification & CI CLI | Descriptor and handwritten SQL, role workloads, direct grant drift and rollback-based minimization, policy catalogs, classification, command coverage and RLS behavior matrices. [Authorization guide](docs/AUTHORIZATION.md) |
 
 ## Benchmarks
 
@@ -75,13 +63,9 @@ go test -fuzz=FuzzGuardNoSessionEscape -fuzztime=5s .
 go test -fuzz=FuzzParseSnapshot -fuzztime=5s ./sqlcheck
 ```
 
-## Install a tagged release
+## Working from the v0.3 checkout
 
-```sh
-go get github.com/0xJean/tabula@v0.2.0
-```
-
-For the development API and pgxdriver, run `scripts/workspace.sh` from the repository root. Go then uses this checkout for all three modules. See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/TESTING.md](docs/TESTING.md).
+Run `scripts/workspace.sh` from the Tabula repository root to use its three local modules together. In an application repository, check the selected module with `go list -m -json github.com/0xJean/tabula`. [Version selection and adapter setup](docs/INTEGRATION.md)
 
 ## What it will not do
 
@@ -97,9 +81,9 @@ For the development API and pgxdriver, run `scripts/workspace.sh` from the repos
 | `tabula/stdsql` | `*sql.DB` / `*sql.Tx` sessions, `Runner`, `ScopePolicy` (RLS), `Savepoint`, read-only `Direct` pool | standard library only |
 | `tabula/sqlcheck` | Descriptor and catalog snapshots, source SQL inventory, role workloads, grant minimization and RLS checks | standard library only |
 | `tabula/pqdriver` | `lib/pq` array converters | `github.com/lib/pq` |
-| `tabula/pgxdriver` | Separate module: `pgx/v5` pool Runner, `pgx.Tx` Session, Direct & array converters | `github.com/jackc/pgx/v5` |
+| `tabula/pgxdriver` | Separate module: `pgx/v5` pool Runner, `pgx.Tx` Session, Direct, binary COPY and array converters | `github.com/jackc/pgx/v5` |
 | `tabula/postgresfixture` | Content-addressed installation templates, migration prefixes and isolated per-test databases | standard library only |
-| `tabula/cmd/tabula` | `check`, `check-rls`, `inventory`, `verify-roles`, `grants`, `minimize`, `catalog`, `check-policies`, `check-coverage`, `test-rls` | `sqlcheck`, `github.com/lib/pq` |
+| `tabula/cmd/tabula` | SQL verification (`tabula check`), RLS audit (`tabula check-rls`) and role workload tools. [All commands and flags](docs/REFERENCE.md#cli) | `sqlcheck`, `github.com/lib/pq` |
 
 Applications may use `stdsql` or `pgxdriver` directly, or wrap `tabula` in a thin
 binding package of their own to enforce compile-time session/scope invariants.

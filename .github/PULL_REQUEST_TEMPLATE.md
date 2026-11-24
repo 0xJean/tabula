@@ -1,6 +1,6 @@
 ## Change
 
-Describe the user-visible behavior and any public API migration.
+Describe the user-visible behavior and any public API migration. For an integration change, link the affected guide or executable example and include the regenerated reference when the public surface changes.
 
 ## Verification
 

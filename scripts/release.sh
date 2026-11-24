@@ -26,6 +26,9 @@ no_replacements() {
     die "$1 contains an invalid manifest or a replace directive. Keep development overrides in go.work."
 }
 
+series=$(scripts/docs.sh --series)
+[[ ${version%.*} == "$series" ]] || die "The integration guide documents $series, but the release target is $version."
+
 revision=$(git rev-parse HEAD)
 if [[ $mode == publish ]]; then
   [[ "$(git branch --show-current)" == main && -z "$(git status --porcelain)" ]] ||
@@ -86,6 +89,13 @@ for dir in "${children[@]}"; do
     go -C "$dir" test -mod=readonly -modfile="$modfile" -tags=integration -run='^$' ./...
   fi
 done
+
+if [[ $mode != prepare ]]; then
+  # Verify the same reference consumers will find at this tag, including the driver.
+  repo_root=$PWD
+  (cd "$tmp" && go work init "$repo_root" "$repo_root/pgxdriver")
+  GOWORK="$tmp/go.work" scripts/docs.sh --check
+fi
 
 case "$mode" in
   prepare)

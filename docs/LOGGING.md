@@ -11,7 +11,7 @@ no hidden behaviour.
 - A logger is passed explicitly in `RegistryConfig.Log` (applies to every table and view of
   that registry) and may be overridden per session binding. There is no package-level
   logger and no `slog.Default()` fallback.
-- With no logger configured, logging is off and costs one nil check per statement.
+- Statement logs require an effective logger and a level other than `LogOff`. Active logging or a metrics hook enables duration measurement using `LogConfig.Now` (default `time.Now`).
 
 ```go
 reg := tabula.NewRegistry(tabula.RegistryConfig[Scope]{
@@ -54,12 +54,13 @@ in every application.
 | `tabula.action` | string | `get`, `lock`, `insert`, `save`, `list`, `count`, `view`, `exec`, ... |
 | `tabula.duration_ms` | float | Elapsed time |
 | `tabula.rows` | int | Rows returned or affected, when known |
-| `tabula.error_class` | string | `unique`, `foreign_key`, `check`, `not_null`, `serialization`, `deadlock`, `canceled`, `rls_denied`, `insufficient_privilege`, `other` (failures only) |
+| `tabula.error_class` | string | `ErrorClass` returned by `ClassifyError` on failure. [Class constants](REFERENCE.md#tabula) |
+| `tabula.error` | string | Driver error message or the result of `ErrorPolicy.Sanitize` on failure |
+| `tabula.args` | list of strings | Bound arguments when the value policy includes them. See section 4. |
+| `tabula.sql` | string | SQL text when `Level` is `LogAll` and `LogConfig.SQL` is enabled |
 | `tabula.sqlstate` | string | PostgreSQL SQLSTATE, when the driver exposes it |
 | `tabula.scope` | string | Only what the application's `ScopeLog` function returns (for example a tenant ID); omitted when not configured |
 
-- The SQL text itself is not logged: the statement key identifies it, and the full text is
-  in the `sqlcheck` snapshot. `LogAll` may add `tabula.sql` when `LogConfig.SQL` is true.
 - Request IDs, trace IDs and user IDs are not added by the library. Use a `slog.Handler`
   that reads them from the context; Tabula always calls the logger with the statement's
   `context.Context`.
@@ -78,7 +79,7 @@ in every application.
 
 Logging, tracing and metrics share the same statement key and action, but are separate
 interfaces passed in the same way (`RegistryConfig.Tracer`, `RegistryConfig.Metrics`).
-OpenTelemetry and Prometheus adapters live in their own modules. None of them is required.
+In v0.3 the application implements these interfaces to send observations to its telemetry backend. The [Go reference](REFERENCE.md#tabula) gives their method signatures. Optional OpenTelemetry and Prometheus adapters are listed in the [roadmap](../ROADMAP.md).
 
 ## 6. Tests the library keeps
 

@@ -45,3 +45,19 @@ func TestCLISubcommandValidation(t *testing.T) {
 		require.Contains(t, errBuf.String(), "contains no statements")
 	})
 }
+
+func TestCommandHelp(t *testing.T) {
+	const privateDSN = "private-connection-value"
+	t.Setenv("TABULA_DSN", privateDSN)
+	for _, c := range commands() {
+		t.Run(c.name, func(t *testing.T) {
+			var out, diag bytes.Buffer
+			require.Equal(t, 0, run(t.Context(), []string{c.name, "-h"}, &out, &diag))
+			require.Contains(t, diag.String(), "Usage of "+c.name+":")
+			require.NotContains(t, diag.String(), privateDSN)
+			diag.Reset()
+			require.Equal(t, 2, run(t.Context(), []string{c.name, "--unknown-option"}, &out, &diag))
+			require.NotContains(t, diag.String(), privateDSN)
+		})
+	}
+}
