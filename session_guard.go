@@ -13,8 +13,9 @@ import (
 // them case-insensitively. Dynamic set_config keys are rejected whenever a
 // namespace is protected. ForbidVariableReads additionally rejects reading the
 // protected namespaces: current_setting with a protected or non-literal key,
-// SHOW of a protected name or SHOW ALL, and any reference to pg_settings; it
-// requires at least one VariablePrefixes entry.
+// SHOW of a protected name or SHOW ALL, and reads of the pg_settings view.
+// A result column may be named pg_settings. ForbidVariableReads requires at
+// least one VariablePrefixes entry.
 type SessionGuardConfig struct {
 	VariablePrefixes           []string
 	ForbidRole                 bool
@@ -28,7 +29,7 @@ type SessionGuardConfig struct {
 // non-savepoint ROLLBACK, PREPARE TRANSACTION) are rejected whenever the guard
 // protects role, session-authorization, or variable state. Any active
 // restriction rejects anonymous DO blocks, Unicode-escaped identifiers and
-// UPDATE of pg_settings, which PostgreSQL applies as set_config. A zero config
+// UPDATE of pg_settings, which PostgreSQL applies as SET. A zero config
 // permits all statements.
 func NewSessionGuard(cfg SessionGuardConfig) (func(string) error, error) {
 	prefixes := slices.Clone(cfg.VariablePrefixes)
@@ -60,6 +61,9 @@ func compileSessionGuard(cfg SessionGuardConfig, readOnlyTx bool) func([]pgstmt.
 		return protectedVariable(cfg.VariablePrefixes, name)
 	}
 	return func(t []pgstmt.Token) error {
+		if cfg.ForbidVariableReads && readsSettingsView(t) {
+			return fmt.Errorf("%w: pg_settings", ErrForbiddenStatement)
+		}
 		at := func(i int) string {
 			if i < len(t) && t[i].Kind != pgstmt.Literal {
 				return strings.ToLower(t[i].Text)
@@ -88,9 +92,6 @@ func compileSessionGuard(cfg SessionGuardConfig, readOnlyTx bool) func([]pgstmt.
 				return fmt.Errorf("%w: pg_settings update", ErrForbiddenStatement)
 			}
 			if cfg.ForbidVariableReads {
-				if settingsRelation(t, i) {
-					return fmt.Errorf("%w: pg_settings", ErrForbiddenStatement)
-				}
 				if at(i) == "current_setting" && at(i+1) == "(" {
 					literalKey := i+3 < len(t) && t[i+2].Kind == pgstmt.Literal && (at(i+3) == "," || at(i+3) == ")") && !strings.Contains(t[i+2].Text, "\\")
 					if !literalKey || protectedVariable(cfg.VariablePrefixes, t[i+2].Text) {
@@ -161,6 +162,73 @@ func compileSessionGuard(cfg SessionGuardConfig, readOnlyTx bool) func([]pgstmt.
 		}
 		return nil
 	}
+}
+
+// readsSettingsView permits output labels but conservatively rejects other
+// uses of the catalog name. Scan each query level separately: a nested FROM
+// belongs to the inner query and a comma in a FROM list stays in that list.
+func readsSettingsView(t []pgstmt.Token) bool {
+	bare := pgstmt.Token{Kind: pgstmt.Word, Text: "pg_settings"}
+	quoted := pgstmt.Token{Kind: pgstmt.Quoted, Text: "pg_settings"}
+	if !slices.Contains(t, bare) && !slices.Contains(t, quoted) {
+		return false
+	}
+
+	var targets bool
+	var outer []bool
+	var prev pgstmt.Token
+	for i, tok := range t {
+		switch tok {
+		case bare, quoted:
+			if !targets && prev != (pgstmt.Token{Kind: pgstmt.Word, Text: "as"}) {
+				return true
+			}
+		case pgstmt.Token{Kind: pgstmt.Symbol, Text: "("}:
+			outer = append(outer, targets)
+			targets = false
+		case pgstmt.Token{Kind: pgstmt.Symbol, Text: ")"}:
+			if n := len(outer); n > 0 {
+				targets = outer[n-1]
+				outer = outer[:n-1]
+			}
+		case pgstmt.Token{Kind: pgstmt.Symbol, Text: ";"}:
+			targets = false
+			outer = outer[:0]
+		case pgstmt.Token{Kind: pgstmt.Word, Text: "select"}:
+			targets = startsSelectList(t[:i])
+		case pgstmt.Token{Kind: pgstmt.Word, Text: "by"}:
+			// ORDER and GROUP are reserved keywords except in identifier
+			// positions such as a qualified name or an explicit label.
+			if prev.Kind == pgstmt.Word && (prev.Text == "order" || prev.Text == "group") {
+				targets = i < 2 || t[i-2] != (pgstmt.Token{Kind: pgstmt.Symbol, Text: "."}) &&
+					t[i-2] != (pgstmt.Token{Kind: pgstmt.Word, Text: "as"})
+			}
+		default:
+			if tok.Kind == pgstmt.Word {
+				switch tok.Text {
+				case "from", "into", "table", "join", "using", "only", "where", "group", "having",
+					"window", "order", "limit", "offset", "fetch", "for", "union", "intersect", "except":
+					targets = false
+				}
+			}
+		}
+		prev = tok
+	}
+	return false
+}
+
+func startsSelectList(before []pgstmt.Token) bool {
+	if len(before) == 0 {
+		return true
+	}
+	prev := before[len(before)-1]
+	if prev.Kind == pgstmt.Symbol {
+		return prev.Text == "(" || prev.Text == ")" || prev.Text == ";"
+	}
+	if len(before) >= 2 && prev.Kind == pgstmt.Word && (prev.Text == "all" || prev.Text == "distinct") {
+		prev = before[len(before)-2]
+	}
+	return prev.Kind == pgstmt.Word && (prev.Text == "union" || prev.Text == "intersect" || prev.Text == "except")
 }
 
 // SET SESSION CHARACTERISTICS can combine access mode with isolation clauses.

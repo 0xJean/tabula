@@ -153,6 +153,9 @@ func FuzzGuardNoSessionEscape(f *testing.F) {
 	f.Add(`UPDATE ONLY "pg_catalog" . pg_settings SET setting = $1`)
 	f.Add("SELECT current_setting('scope.id', true)")
 	f.Add(`SELECT $$SHOW scope.id$$; SHOW ALL`)
+	f.Add("SELECT 1 AS pg_settings")
+	f.Add("SELECT id pg_settings FROM items ORDER BY pg_settings")
+	f.Add("SELECT 1 AS pg_settings FROM pg_catalog.pg_settings")
 	reads, err := NewSessionGuard(SessionGuardConfig{VariablePrefixes: []string{"scope."}, ForbidVariableReads: true})
 	if err != nil {
 		f.Fatal(err)
@@ -179,6 +182,12 @@ func FuzzGuardNoSessionEscape(f *testing.F) {
 			}
 		}
 		quoted := "SELECT '" + strings.ReplaceAll(query, "'", "''") + "'"
+		if err := reads(quoted + " AS pg_settings"); err != nil {
+			t.Fatalf("variable-read guard rejected a result label: %v", err)
+		}
+		if err := reads(quoted + " AS pg_settings FROM pg_catalog.pg_settings"); !errors.Is(err, ErrForbiddenStatement) {
+			t.Fatalf("variable-read guard allowed a catalog read with a result label: %v", err)
+		}
 		if err := GuardReadOnlyTransaction(quoted); err != nil {
 			t.Fatalf("read-only transaction guard rejected a quoted value: %v", err)
 		}

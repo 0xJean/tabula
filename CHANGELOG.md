@@ -3,15 +3,15 @@
 All notable changes are listed here. The project follows semantic versioning; before
 v1.0 a minor version may contain breaking changes.
 
-## Unreleased
+## v0.3.3 — 2026-11-24
 
 ### Security
 
-- `GuardNoSessionEscape`, `GuardReadOnlyTransaction` and any configured `NewSessionGuard` with an active restriction now reject `UPDATE pg_settings` (with `ONLY`, `pg_catalog` qualification, comments or inside a CTE). PostgreSQL applies such an update as `set_config`, so earlier guards could be bypassed to change protected variables, the role or the session authorization.
+- `GuardNoSessionEscape`, `GuardReadOnlyTransaction` and any configured `NewSessionGuard` with an active restriction now reject `UPDATE pg_settings` (with `ONLY`, `pg_catalog` qualification, comments or inside a CTE). PostgreSQL treats an update to an existing settings row as `SET` on that parameter, subject to the database role’s privileges.
 
 ### Additions
 
-- `SessionGuardConfig.ForbidVariableReads` rejects reading protected variable namespaces: `current_setting` with a protected or non-literal key, `SHOW` of a protected name or `SHOW ALL`, and any reference to `pg_settings`. It requires `VariablePrefixes`; `NewSessionGuard` returns an error otherwise.
+- `SessionGuardConfig.ForbidVariableReads` rejects reading protected variable namespaces: `current_setting` with a protected or non-literal key, `SHOW` of a protected name or `SHOW ALL`, and access to the `pg_settings` view. A result column may be named `pg_settings`, including when used as a sort key. Configure at least one entry in `VariablePrefixes` to enable this option.
 
 ## v0.3.2 — 2026-11-24
 

@@ -177,6 +177,12 @@ func TestSessionGuardVariableReads(t *testing.T) {
 		`SELECT current_setting(E'scope\.id')`,
 		"SELECT setting FROM pg_settings WHERE name = 'TimeZone'",
 		"SELECT setting FROM pg_catalog.pg_settings",
+		"SELECT 1 AS pg_settings FROM pg_settings",
+		"SELECT id AS pg_settings FROM items, pg_catalog.pg_settings",
+		"SELECT 1 AS pg_settings; TABLE pg_settings",
+		"SELECT (SELECT count(*) FROM pg_settings) AS pg_settings",
+		"SELECT 1 AS pg_settings FROM items JOIN pg_catalog.pg_settings AS s ON true",
+		"SELECT 1 AS pg_settings, current_setting('scope.id')",
 		"SHOW scope.id", `SHOW "scope"."id"`, "SHOW ALL",
 		"SELECT 'safe'; SHOW scope.id",
 	} {
@@ -190,6 +196,14 @@ func TestSessionGuardVariableReads(t *testing.T) {
 		`SELECT $$SHOW scope.id; SELECT * FROM pg_settings$$`,
 		"SELECT 1 /* current_setting('scope.id') */",
 		"SELECT current_settings, pg_settings_id FROM items",
+		"SELECT 1 AS pg_settings",
+		`SELECT id aS /* output name */ "pg_settings" FROM items`,
+		"SELECT id pg_settings FROM items",
+		"SELECT 1 AS pg_settings ORDER BY pg_settings",
+		"SELECT id, 1 AS pg_settings FROM items GROUP BY id, pg_settings ORDER BY id, pg_settings",
+		"SELECT id FROM items UNION ALL SELECT id pg_settings FROM entries",
+		"SELECT (SELECT 1 AS pg_settings) AS pg_settings",
+		"UPDATE items SET id = $1 RETURNING id AS pg_settings",
 	} {
 		require.NoError(t, guard(q), q)
 	}
