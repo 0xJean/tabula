@@ -139,8 +139,13 @@ func FuzzGuardNoSessionEscape(f *testing.F) {
 	f.Add("SET SESSION other.label = 'three'")
 	f.Add("SET TRANSACTION READ WRITE")
 	f.Add("SET TRANSACTION READ ONLY; SHOW transaction_read_only")
+	f.Add("RESET default_transaction_read_only")
+	f.Add(`SELECT $$SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY$$`)
 	f.Add(`SELECT $$COMMIT$$, E'can\'t' /* ROLLBACK */`)
 	f.Fuzz(func(t *testing.T, query string) {
+		if err := GuardReadOnlyTransaction(query); err != nil && !errors.Is(err, ErrReadOnly) {
+			t.Fatalf("read-only transaction guard returned %v for %q", err, query)
+		}
 		if err := GuardReadOnlyTransaction("SET TRANSACTION READ WRITE;" + query); !errors.Is(err, ErrReadOnly) {
 			t.Fatalf("read-only transaction guard returned %v for a mode change", err)
 		}

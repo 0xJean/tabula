@@ -11,6 +11,11 @@ type staticError string
 
 func (e staticError) Error() string { return string(e) }
 
+type readOnlyPolicyError string
+
+func (e readOnlyPolicyError) Error() string { return string(e) }
+func (readOnlyPolicyError) Unwrap() error   { return ErrReadOnly }
+
 const (
 	// Write-guard and optimistic concurrency sentinel errors (used when
 	// ErrorPolicy leaves the corresponding slot nil).
@@ -25,6 +30,10 @@ const (
 	ErrNested             staticError = "nested transaction is not allowed"
 	ErrSessionClosed      staticError = "session is closed"
 	ErrCapabilityDenied   staticError = "operation denied by registry capability policy"
+
+	// ErrUnscopedRequiresReadOnly reports that UnscopedReadOnly denied access
+	// because the transaction is read-write. It also matches ErrReadOnly.
+	ErrUnscopedRequiresReadOnly readOnlyPolicyError = "UnscopedReadOnly requires a read-only transaction"
 
 	// ErrSessionBusy reports an overlapping operation on a transaction.
 	// Finish the active statement or row iteration before using the transaction again.

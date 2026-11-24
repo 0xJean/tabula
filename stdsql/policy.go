@@ -73,7 +73,7 @@ func NoScopePolicy() ScopePolicy[struct{}] { return ScopePolicy[struct{}]{} }
 
 // RunnerOptions configures a role-bound, guarded stdsql.Runner.
 type RunnerOptions struct {
-	// Role sets SET LOCAL ROLE "<Role>" immediately after BEGIN when non-empty.
+	// Role selects the transaction-local PostgreSQL role during setup when non-empty.
 	Role string
 	// RequireRole fails NewRunner when Role is empty.
 	RequireRole bool

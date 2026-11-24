@@ -186,6 +186,74 @@ func TestComposedQueryCompileAndValidation(t *testing.T) {
 	require.ErrorContains(t, err, "expected int64")
 }
 
+func TestComposedSortExpressionParameters(t *testing.T) {
+	reg := NewRegistry(RegistryConfig[customTenant]{})
+	view := DefineView(reg, ViewSpec[cqRow]{Name: "notes_view"})
+	for _, tc := range []struct{ name, primary, tie, wantErr string }{
+		{"primary_parameter", "rank + $1", "id", "Order.Sorts[\"rank\"]: sort Expr cannot contain parameter $1"},
+		{"tie_parameter", "rank", "id + $2", "Order.TieBreaker[0]: sort Expr cannot contain parameter $2"},
+		{"quoted_and_commented", "rank /* $1 */", "id + length('$2') - length($tag$$3$tag$)", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := view.TryDefineQuery(tc.name, QuerySpec{
+				Select: "SELECT id, rank, true AS due, $1::text AS caption FROM notes",
+				Scope:  ScopeGlobal(),
+				Order: QueryOrderSpec{
+					Default:    "rank",
+					Sorts:      []QuerySort{{Key: "rank", Expr: tc.primary}},
+					TieBreaker: []QuerySortTerm{{Expr: tc.tie}},
+				},
+				MaxLimit: 10,
+			})
+			if tc.wantErr != "" {
+				require.ErrorContains(t, err, tc.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestComposedKeysetFixedDirectionSQL(t *testing.T) {
+	const base = "SELECT id, rank, true AS due, '' AS caption FROM notes"
+	for _, tc := range []struct {
+		name           string
+		fixed, request SortDirection
+		wantSuffix     string
+	}{
+		{"ascending", SortAsc, SortDesc, "\nWHERE ((rank, id) > ($1, $2))\nORDER BY rank ASC, id ASC LIMIT $3"},
+		{"descending", SortDesc, SortAsc, "\nWHERE ((rank, id) < ($1, $2))\nORDER BY rank DESC, id DESC LIMIT $3"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			view := DefineView(NewRegistry(RegistryConfig[customTenant]{}), ViewSpec[cqRow]{Name: "notes_view"})
+			query := view.DefineQuery("by_rank", QuerySpec{
+				Select: base,
+				Scope:  ScopeGlobal(),
+				Order: QueryOrderSpec{
+					Default:    "rank",
+					Sorts:      []QuerySort{{Key: "rank", Expr: "rank", Column: "rank", Direction: tc.fixed}},
+					TieBreaker: []QuerySortTerm{{Expr: "id", Column: "id", Direction: tc.fixed}},
+				},
+				Keyset: true, MaxLimit: 10,
+			})
+			var calls int
+			session := &queryArgRecorder{onCall: func(statement string, args []any) {
+				calls++
+				require.Equal(t, base+tc.wantSuffix, statement)
+				require.Equal(t, []any{int64(7), int64(2), 4}, args)
+			}}
+			rows := query.Bind(session)
+			page := QueryKeyset{Direction: tc.request, Limit: 3, After: []any{int64(7), int64(2)}}
+			_, err := rows.ListKeyset(t.Context(), nil, page)
+			require.NoError(t, err)
+			page.Direction = SortDirection(99)
+			_, err = rows.ListKeyset(t.Context(), nil, page)
+			require.ErrorContains(t, err, "invalid sort direction")
+			require.Equal(t, 1, calls)
+		})
+	}
+}
+
 type queryArgRecorder struct {
 	fakeSession
 	onCall func(string, []any)

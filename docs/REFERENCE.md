@@ -44,6 +44,10 @@ const (
 	ErrSessionClosed      staticError = "session is closed"
 	ErrCapabilityDenied   staticError = "operation denied by registry capability policy"
 
+	// ErrUnscopedRequiresReadOnly reports that UnscopedReadOnly denied access
+	// because the transaction is read-write. It also matches ErrReadOnly.
+	ErrUnscopedRequiresReadOnly readOnlyPolicyError = "UnscopedReadOnly requires a read-only transaction"
+
 	// ErrSessionBusy reports an overlapping operation on a transaction.
 	// Finish the active statement or row iteration before using the transaction again.
 	ErrSessionBusy staticError = "another operation is using the transaction"
@@ -88,10 +92,11 @@ func GuardReadOnly(query string) error
 
 func GuardReadOnlyTransaction(query string) error
     GuardReadOnlyTransaction keeps transaction control with the runner.
-    It returns ErrReadOnly for commands that end the transaction, request READ
-    WRITE, or directly change transaction_read_only. Savepoints and ordinary
-    queries remain available. Use it with an established PostgreSQL READ ONLY
-    transaction to enforce access inside functions and other indirect SQL.
+    It returns ErrReadOnly for transaction-ending commands, SET TRANSACTION,
+    and changes to transaction_read_only or default_transaction_read_only.
+    Calls to set_config require a literal unprotected key. Savepoints remain
+    available. Use it with an established PostgreSQL READ ONLY transaction to
+    enforce access inside functions and other indirect SQL.
 
 func InTransaction(ctx context.Context) bool
     InTransaction reports whether ctx carries an active transaction marker from
@@ -600,6 +605,8 @@ type QueryOrder struct {
 	Direction SortDirection
 }
     QueryOrder selects sorting for unpaged QueryRows.Find and QueryRows.Iter.
+    Direction applies to sort terms declared with SortDefault. Fixed terms keep
+    their direction.
 
 type QueryOrderSpec struct {
 	Default          string
@@ -617,7 +624,9 @@ type QueryPage struct {
 	Offset    int
 	Count     CountMode
 }
-    QueryPage requests an offset-paginated result from QueryRows.List.
+    QueryPage requests an offset-paginated result from QueryRows.List. Direction
+    applies to sort terms declared with SortDefault. Fixed terms keep their
+    direction.
 
 type QueryParams struct {
 	// Has unexported fields.
@@ -717,13 +726,15 @@ type QuerySort struct {
 	Direction SortDirection
 }
     QuerySort declares one whitelisted caller sort key on QueryOrderSpec.
+    Expr is a static SQL expression and cannot contain parameter placeholders.
 
 type QuerySortTerm struct {
 	Expr      string
 	Column    string
 	Direction SortDirection
 }
-    QuerySortTerm pairs a SQL ordering expression with its matching View column.
+    QuerySortTerm pairs a parameter-free SQL ordering expression with its
+    matching View column.
 
 type QuerySpec struct {
 	Select    string
@@ -1656,8 +1667,8 @@ func (s *Shared[S]) Unscoped() *Session[S]
     Unscoped returns an unscoped Session handle sharing this transaction.
     UnscopedReadOnly requires the whole transaction to be read-only.
     In a read-write transaction even a SELECT on this handle returns
-    tabula.ErrReadOnly. UnscopedDenied rejects all operations with
-    tabula.ErrCapabilityDenied.
+    tabula.ErrUnscopedRequiresReadOnly, which also matches tabula.ErrReadOnly.
+    UnscopedDenied rejects all operations with tabula.ErrCapabilityDenied.
 
 type Timeouts struct {
 	Lock              time.Duration
@@ -2406,7 +2417,7 @@ func (r *Runner[S]) WithinWith(ctx context.Context, scope S, runOpts RunOptions[
     an optional BeforeCommit step executed on a fresh handle before COMMIT.
 
 type RunnerOptions struct {
-	// Role sets SET LOCAL ROLE "<Role>" immediately after BEGIN when non-empty.
+	// Role selects the transaction-local PostgreSQL role during setup when non-empty.
 	Role string
 	// RequireRole fails NewRunner when Role is empty.
 	RequireRole bool
@@ -2527,8 +2538,8 @@ func (s *Shared[S]) Unscoped() *Session[S]
     Unscoped returns an unscoped Session handle sharing this transaction.
     UnscopedReadOnly requires the whole transaction to be read-only.
     In a read-write transaction even a SELECT on this handle returns
-    tabula.ErrReadOnly. UnscopedDenied rejects all operations with
-    tabula.ErrCapabilityDenied.
+    tabula.ErrUnscopedRequiresReadOnly, which also matches tabula.ErrReadOnly.
+    UnscopedDenied rejects all operations with tabula.ErrCapabilityDenied.
 
 type Timeouts struct {
 	// Lock maps to PostgreSQL lock_timeout via set_config(..., true).

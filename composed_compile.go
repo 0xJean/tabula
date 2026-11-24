@@ -77,7 +77,7 @@ func ScopeByRLS() QueryScope { return QueryScope{mode: scopeByRLS} }
 // ScopeGlobal declares a view over global lookup tables that have no row scope.
 func ScopeGlobal() QueryScope { return QueryScope{mode: scopeGlobal} }
 
-// QuerySortTerm pairs a SQL ordering expression with its matching View column.
+// QuerySortTerm pairs a parameter-free SQL ordering expression with its matching View column.
 type QuerySortTerm struct {
 	Expr      string
 	Column    string
@@ -85,6 +85,7 @@ type QuerySortTerm struct {
 }
 
 // QuerySort declares one whitelisted caller sort key on QueryOrderSpec.
+// Expr is a static SQL expression and cannot contain parameter placeholders.
 type QuerySort struct {
 	Key       string
 	Expr      string
@@ -479,8 +480,12 @@ func (v *View[T, S]) compileSortTerm(rawExpr, rawCol string, dir SortDirection, 
 			return compiledSortTerm{}, err
 		}
 	}
-	if _, err := compileSQLFragment(expr, true); err != nil {
+	fragment, err := compileSQLFragment(expr, true)
+	if err != nil {
 		return compiledSortTerm{}, fmt.Errorf("invalid sort Expr %q: %w", expr, err)
+	}
+	if len(fragment.slots) > 0 {
+		return compiledSortTerm{}, fmt.Errorf("sort Expr cannot contain parameter $%d", fragment.slots[0])
 	}
 	colName := strings.TrimSpace(rawCol)
 	colIdx := -1

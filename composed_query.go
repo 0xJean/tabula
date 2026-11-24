@@ -73,6 +73,7 @@ func (p *QueryParams) WithIf(cond bool, name string, args ...any) *QueryParams {
 }
 
 // QueryPage requests an offset-paginated result from QueryRows.List.
+// Direction applies to sort terms declared with SortDefault. Fixed terms keep their direction.
 type QueryPage struct {
 	Sort      string
 	Direction SortDirection
@@ -92,6 +93,7 @@ type QueryKeyset struct {
 }
 
 // QueryOrder selects sorting for unpaged QueryRows.Find and QueryRows.Iter.
+// Direction applies to sort terms declared with SortDefault. Fixed terms keep their direction.
 type QueryOrder struct {
 	Sort      string
 	Direction SortDirection

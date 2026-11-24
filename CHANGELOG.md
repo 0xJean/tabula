@@ -11,9 +11,10 @@ v1.0 a minor version may contain breaking changes.
 - **Opt-in raw transaction escape (A5)**: removed default `Session.Tx()` on both `stdsql` and `pgxdriver`; raw access now requires `RunnerOptions{ExposeTx: true}` and `WithinRaw` / `WithinRawOptions` / `WithinRawTxOptions` returning `*RawSession[S]`.
 - **Session-level observability precedence (B1)**: when both a runner and a registry configure telemetry, the runner takes precedence per enabled signal (`Tracer`, `Metrics`, `Log`) so descriptor statements are emitted once while hand-written inline SQL is also observed.
 - Overlapping statements and savepoint requests on the same transaction return `tabula.ErrSessionBusy` in both drivers. This includes using a second shared handle while a row cursor is open.
-- Both drivers establish PostgreSQL read-only mode before the callback, even with an empty scope policy and zero timeouts. A guarded session rejects `SET TRANSACTION READ WRITE` with `tabula.ErrReadOnly` and remains usable for reads.
-- `UnscopedReadOnly` requires the entire shared transaction to be read-only. In a read-write `WithinShared`, every operation on `Shared.Unscoped()`, including `SELECT`, returns `tabula.ErrReadOnly`.
+- Both drivers establish PostgreSQL read-only mode before the callback, even with an empty scope policy and zero timeouts. Guarded sessions reject `SET TRANSACTION` and changes to the current or default read-only mode with `tabula.ErrReadOnly` and remain usable for reads.
+- `UnscopedReadOnly` requires the entire shared transaction to be read-only. In a read-write `WithinShared`, even `SELECT` on `Shared.Unscoped()` returns `tabula.ErrUnscopedRequiresReadOnly`. It also matches `tabula.ErrReadOnly` through `errors.Is`.
 - Composed keyset queries compare `After` in the declared sort direction when a sort is fixed, including when the request specifies the opposite direction.
+- Composed queries reject parameter placeholders in sort and tie-breaker expressions at definition time. Quoted text and comments can contain literal `$n` text.
 - See [MIGRATION.md](docs/MIGRATION.md#from-v030-to-v031) for upgrade details.
 
 ### Additions

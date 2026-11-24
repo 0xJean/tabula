@@ -1,6 +1,10 @@
 package tabula
 
-import "github.com/0xJean/tabula/internal/pgstmt"
+import (
+	"errors"
+
+	"github.com/0xJean/tabula/internal/pgstmt"
+)
 
 var checkSessionEscape = compileSessionGuard(SessionGuardConfig{
 	ForbidRole:                 true,
@@ -33,10 +37,14 @@ func GuardReadOnly(query string) error {
 }
 
 // GuardReadOnlyTransaction keeps transaction control with the runner. It
-// returns ErrReadOnly for commands that end the transaction, request READ
-// WRITE, or directly change transaction_read_only. Savepoints and ordinary
-// queries remain available. Use it with an established PostgreSQL READ ONLY
-// transaction to enforce access inside functions and other indirect SQL.
+// returns ErrReadOnly for transaction-ending commands, SET TRANSACTION, and
+// changes to transaction_read_only or default_transaction_read_only. Calls to
+// set_config require a literal unprotected key. Savepoints remain available.
+// Use it with an established PostgreSQL READ ONLY transaction to enforce access
+// inside functions and other indirect SQL.
 func GuardReadOnlyTransaction(query string) error {
-	return checkReadOnlyTransaction(pgstmt.Lex(query))
+	if err := checkReadOnlyTransaction(pgstmt.Lex(query)); err != nil {
+		return errors.Join(ErrReadOnly, err)
+	}
+	return nil
 }

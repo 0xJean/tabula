@@ -34,9 +34,11 @@ func TestReadOnlyTransactionMode(t *testing.T) {
 	check := func(ctx context.Context, s *stdsql.Session[struct{}]) error {
 		_, err := s.Exec(ctx, "SET TRANSACTION READ WRITE")
 		require.ErrorIs(t, err, tabula.ErrReadOnly)
+		_, err = s.Exec(ctx, "SET default_transaction_read_only = off")
+		require.ErrorIs(t, err, tabula.ErrReadOnly)
 		require.True(t, s.ReadOnly())
 		var mode string
-		require.NoError(t, s.Scan(ctx, "SHOW transaction_read_only", nil, &mode))
+		require.NoError(t, s.Scan(ctx, "SELECT pg_catalog.current_setting('transaction_read_only')", nil, &mode))
 		require.Equal(t, "on", mode)
 		return nil
 	}
@@ -48,7 +50,7 @@ func TestReadOnlyTransactionMode(t *testing.T) {
 	// The first snapshot also precedes the callback on the shared path.
 	opts := &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelReadCommitted}
 	err = ro.WithinSharedOptions(ctx, opts, func(ctx context.Context, shared *stdsql.Shared[struct{}]) error {
-		_, err := shared.Scoped(scope).Exec(ctx, "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+		_, err := shared.Scoped(scope).Exec(ctx, "SET transaction_isolation = 'repeatable read'")
 		return err
 	})
 	require.Equal(t, "25001", tabula.SQLState(err))
@@ -66,7 +68,10 @@ func TestReadOnlyTransactionMode(t *testing.T) {
 	require.NoError(t, rw.WithinReadOnly(ctx, scope, check))
 	require.NoError(t, rw.WithinShared(ctx, func(ctx context.Context, shared *stdsql.Shared[struct{}]) error {
 		var mode string
-		require.ErrorIs(t, shared.Unscoped().Scan(ctx, "SHOW transaction_read_only", nil, &mode), tabula.ErrReadOnly)
+		err := shared.Unscoped().Scan(ctx, "SELECT 1", nil, new(int))
+		require.ErrorIs(t, err, tabula.ErrUnscopedRequiresReadOnly)
+		require.ErrorIs(t, err, tabula.ErrReadOnly)
+		require.EqualError(t, err, "UnscopedReadOnly requires a read-only transaction")
 		require.NoError(t, shared.Scoped(scope).Scan(ctx, "SHOW transaction_read_only", nil, &mode))
 		require.Equal(t, "off", mode)
 		return nil

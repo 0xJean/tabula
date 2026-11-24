@@ -78,8 +78,8 @@ Design record: [docs/DESIGN-v0.3.1.md](docs/DESIGN-v0.3.1.md).
 
 - Make transaction cleanup tolerate a partially consumed `iter.Pull2` iterator whose caller omitted `stop`.
 - Support unscoped reads alongside scoped writes without granting unscoped write access.
-- Include scalar aggregates in the statement inventory and reject parameter placeholders in sort expressions.
-- Bound offset pagination and return errors for invalid `Rows.ListKeyset` inputs.
+- Define an explicit set of scalar aggregates for statement verification.
+- Consider a maximum offset for paged queries. Document the migration path before changing the existing panic behavior for invalid `Rows.ListKeyset` inputs.
 
 ## v1.0 — stability and ecosystem adapters
 

@@ -123,6 +123,16 @@ func TestV031RoleRunnerSharedSealedAndObserve(t *testing.T) {
 	_, err = db.ExecContext(ctx, `GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA `+schema+` TO `+roleName)
 	require.NoError(t, err)
 
+	roleOnly, err := stdsql.NewRunner(db, stdsql.NoScopePolicy(), stdsql.RunnerOptions{Role: roleName, ReadOnly: true})
+	require.NoError(t, err)
+	require.NoError(t, roleOnly.WithinReadOnly(ctx, struct{}{}, func(ctx context.Context, s *stdsql.Session[struct{}]) error {
+		var role, mode string
+		require.NoError(t, s.Scan(ctx, "SELECT current_user, pg_catalog.current_setting('transaction_read_only')", nil, &role, &mode))
+		require.Equal(t, roleName, role)
+		require.Equal(t, "on", mode)
+		return nil
+	}))
+
 	type scope string
 	type item struct {
 		ID          int64  `db:"id,key,serial"`

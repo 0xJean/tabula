@@ -119,7 +119,7 @@ func (r *Runner[S]) checkMode(readOnly, unscoped bool) error {
 			return fmt.Errorf("%w: unscoped sessions are denied on this runner", tabula.ErrCapabilityDenied)
 		case UnscopedReadOnly:
 			if !readOnly {
-				return tabula.ErrReadOnly
+				return tabula.ErrUnscopedRequiresReadOnly
 			}
 		}
 	}
@@ -143,7 +143,10 @@ func (r *Runner[S]) newBoundSession(tx pgx.Tx, scope S, unscoped, readOnly bool)
 }
 
 func (r *Runner[S]) setupTx(ctx context.Context, tx pgx.Tx, pairs []gucPair, readOnly bool) error {
-	if r.opts.Role != "" {
+	if readOnly && r.opts.Role != "" && len(pairs) == 0 {
+		// Apply the role in the snapshot query when it is the only setting.
+		pairs = append(pairs, gucPair{"role", r.opts.Role})
+	} else if r.opts.Role != "" {
 		if err := SetLocalRole(ctx, tx, r.opts.Role); err != nil {
 			return err
 		}
@@ -282,7 +285,8 @@ func (st *sharedState[S]) mint(scope S, unscoped bool, denied error) *Session[S]
 
 // Unscoped returns an unscoped Session handle sharing this transaction.
 // UnscopedReadOnly requires the whole transaction to be read-only. In a
-// read-write transaction even a SELECT on this handle returns tabula.ErrReadOnly.
+// read-write transaction even a SELECT on this handle returns
+// tabula.ErrUnscopedRequiresReadOnly, which also matches tabula.ErrReadOnly.
 // UnscopedDenied rejects all operations with tabula.ErrCapabilityDenied.
 func (s *Shared[S]) Unscoped() *Session[S] {
 	var zero S

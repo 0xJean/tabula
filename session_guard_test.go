@@ -9,9 +9,18 @@ import (
 func TestGuardReadOnlyTransaction(t *testing.T) {
 	for _, query := range []string{
 		"SET TRANSACTION READ WRITE",
+		"SET TRANSACTION READ ONLY",
+		"SET TRANSACTION ISOLATION LEVEL REPEATABLE READ",
 		"SET TRANSACTION ISOLATION LEVEL READ COMMITTED, READ WRITE",
 		`SET LOCAL "transaction_read_only" = off`,
 		"RESET transaction_read_only",
+		`SET SESSION "default_transaction_read_only" TO DEFAULT`,
+		"RESET default_transaction_read_only",
+		"SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL READ COMMITTED, READ ONLY",
+		"RESET ALL", "DISCARD ALL",
+		"SELECT pg_catalog.set_config($1, $2, true)",
+		"SELECT pg_catalog.set_config('default_transaction_read_only', 'on', true)",
+		"DO $$BEGIN NULL; END;$$",
 		"SELECT pg_catalog.set_config('transaction_read_only', 'off', true)",
 		"SELECT 'safe'; /* end */ COMMIT",
 		"END WORK", "ABORT", "ROLLBACK WORK", "PREPARE TRANSACTION 'name'",
@@ -19,10 +28,10 @@ func TestGuardReadOnlyTransaction(t *testing.T) {
 		require.ErrorIs(t, GuardReadOnlyTransaction(query), ErrReadOnly, query)
 	}
 	for _, query := range []string{
-		"SHOW transaction_read_only", "SET TRANSACTION READ ONLY",
+		"SHOW transaction_read_only", "SHOW default_transaction_read_only",
 		"SET LOCAL statement_timeout = '1s'", "SET LOCAL transaction_read_only.label = 'one'",
 		"SELECT pg_catalog.set_config('application_name', 'reader', true)",
-		"SET TRANSACTION ISOLATION LEVEL READ COMMITTED; SELECT 'read write'",
+		"SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL READ COMMITTED; SELECT 'read write'",
 		"SAVEPOINT part; ROLLBACK TRANSACTION TO SAVEPOINT part; RELEASE SAVEPOINT part",
 		"PREPARE lookup AS SELECT 1", "PREPARE \"transaction\" AS SELECT 1",
 		`SELECT 'SET TRANSACTION READ WRITE', $$COMMIT; END$$, E'can\'t', 1 AS "rollback"`,

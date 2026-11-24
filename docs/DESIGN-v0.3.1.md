@@ -55,6 +55,8 @@ runner, err := stdsql.NewRunner(db, policy, stdsql.RunnerOptions{
   parameterized SELECT of transaction-local `set_config` calls for all timeouts and
   scope/context variables. For read-only transactions this batch also sets
   `transaction_read_only` and takes the first snapshot before user SQL runs.
+  When the role is the only configured database setting, the read-only setup
+  query also applies the role with transaction-local `set_config`.
   Validate the complete set and reject duplicate names first.
   This takes at most two setup round trips. Setup failure rolls back before user code.
 - Pass a marked context to the callback. A nested runner entry using that context
@@ -118,7 +120,8 @@ err := runner.WithinShared(ctx, func(ctx context.Context, tx *stdsql.Shared[Scop
   latency-sensitive request hot paths.
 - A background job that reads shared configuration unscoped and then writes per-scope
   rows in the same transaction requires `UnscopedReadWrite`. With `UnscopedReadOnly`,
-  even reads on the unscoped handle require a read-only shared transaction.
+  even reads on the unscoped handle require a read-only shared transaction. A denied
+  handle returns `ErrUnscopedRequiresReadOnly`, which also matches `ErrReadOnly`.
 
 ### A4. Sealed sessions
 
@@ -324,7 +327,11 @@ ok, err := rows.Exists(ctx, where)
 - `CountBy[V comparable]` returns `(map[V]int64, error)` for declared non-null
   grouping keys. An empty input returns an empty map. `Exists(ctx, where)` takes
   the filter callback. The v0.3.0 `ExistsBy(ctx, predicate, values...)` takes one
-  static predicate. Record the per-column aggregate SQL in the table definition.
+  static predicate. The table definition registers `CountBy` for its declared
+  grouping keys. Scalar aggregates accept any declared column at the call site.
+  Listing every function for every column would include unsupported PostgreSQL
+  combinations such as `SUM(text)`, so scalar operations currently require
+  application-specific statements for catalog verification.
 - Custom aggregate result codecs do not make a type eligible for `Add`. In v0.3
   `SetExpr` arithmetic accepts Go integer and floating-point types. Applications
   can register typed, conditional arithmetic as a hand-written `Table.Statement`.
@@ -404,6 +411,8 @@ request values are returned to the caller.
 | `Count` | Exact number of matching result rows before pagination. |
 | `ListKeyset` | Fetch limit + 1, return at most limit items and whether another page exists. The next tuple comes from the **last returned** item when there is another page. |
 
+Sort and tie-breaker expressions are static. The fragment scanner rejects bind
+parameters in either expression at definition time.
 A fixed keyset order governs both sorting and cursor comparison for every valid
 request direction. For a caller-selectable order, the empty direction uses the
 declared default. Unknown sort keys, invalid directions,

@@ -37,10 +37,13 @@ func NewSessionGuard(cfg SessionGuardConfig) (func(string) error, error) {
 }
 
 func compileSessionGuard(cfg SessionGuardConfig, readOnlyTx bool) func([]pgstmt.Token) error {
-	guardsState := cfg.ForbidRole || cfg.ForbidSessionAuthorization || len(cfg.VariablePrefixes) > 0
+	guardsState := cfg.ForbidRole || cfg.ForbidSessionAuthorization || len(cfg.VariablePrefixes) > 0 || readOnlyTx
 	restricted := guardsState || cfg.ForbidSetConfig
 	protected := func(name string) bool {
 		name = strings.ToLower(name)
+		if readOnlyTx && (name == "transaction_read_only" || name == "default_transaction_read_only") {
+			return true
+		}
 		if cfg.ForbidRole && name == "role" || cfg.ForbidSessionAuthorization && name == "session_authorization" {
 			return true
 		}
@@ -71,9 +74,6 @@ func compileSessionGuard(cfg SessionGuardConfig, readOnlyTx bool) func([]pgstmt.
 			}
 			if at(i) == "set_config" && at(i+1) == "(" {
 				literalKey := i+3 < len(t) && t[i+2].Kind == pgstmt.Literal && at(i+3) == "," && !strings.Contains(t[i+2].Text, "\\")
-				if readOnlyTx && literalKey && strings.EqualFold(t[i+2].Text, "transaction_read_only") {
-					return ErrReadOnly
-				}
 				if cfg.ForbidSetConfig || guardsState && (!literalKey || protected(t[i+2].Text)) {
 					return fmt.Errorf("%w: set_config", ErrForbiddenStatement)
 				}
@@ -89,10 +89,10 @@ func compileSessionGuard(cfg SessionGuardConfig, readOnlyTx bool) func([]pgstmt.
 			if readOnlyTx && tok.Kind == pgstmt.Word {
 				switch op {
 				case "commit", "end", "abort":
-					return ErrReadOnly
+					return ErrForbiddenStatement
 				case "prepare":
 					if i+1 < len(t) && t[i+1] == (pgstmt.Token{Kind: pgstmt.Word, Text: "transaction"}) {
-						return ErrReadOnly
+						return ErrForbiddenStatement
 					}
 				case "rollback":
 					n := i + 1
@@ -100,7 +100,7 @@ func compileSessionGuard(cfg SessionGuardConfig, readOnlyTx bool) func([]pgstmt.
 						n++
 					}
 					if at(n) != "to" {
-						return ErrReadOnly
+						return ErrForbiddenStatement
 					}
 				}
 			}
@@ -118,8 +118,11 @@ func compileSessionGuard(cfg SessionGuardConfig, readOnlyTx bool) func([]pgstmt.
 			for j := n + 1; at(j) == "."; j += 2 {
 				name += "." + at(j+1)
 			}
-			if readOnlyTx && (name == "transaction_read_only" || op == "set" && name == "transaction" && requestsReadWrite(t[n+1:])) {
-				return ErrReadOnly
+			if readOnlyTx && op == "set" {
+				if name == "transaction" ||
+					name == "characteristics" && at(n+1) == "as" && at(n+2) == "transaction" && setsAccessMode(t[n+3:]) {
+					return ErrForbiddenStatement
+				}
 			}
 			if (op == "reset" && name == "all" && guardsState) ||
 				(cfg.ForbidSessionAuthorization && name == "session" && at(n+1) == "authorization") ||
@@ -131,14 +134,14 @@ func compileSessionGuard(cfg SessionGuardConfig, readOnlyTx bool) func([]pgstmt.
 	}
 }
 
-// SET TRANSACTION can combine access mode with isolation and deferrability.
-func requestsReadWrite(options []pgstmt.Token) bool {
+// SET SESSION CHARACTERISTICS can combine access mode with isolation clauses.
+func setsAccessMode(options []pgstmt.Token) bool {
 	for i, tok := range options {
 		if tok == (pgstmt.Token{Kind: pgstmt.Symbol, Text: ";"}) {
 			break
 		}
 		if tok == (pgstmt.Token{Kind: pgstmt.Word, Text: "read"}) && i+1 < len(options) &&
-			options[i+1] == (pgstmt.Token{Kind: pgstmt.Word, Text: "write"}) {
+			options[i+1].Kind == pgstmt.Word && (options[i+1].Text == "only" || options[i+1].Text == "write") {
 			return true
 		}
 	}
