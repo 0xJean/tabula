@@ -1,5 +1,5 @@
-github.com/0xJean/tabula v0.3.0 h1:JJRr5cTbuVlC4SGdgkUwLnuGwAjeE805oXN99XWeUgc=
-github.com/0xJean/tabula v0.3.0/go.mod h1:zWHca4hnMv2Q/AP5scZPY3wMt/DppYliCgo8R75zcJA=
+github.com/0xJean/tabula v0.3.1 h1:lGJLfL3MiuCFvn7P5o4et9oeUiJS/VAjI8XRderwuTs=
+github.com/0xJean/tabula v0.3.1/go.mod h1:zWHca4hnMv2Q/AP5scZPY3wMt/DppYliCgo8R75zcJA=
 github.com/go-logr/logr v1.2.2/go.mod h1:jdQByPbusPIv2/zmleS9BjJVeZ6kBagPoEUsqbVz/1A=
 github.com/go-logr/logr v1.4.2 h1:6pFjapn8bFcIbiKo3XT4j/BhANplGihG6tvd+8rYgrY=
 github.com/go-logr/logr v1.4.2/go.mod h1:9T104GzyrTigFIr8wt5mBrctHMim0Nb2HLGrmQ40KvY=
