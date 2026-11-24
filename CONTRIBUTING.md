@@ -11,9 +11,10 @@ must preserve Tabula's core boundaries:
 2. **No AutoMigrate or DDL generation** — migrations remain the source of truth.
 3. **No hidden global state or implicit hooks** — registries, scopes, loggers, tracers,
    and error policies are passed explicitly.
-4. **Zero third-party dependencies in core packages** — `tabula`, `tabula/stdsql`, and
-   `tabula/sqlcheck` depend only on the Go standard library. Driver-specific code belongs
-   in `pqdriver` or the separate `pgxdriver` module.
+4. **Zero third-party dependencies in core packages** — `tabula`, `tabula/stdsql`,
+   `tabula/sqlcheck`, `tabula/postgresfixture`, and `tabula/internal/*` depend only on
+   the Go standard library. Driver-specific code belongs in `pqdriver` or the separate
+   `pgxdriver` module.
 
 ## Local Development & Testing
 

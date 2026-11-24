@@ -10,7 +10,7 @@ Tabula is a **general-purpose, domain-agnostic PostgreSQL descriptor engine** fo
 2. **No DDL or AutoMigrate** — migrations remain the sole source of truth; Tabula may only verify schema/grants/RLS via `sqlcheck`.
 3. **No hidden global state, callbacks, or implicit clocks** — registries, scopes, loggers, tracers, metrics, and error policies are passed explicitly.
 4. **Strict domain neutrality** — never introduce business-specific concepts, terminology, roles, GUC names, or test fixtures from any host/downstream application (e.g., finance, crypto, payments, KYC, auth tokens). Keep row-level scoping generic (`Scope` / `Unscoped` / `db:"...,scope"`). Multi-tenant PostgreSQL RLS may appear in examples, cookbooks, and tests as an illustration of generic scoping.
-5. **Zero third-party dependencies in core packages** — `tabula`, `tabula/stdsql`, `tabula/sqlcheck`, and `tabula/internal/*` must depend **only on the Go standard library**. Driver code belongs in `pqdriver` (`lib/pq`) or the separate `pgxdriver` module (`pgx/v5`).
+5. **Zero third-party dependencies in core packages** — `tabula`, `tabula/stdsql`, `tabula/sqlcheck`, `tabula/postgresfixture`, and `tabula/internal/*` must depend **only on the Go standard library**. Driver code belongs in `pqdriver` (`lib/pq`) or the separate `pgxdriver` module (`pgx/v5`).
 
 ## 2. Repository & Module Boundaries
 
@@ -24,7 +24,7 @@ Tabula is a **general-purpose, domain-agnostic PostgreSQL descriptor engine** fo
 ## 3. SQL Safety & Security Invariants
 
 - Identifiers (table, column, sort expressions) come only from descriptors or init-time whitelists (`Define`, `MustOrderSpec`); runtime values always bind via `$1..$n`.
-- Any change to [internal/pgstmt/tokens.go](internal/pgstmt/tokens.go) or [guard.go](guard.go) (`GuardNoSessionEscape`, `GuardReadOnly`) must include both bypass-regression tests (e.g. comments, quoted strings, dollar quotes, `E'...'` escape strings, stacked statements) and fuzz seeds.
+- Changes to the [SQL lexer](internal/pgstmt/lex.go), [built-in guards](guard.go), or [shared session guard](session_guard.go) must include both bypass-regression tests (e.g. comments, quoted strings, dollar quotes, `E'...'` escape strings, stacked statements) and fuzz seeds.
 - Read-only enforcement (`TableSpec.ReadOnly`, `WithinReadOnly`, `Direct`) must fail closed with `tabula.ErrReadOnly` and preserve SQLSTATE `25006` when rejected by PostgreSQL.
 - `Direct` pool options must never weaken `default_transaction_read_only=on`.
 

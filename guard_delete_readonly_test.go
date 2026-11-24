@@ -13,11 +13,15 @@ func TestGuardNoSessionEscape(t *testing.T) {
 		"SET SESSION ROLE foo",
 		"RESET ROLE",
 		"reset all",
+		"DISCARD ALL",
+		"SELECT 1; /* reset connection */ DISCARD ALL",
 		"SET SESSION AUTHORIZATION DEFAULT",
+		"RESET SESSION AUTHORIZATION",
 		"SELECT set_config('app.current_tenant', 'other', true)",
 		"SELECT pg_catalog.set_config('role', 'postgres', false)",
 		"SELECT 1; /* sneaky */ SET LOCAL ROLE super",
 		`SELECT "set_config"('x','y',true)`,
+		`SELECT U&"lab\0065l" FROM items`,
 		`SELECT E'\''; SET ROLE postgres`,
 		`SELECT e'\''; RESET ALL`,
 		`SELECT E'\\'; SET SESSION AUTHORIZATION DEFAULT`,
@@ -32,11 +36,25 @@ func TestGuardNoSessionEscape(t *testing.T) {
 		"SELECT 'SET ROLE postgres' AS literal_note FROM public.items",
 		"SELECT * FROM public.items WHERE note = 'don''t call set_config(1)'",
 		`SELECT E'don\'t; SET ROLE postgres' AS note`,
+		`SELECT $body$; DISCARD ALL; U&"label"$body$`,
+		`SELECT u & "mask" FROM items`,
 		"-- SET ROLE postgres\nSELECT id FROM public.items",
 		"/* RESET ROLE; set_config('a','b',true) */ SELECT 1",
 	}
 	for _, q := range allowed {
 		require.NoError(t, GuardNoSessionEscape(q), "should allow: %s", q)
+	}
+}
+
+func TestGuardReadOnlyStatementAndSessionChecks(t *testing.T) {
+	for _, q := range []string{"DISCARD ALL", "SELECT 1; DISCARD ALL", "DELETE FROM items"} {
+		require.ErrorIs(t, GuardReadOnly(q), ErrReadOnly, q)
+	}
+	for _, q := range []string{`SELECT U&"label" FROM items`, "WITH x AS (SELECT set_config('scope.id','a',true)) SELECT * FROM x"} {
+		require.ErrorIs(t, GuardReadOnly(q), ErrForbiddenStatement, q)
+	}
+	for _, q := range []string{`SELECT 1 AS ";" FROM items;`, `SELECT $$DISCARD ALL$$`, `SELECT u & "mask" FROM items`} {
+		require.NoError(t, GuardReadOnly(q), q)
 	}
 }
 

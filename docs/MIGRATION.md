@@ -62,4 +62,6 @@ Consumers with custom error mappings can use `ClassifyError` to distinguish `Cla
 
 ## Adopting the authorization checks
 
+Use ordinary unquoted or double-quoted identifiers in guarded adapter SQL. The v0.3 session guards reject Unicode-escaped identifiers when a restriction is active. The built-in guard also rejects `DISCARD ALL`, which resets role and session state.
+
 Keep existing descriptor verification. Register handwritten adapter methods with `CollectSQL` and assign their statements to roles in `RoleStatements`. Capture the installed catalog, review the expected direct grants, then run `CheckGrantManifest` for a read-only drift report. Run `MinimizeGrants` on a disposable installation before preparing application-owned grant changes. [Configuration and examples](AUTHORIZATION.md)

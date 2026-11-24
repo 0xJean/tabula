@@ -1,6 +1,7 @@
 package tabula
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -120,9 +121,17 @@ func FuzzGuardNoSessionEscape(f *testing.F) {
 	f.Add("/* nested /* comment */ still comment */ SET ROLE x")
 	f.Add(`SELECT E'\''; SET ROLE postgres`)
 	f.Add(`SELECT e'\''; RESET ALL`)
+	f.Add("DISCARD ALL")
+	f.Add("SELECT 1; /* reset connection */ DISCARD ALL")
+	f.Add(`SELECT U&"lab\0065l" FROM items`)
+	f.Add(`SELECT $body$DISCARD ALL; U&"label"$body$`)
+	f.Add(`SELECT u & "mask" FROM items`)
 	f.Fuzz(func(t *testing.T, query string) {
-		_ = GuardNoSessionEscape(query)
-		_ = GuardReadOnly(query)
+		sessionErr := GuardNoSessionEscape(query)
+		readErr := GuardReadOnly(query)
+		if !errors.Is(readErr, ErrReadOnly) && errors.Is(readErr, ErrForbiddenStatement) != errors.Is(sessionErr, ErrForbiddenStatement) {
+			t.Fatalf("session and read-only guards disagree on %q: %v, %v", query, sessionErr, readErr)
+		}
 		_ = configured(query)
 	})
 }

@@ -98,6 +98,10 @@ func Lex(q string) []Token {
 				}
 				out = append(out, Token{Symbol, q[start:i]})
 			}
+		case (c == 'u' || c == 'U') && strings.HasPrefix(q[i:], `&"`):
+			// A Unicode identifier requires the prefix to touch the opening quote.
+			out = append(out, Token{Symbol, "u&"})
+			i++
 		case identStart(c):
 			for i < len(q) && (identStart(q[i]) || digit(q[i]) || q[i] == '$') {
 				i++

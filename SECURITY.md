@@ -2,12 +2,9 @@
 
 ## Reporting a Vulnerability
 
-Please do **not** open a public GitHub issue for security vulnerabilities (such as SQL
-injection bypasses in `Filter` / `OrderSpec`, session-escape bypasses in
-`GuardNoSessionEscape`, or sensitive value leakage in `LogConfig` redaction).
-
-Instead, report vulnerabilities privately via GitHub Security Advisories on
-`0xJean/tabula` with:
+Report SQL injection in `Filter` or `OrderSpec`, session guard bypasses, sensitive
+value leakage in `LogConfig` redaction, and other security findings privately.
+Send the following details to the maintainers. [Report a vulnerability](https://github.com/0xJean/tabula/security/advisories/new)
 
 - A clear description of the issue and affected package(s).
 - Minimal reproduction steps or a failing Go test.
@@ -21,12 +18,12 @@ Instead, report vulnerabilities privately via GitHub Security Advisories on
 - **Sensitive data is never logged by default**: `LogConfig.Values` defaults to
   `ValuesNever`. Columns tagged `db:"...,secret"` and statements registered with
   `tabula.Secret()` are redacted as `"[redacted]"` even when `ValuesAllowed` is enabled.
-- **Session-escape & read-only guards**: `tabula.GuardNoSessionEscape` blocks adapter SQL
-  from executing `SET ROLE`, `RESET ROLE`, `RESET ALL`, `SESSION AUTHORIZATION`, or
-  `set_config(...)` (skipping comments, dollar-quoted strings, `E'...'` escape strings, and
-  single-quoted literals). `tabula.GuardReadOnly` admits only a single `SELECT` or `WITH`
-  statement and combines with `default_transaction_read_only=on` in `stdsql.Direct` and
-  `pgxdriver.Direct` for defense-in-depth read-only pools.
+- `tabula.GuardNoSessionEscape` blocks role and session-authorization changes, `RESET ALL`,
+  `DISCARD ALL`, and calls to `set_config`. It rejects Unicode-escaped identifiers.
+  The lexer recognizes comments, quoted identifiers, dollar-quoted strings, `E'...'`
+  escape strings, and single-quoted literals. `tabula.GuardReadOnly` applies the same
+  session checks to a single `SELECT` or `WITH` statement. Both Direct adapters also set
+  `default_transaction_read_only=on` on the PostgreSQL connection.
 
 - `NewSessionGuard` can protect application-owned GUC prefixes and restrict role, session authorization and `set_config` changes in adapter SQL. Run guarded SQL with PostgreSQL’s standard-conforming strings enabled. The database role remains the enforcement boundary for functions and other indirect operations.
 - Grant manifests audit direct ACLs. Run trial revocations and RLS behavior probes on isolated test databases. Sequences and external function effects can outlive a transaction rollback. [Authorization verification model](docs/AUTHORIZATION.md)

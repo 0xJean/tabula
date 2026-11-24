@@ -20,6 +20,7 @@ type SessionGuardConfig struct {
 
 // NewSessionGuard compiles an application GuardQuery for trusted adapter SQL.
 // RESET ALL and DISCARD ALL are rejected if they could reset protected state.
+// Enabling any restriction also rejects Unicode-escaped identifiers.
 func NewSessionGuard(cfg SessionGuardConfig) (func(string) error, error) {
 	prefixes := slices.Clone(cfg.VariablePrefixes)
 	for i, p := range prefixes {
@@ -28,21 +29,26 @@ func NewSessionGuard(cfg SessionGuardConfig) (func(string) error, error) {
 		}
 		prefixes[i] = strings.ToLower(p)
 	}
-	guardsState := cfg.ForbidRole || cfg.ForbidSessionAuthorization || len(prefixes) > 0
+	cfg.VariablePrefixes = prefixes
+	check := compileSessionGuard(cfg)
+	return func(query string) error { return check(pgstmt.Lex(query)) }, nil
+}
+
+func compileSessionGuard(cfg SessionGuardConfig) func([]pgstmt.Token) error {
+	guardsState := cfg.ForbidRole || cfg.ForbidSessionAuthorization || len(cfg.VariablePrefixes) > 0
 	protected := func(name string) bool {
 		name = strings.ToLower(name)
 		if cfg.ForbidRole && name == "role" || cfg.ForbidSessionAuthorization && name == "session_authorization" {
 			return true
 		}
-		for _, p := range prefixes {
+		for _, p := range cfg.VariablePrefixes {
 			if strings.HasPrefix(name, p) {
 				return true
 			}
 		}
 		return false
 	}
-	return func(q string) error {
-		t := pgstmt.Lex(q)
+	return func(t []pgstmt.Token) error {
 		at := func(i int) string {
 			if i < len(t) && t[i].Kind != pgstmt.Literal {
 				return strings.ToLower(t[i].Text)
@@ -53,7 +59,7 @@ func NewSessionGuard(cfg SessionGuardConfig) (func(string) error, error) {
 		for i, tok := range t {
 			// The server decodes Unicode-escaped identifiers with an optional
 			// UESCAPE clause. Require ordinary identifiers on guarded SQL.
-			if (guardsState || cfg.ForbidSetConfig) && at(i) == "u" && at(i+1) == "&" && i+2 < len(t) && t[i+2].Kind == pgstmt.Quoted {
+			if (guardsState || cfg.ForbidSetConfig) && tok == (pgstmt.Token{Kind: pgstmt.Symbol, Text: "u&"}) {
 				return fmt.Errorf("%w: escaped identifier", ErrForbiddenStatement)
 			}
 			if tok.Kind == pgstmt.Symbol && tok.Text == ";" {
@@ -92,5 +98,5 @@ func NewSessionGuard(cfg SessionGuardConfig) (func(string) error, error) {
 			}
 		}
 		return nil
-	}, nil
+	}
 }

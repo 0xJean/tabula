@@ -76,6 +76,8 @@ A grant manifest contains the same scope plus its expected entries. This small d
 
 `CheckGrantManifest` reports `Missing` and `Extra` and generates SQL to reconcile them. It compares direct ACLs on tables, views, columns, sequences and overloaded functions. A function's `Arguments` uses the catalog's qualified type names, such as `pg_catalog.int4`. Grant options participate in equality. The generated order restores surviving column grants after a table-level revoke. Grantors are aggregated. Ownership, role membership, schema `USAGE`, database `CONNECT` and future-object default privileges are separate inputs to effective access. Use the role's planning and behavior probes to measure that access.
 
+The `FUNCTION` entries in `grants.json` cover ordinary, aggregate and window functions. Procedure `EXECUTE` grants are outside the scope of grant comparison and minimization in v0.3.
+
 ## Trial each revocation
 
 Pass one role, its schemas and its named statements to `tabula minimize --config trials.json`. The maintenance connection needs authority to assume the role and alter its grants in a disposable clone.
@@ -110,7 +112,7 @@ done
 tabula catalog --config scope.json --against testdata/catalog
 ```
 
-The four lists contain policy identities and predicates, FORCE RLS relations, direct grants and SECURITY DEFINER routines with their owner, signature, settings and definition. A changed entry shows up even when the total count stays the same. Treat snapshots as application source, particularly function bodies.
+The four lists contain policy identities and predicates, FORCE RLS relations, direct grants and SECURITY DEFINER routines. The `security-definers.json` snapshot records the owner, signature, settings and definition of each SECURITY DEFINER ordinary function, window function and procedure in the selected schemas. A changed entry shows up even when the total count stays the same. Treat routine bodies as application source.
 
 `tabula check-policies --config policies.json` accepts the catalog scope plus `Rules`. A rule can specify `Command`, `Permissive`, an exact role set, identifier patterns (`SchemaPattern`, `TablePattern`, `NamePattern`) and Go regular expressions for `Using` and `Check`. Conditions are combined. `Entries` restricts a category to registered schema/table/policy identities. `UnregisteredOnly` lets a general category exclude the exception registry.
 
@@ -131,7 +133,9 @@ Each policy must match exactly one rule. Unmatched policies, overlapping matches
 
 ## Check command coverage and exercise rows
 
-`tabula check-coverage --config workload.json` checks catalog policy coverage on RLS-enabled tables. It accounts for permissive policies, `ALL`, `PUBLIC`, inherited roles, FORCE and role bypass. `INSERT … RETURNING` requires SELECT coverage. In the example workload, a writer with the required column grants and only an INSERT policy can pass `verify-roles`. Running `check-coverage` then reports a missing SELECT policy for `add-note`. Targeted `ON CONFLICT` needs SELECT coverage and `DO UPDATE` also needs UPDATE. Locking reads need UPDATE coverage. For joins, CTEs, multi-source writes and other complex SQL, supply the full reviewed `Access` list on the statement, for example `[{"Table":"docs.notes","Command":"SELECT"}]`. Qualify relations for the application search path. Review view-owner and function execution contexts separately. Pair structural checks with role verification so that PostgreSQL also validates the SQL and the referenced objects. [PostgreSQL policy command rules](https://www.postgresql.org/docs/17/sql-createpolicy.html)
+`tabula check-coverage --config workload.json` checks catalog policy coverage on RLS-enabled tables. It accounts for permissive policies, `ALL`, `PUBLIC`, inherited roles, FORCE and role bypass. `INSERT … RETURNING` requires SELECT coverage. In the example workload, a writer with the required column grants and only an INSERT policy can pass `verify-roles`. Running `check-coverage` then reports a missing SELECT policy for `add-note`. Targeted `ON CONFLICT` needs SELECT coverage and `DO UPDATE` also needs UPDATE.
+
+A simple read such as `SELECT substring(note FOR 3) FROM docs.notes` requires SELECT coverage. Adding a top-level `FOR UPDATE`, `FOR NO KEY UPDATE`, `FOR SHARE`, or `FOR KEY SHARE` clause also requires UPDATE coverage. For joins, CTEs, multi-source writes and other complex SQL, supply the full reviewed `Access` list on the statement, for example `[{"Table":"docs.notes","Command":"SELECT"}]`. Qualify relations for the application search path. Review view-owner and function execution contexts separately. Pair structural checks with role verification so that PostgreSQL also validates the SQL and the referenced objects. [PostgreSQL policy command rules](https://www.postgresql.org/docs/17/sql-createpolicy.html)
 
 `tabula test-rls --config behavior.json` or `RunRLSMatrix` executes the role × scope × statement matrix. Every cell must have one expectation. `Rows` compares a multiset of text values and SQL nulls, or checks order with `Ordered`. `Affected` asserts a write count. `Denied` accepts `rls_denied` or `insufficient_privilege`. Invisible rows commonly yield an empty result or zero affected rows.
 

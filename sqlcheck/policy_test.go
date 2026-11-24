@@ -44,6 +44,14 @@ func TestInferredPolicyAccess(t *testing.T) {
 		{"DELETE FROM docs.items WHERE true", []string{"DELETE"}},
 		{"SELECT 1", nil}, {"VALUES (1)", nil}, {"TABLE docs.items", []string{"SELECT"}},
 		{"SELECT note FROM docs.items AS i FOR SHARE", []string{"SELECT", "UPDATE"}},
+		{"SELECT note FROM docs.items FOR UPDATE SKIP LOCKED", []string{"SELECT", "UPDATE"}},
+		{"SELECT note FROM docs.items AS i FOR NO /* lock */ KEY UPDATE OF i NOWAIT", []string{"SELECT", "UPDATE"}},
+		{"TABLE docs.items FOR KEY SHARE", []string{"SELECT", "UPDATE"}},
+		{"SELECT substring(note FOR 3) FROM docs.items", []string{"SELECT"}},
+		{"SELECT substring(note FROM 1 FOR 3) FROM docs.items", []string{"SELECT"}},
+		{"SELECT id FROM docs.items WHERE substring(note FOR 3) = 'FOR SHARE'", []string{"SELECT"}},
+		{"SELECT note FROM docs.items ORDER BY substring(note FOR 3) FOR SHARE", []string{"SELECT", "UPDATE"}},
+		{`SELECT note AS "for" FROM docs.items ORDER BY "for"`, []string{"SELECT"}},
 		{"INSERT INTO docs.items DEFAULT VALUES", []string{"INSERT"}},
 		{"INSERT INTO docs.items VALUES(1) ON CONFLICT DO NOTHING", []string{"INSERT"}},
 		{"INSERT INTO docs.items VALUES(1) ON CONFLICT(id) DO NOTHING", []string{"INSERT", "SELECT"}},
@@ -60,7 +68,7 @@ func TestInferredPolicyAccess(t *testing.T) {
 		}
 		require.ElementsMatch(t, tc.cmds, cmds, tc.sql)
 	}
-	for _, q := range []string{"", "WITH q AS (SELECT 1) SELECT * FROM q", "SELECT id FROM a JOIN b ON a.id=b.id", "SELECT * FROM a,b", "SELECT * FROM f()", "SELECT (TABLE other)", "DELETE FROM a USING b", "UPDATE a SET x=y FROM b"} {
+	for _, q := range []string{"", "WITH q AS (SELECT 1) SELECT * FROM q", "SELECT id FROM a JOIN b ON a.id=b.id", "SELECT * FROM a,b", "SELECT * FROM f()", "SELECT (TABLE other)", "SELECT (SELECT id FROM a FOR SHARE) FROM b", "DELETE FROM a USING b", "UPDATE a SET x=y FROM b"} {
 		_, err := inferAccess(q)
 		require.Error(t, err, q)
 	}

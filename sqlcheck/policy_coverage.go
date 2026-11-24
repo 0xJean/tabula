@@ -31,11 +31,30 @@ func inferAccess(query string) ([]PolicyAccess, error) {
 	symbols := func(i int, s string) bool { return i < len(t) && t[i] == (pgstmt.Token{Kind: pgstmt.Symbol, Text: s}) }
 	id := func(i int) bool { return i < len(t) && (t[i].Kind == pgstmt.Word || t[i].Kind == pgstmt.Quoted) }
 	op := word(0)
-	for i := 1; i < len(t); i++ {
+	from, lock := -1, -1
+	for i, depth := 1, 0; i < len(t); i++ {
+		switch {
+		case symbols(i, "("):
+			depth++
+		case symbols(i, ")"):
+			depth--
+		}
 		switch word(i) {
-		case "select", "join", "using", "with", "from", "table", "union", "intersect", "except":
-			if word(i) != "from" || op != "select" && op != "delete" || i != pos("from") {
+		case "select", "join", "using", "with", "table", "union", "intersect", "except":
+			return nil, needsAccess
+		case "from":
+			if op == "select" && depth > 0 {
+				continue // e.g. substring(note FROM 1 FOR 3)
+			}
+			if from >= 0 || op != "select" && op != "delete" {
 				return nil, needsAccess
+			}
+			from = i
+		case "for":
+			if depth == 0 && (word(i+1) == "update" || word(i+1) == "share" ||
+				word(i+1) == "no" && word(i+2) == "key" && word(i+3) == "update" ||
+				word(i+1) == "key" && word(i+2) == "share") {
+				lock = i
 			}
 		}
 	}
@@ -47,7 +66,7 @@ func inferAccess(query string) ([]PolicyAccess, error) {
 	case "values":
 		return nil, nil
 	case "select":
-		n = pos("from") + 1
+		n = from + 1
 		if n == 0 {
 			return nil, nil
 		}
@@ -145,7 +164,7 @@ func inferAccess(query string) ([]PolicyAccess, error) {
 			}
 		}
 	}
-	if op == "select" && pos("for") >= 0 {
+	if op == "select" && lock >= n {
 		add("UPDATE")
 	}
 	return out, nil
@@ -185,7 +204,8 @@ func readsColumn(tokens []pgstmt.Token) bool {
 
 // CheckPolicyCoverage reads pg_policy for each required command. It checks
 // permissive rules, ALL/PUBLIC and inherited memberships, and flags bypassing
-// roles on RLS tables. Predicates are exercised separately by RunRLSMatrix.
+// roles on RLS tables. A top-level row-locking clause on a simple SELECT also
+// requires UPDATE coverage. Predicates are exercised separately by RunRLSMatrix.
 func CheckPolicyCoverage(ctx context.Context, db *sql.DB, work RoleStatements) ([]string, error) {
 	if err := work.validate(); err != nil {
 		return nil, err

@@ -67,7 +67,7 @@ Call the [sqlcheck Go API](REFERENCE.md#sqlcheck) in tests or use the commands b
 | Whether PostgreSQL can plan each role's own statements | `VerifyRoleStatements` | [verify-roles](REFERENCE.md#tabula-verify-roles) |
 | Required descriptor privileges or exact direct grants on all configured objects | `CollectPrivilegeNeeds` and `CheckRolePrivileges` for descriptors. `CheckGrantManifest` for missing and extra grants with reconciliation SQL. | [grants](REFERENCE.md#tabula-grants) for the manifest |
 | Which grants a tested workload still needs | `MinimizeGrants` | [minimize](REFERENCE.md#tabula-minimize) |
-| Policy definitions, FORCE RLS tables, grants and SECURITY DEFINER functions | `ReadCatalog`, `Catalog.Snapshots` | [catalog](REFERENCE.md#tabula-catalog) |
+| Policy definitions, FORCE RLS tables, direct grants and SECURITY DEFINER functions and procedures | `ReadCatalog`, `Catalog.Snapshots` | [catalog](REFERENCE.md#tabula-catalog) |
 | Whether each policy matches one configured category | `ClassifyPolicies` | [check-policies](REFERENCE.md#tabula-check-policies) |
 | Whether a role has policy coverage for the SQL commands it uses | `CheckPolicyCoverage` | [check-coverage](REFERENCE.md#tabula-check-coverage) |
 | Which rows a role sees or changes for a given scope | `RunRLSMatrix` | [test-rls](REFERENCE.md#tabula-test-rls) |

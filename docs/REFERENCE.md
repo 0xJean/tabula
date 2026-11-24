@@ -54,13 +54,10 @@ const (
 FUNCTIONS
 
 func GuardNoSessionEscape(query string) error
-    GuardNoSessionEscape rejects SQL queries that attempt to switch PostgreSQL
-    roles or mutate session configuration from application/adapter SQL:
-    SET [LOCAL|SESSION] ROLE, RESET ROLE, RESET ALL, SESSION AUTHORIZATION, and
-    set_config(...). Statement boundaries (;) are tracked so column assignments
-    like "UPDATE users SET role = $2" are allowed while standalone or stacked
-    "SET ROLE ..." / "SET role = ..." statements are rejected. Comments and
-    single-quoted string literals are ignored to avoid false positives.
+    GuardNoSessionEscape rejects role and session-authorization changes,
+    RESET ALL, DISCARD ALL, and calls to set_config. It checks each statement
+    and rejects Unicode-escaped identifiers. Ordinary quoted identifiers,
+    literals and comments follow PostgreSQL token boundaries.
 
     Pass it directly to stdsql.ScopePolicy.GuardQuery or
     pgxdriver.ScopePolicy.GuardQuery.
@@ -114,6 +111,7 @@ func JSON(p any) any
 func NewSessionGuard(cfg SessionGuardConfig) (func(string) error, error)
     NewSessionGuard compiles an application GuardQuery for trusted adapter SQL.
     RESET ALL and DISCARD ALL are rejected if they could reset protected state.
+    Enabling any restriction also rejects Unicode-escaped identifiers.
 
 func RegisterType[S, V any](r *Registry[S], wrap func(*V) any)
     RegisterType registers a converter wrapping a pointer to a value of type T.
@@ -1140,7 +1138,9 @@ FUNCTIONS
 func CheckPolicyCoverage(ctx context.Context, db *sql.DB, work RoleStatements) ([]string, error)
     CheckPolicyCoverage reads pg_policy for each required command. It checks
     permissive rules, ALL/PUBLIC and inherited memberships, and flags bypassing
-    roles on RLS tables. Predicates are exercised separately by RunRLSMatrix.
+    roles on RLS tables. A top-level row-locking clause on a simple SELECT
+    also requires UPDATE coverage. Predicates are exercised separately by
+    RunRLSMatrix.
 
 func CheckRLS(ctx context.Context, db *sql.DB, exp RLSExpectation) ([]string, error)
     CheckRLS audits PostgreSQL RLS configuration in exp.Schema against exp and
@@ -1251,7 +1251,8 @@ type Catalog struct {
 
 func ReadCatalog(ctx context.Context, db *sql.DB, scope CatalogScope) (Catalog, error)
     ReadCatalog reads the scoped PostgreSQL catalogs with a fixed deparser
-    search path. It includes overloaded functions and explicit column grants.
+    search path. Definers includes SECURITY DEFINER functions and procedures.
+    Grants includes overloaded functions and explicit column grants.
 
 func (c Catalog) Snapshots() map[string]string
     Snapshots renders each catalog section as independently comparable JSON.
@@ -1278,8 +1279,10 @@ type Grant struct {
 	GrantOption                           bool   `json:",omitempty"`
 }
     Grant is a direct ACL entry. Kind is TABLE, COLUMN, SEQUENCE or FUNCTION.
-    Arguments uses schema-qualified PostgreSQL type names from the snapshot,
-    including the array type name for variadic functions. Grantor is immaterial.
+    FUNCTION covers ordinary, aggregate and window functions. Procedure EXECUTE
+    grants are outside the manifest and minimization scope. Arguments uses
+    schema-qualified PostgreSQL type names from the snapshot, including the
+    array type name for variadic functions. Grantor is immaterial.
 
 type GrantDiff struct {
 	Missing, Extra []Grant

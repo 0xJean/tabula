@@ -12,6 +12,8 @@ import (
 )
 
 // Grant is a direct ACL entry. Kind is TABLE, COLUMN, SEQUENCE or FUNCTION.
+// FUNCTION covers ordinary, aggregate and window functions. Procedure EXECUTE
+// grants are outside the manifest and minimization scope.
 // Arguments uses schema-qualified PostgreSQL type names from the snapshot,
 // including the array type name for variadic functions. Grantor is immaterial.
 type Grant struct {

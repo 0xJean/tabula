@@ -40,10 +40,11 @@ type RLSMatrix struct {
 	Cases      []BehaviorCase
 }
 
+var customGUCName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)+$`)
+
 func validateVars(vars map[string]string) error {
-	custom := regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)+$`)
 	for k := range vars {
-		if !custom.MatchString(k) {
+		if !customGUCName.MatchString(k) {
 			return fmt.Errorf("expected a custom GUC, got %q", k)
 		}
 	}

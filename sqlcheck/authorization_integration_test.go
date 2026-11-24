@@ -38,10 +38,12 @@ func TestAuthorizationWorkflow(t *testing.T) {
 		"INSERT INTO " + tbl + " VALUES (1,'a',NULL),(2,'b','two')",
 		"CREATE SEQUENCE " + ns + ".seq", "CREATE FUNCTION " + ns + ".f(integer) RETURNS integer LANGUAGE SQL SECURITY DEFINER AS 'SELECT $1'",
 		"CREATE FUNCTION " + ns + ".f(text) RETURNS text LANGUAGE SQL SECURITY DEFINER AS 'SELECT $1'",
+		"CREATE PROCEDURE " + ns + ".refresh_notes() LANGUAGE plpgsql SECURITY DEFINER AS 'BEGIN NULL; END;'",
 		"GRANT USAGE ON SCHEMA " + ns + " TO " + reader + "," + writer,
 		"GRANT SELECT, UPDATE ON " + tbl + " TO " + reader, "GRANT SELECT(id) ON " + tbl + " TO " + reader,
 		"GRANT SELECT, INSERT, UPDATE ON " + tbl + " TO " + writer, "GRANT USAGE ON SEQUENCE " + ns + ".seq TO " + reader,
 		"GRANT EXECUTE ON FUNCTION " + ns + ".f(integer) TO " + reader,
+		"GRANT EXECUTE ON PROCEDURE " + ns + ".refresh_notes() TO " + reader,
 		"ALTER TABLE " + tbl + " ENABLE ROW LEVEL SECURITY", "ALTER TABLE " + tbl + " FORCE ROW LEVEL SECURITY",
 		"CREATE POLICY visible ON " + tbl + " FOR SELECT TO " + group + " USING (scope=current_setting('example.scope',true))",
 		"CREATE POLICY write_scope ON " + tbl + " FOR INSERT TO " + writer + " WITH CHECK (scope=current_setting('example.scope',true))",
@@ -55,8 +57,12 @@ func TestAuthorizationWorkflow(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, cat.Policies, 3)
 	require.Equal(t, []Relation{{ns, "items"}}, cat.ForceRLS)
-	require.Len(t, cat.Definers, 2)
+	require.Len(t, cat.Definers, 3)
 	require.ElementsMatch(t, []string{"pg_catalog.int4", "pg_catalog.text"}, []string{cat.Definers[0].Arguments, cat.Definers[1].Arguments})
+	require.Equal(t, "refresh_notes", cat.Definers[2].Name)
+	require.Contains(t, cat.Definers[2].Definition, "CREATE OR REPLACE PROCEDURE")
+	require.Contains(t, cat.Snapshots()["security-definers.json"], "refresh_notes")
+	require.False(t, slices.ContainsFunc(cat.Grants, func(g Grant) bool { return g.Object == "refresh_notes" }))
 	require.Contains(t, cat.Snapshots()["policies.json"], "example.scope")
 	again, err := ReadCatalog(ctx, db, scope)
 	require.NoError(t, err)
@@ -158,6 +164,23 @@ func TestAuthorizationWorkflow(t *testing.T) {
 	findings, err = CheckPolicyCoverage(ctx, db, work)
 	require.NoError(t, err)
 	require.Empty(t, findings)
+	t.Run("locking clauses require an update policy", func(t *testing.T) {
+		read := "SELECT substring(note FROM 1 FOR 3) FROM " + tbl
+		stmts := []Statement{{Name: "substring", SQL: read}}
+		var want []string
+		for _, lock := range []string{"UPDATE", "NO KEY UPDATE", "SHARE", "KEY SHARE"} {
+			name := strings.ReplaceAll(strings.ToLower(lock), " ", "_")
+			stmts = append(stmts, Statement{Name: name, SQL: read + " FOR " + lock})
+			want = append(want, reader+"/"+name+": "+quoteIdent(ns)+`."items" UPDATE: no applicable permissive policy`)
+		}
+		work := RoleStatements{reader: stmts}
+		failures, err := VerifyRoleStatements(t.Context(), db, work)
+		require.NoError(t, err)
+		require.Empty(t, failures)
+		findings, err := CheckPolicyCoverage(t.Context(), db, work)
+		require.NoError(t, err)
+		require.ElementsMatch(t, want, findings)
+	})
 	upsert := ins
 	upsert.SQL += " ON CONFLICT (id) DO UPDATE SET scope=excluded.scope RETURNING id"
 	findings, err = CheckPolicyCoverage(ctx, db, RoleStatements{writer: {upsert}})

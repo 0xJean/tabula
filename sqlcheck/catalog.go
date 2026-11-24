@@ -103,7 +103,8 @@ const routineArgs = `coalesce((SELECT pg_catalog.string_agg(pg_catalog.format('%
  FROM pg_catalog.unnest(p.proargtypes) WITH ORDINALITY a(typ,i) JOIN pg_catalog.pg_type t ON t.oid=a.typ JOIN pg_catalog.pg_namespace tn ON tn.oid=t.typnamespace),'') COLLATE pg_catalog."C"`
 
 // ReadCatalog reads the scoped PostgreSQL catalogs with a fixed deparser
-// search path. It includes overloaded functions and explicit column grants.
+// search path. Definers includes SECURITY DEFINER functions and procedures.
+// Grants includes overloaded functions and explicit column grants.
 func ReadCatalog(ctx context.Context, db *sql.DB, scope CatalogScope) (Catalog, error) {
 	var c Catalog
 	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
