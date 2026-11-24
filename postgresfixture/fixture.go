@@ -130,9 +130,41 @@ func freshName(prefix string) (string, error) {
 	return prefix + hex.EncodeToString(b[:]), nil
 }
 
+const (
+	lockExclusive   = "SELECT pg_catalog.pg_advisory_lock(pg_catalog.hashtextextended($1,0))"
+	unlockExclusive = "SELECT pg_catalog.pg_advisory_unlock(pg_catalog.hashtextextended($1,0))"
+	lockShared      = "SELECT pg_catalog.pg_advisory_lock_shared(pg_catalog.hashtextextended($1,0))"
+	unlockShared    = "SELECT pg_catalog.pg_advisory_unlock_shared(pg_catalog.hashtextextended($1,0))"
+)
+
+func discardConn(conn *sql.Conn) {
+	_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+}
+
+func acquireLock(ctx context.Context, conn *sql.Conn, query, key string) error {
+	_, err := conn.ExecContext(ctx, query, key)
+	if err != nil {
+		// A canceled request may have acquired the lock on the server.
+		discardConn(conn)
+	}
+	return err
+}
+
+func releaseLock(ctx context.Context, conn *sql.Conn, query, key string) error {
+	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	var unlocked bool
+	err := conn.QueryRowContext(cleanup, query, key).Scan(&unlocked)
+	if err != nil || !unlocked {
+		discardConn(conn)
+		return errors.Join(errors.New("template advisory lock was not released"), err)
+	}
+	return nil
+}
+
 // Clone installs a template once per digest and clones it for one test. A
-// session-level advisory lock serializes publishers across processes. Only a
-// completely installed staging database is copied to the stable cache name.
+// shared advisory lock protects the template through the physical copy,
+// allowing concurrent copies. Publication is serialized on the staging name.
 func (f Fixture) Clone(ctx context.Context, p Installation) (Database, error) {
 	if f.Admin == nil || f.Backend == nil {
 		return Database{}, errors.New("fixture requires Admin and Backend")
@@ -146,6 +178,12 @@ func (f Fixture) Clone(ctx context.Context, p Installation) (Database, error) {
 		return Database{}, err
 	}
 	defer func() { _ = conn.Close() }()
+	if err := acquireLock(ctx, conn, lockShared, template); err != nil {
+		return Database{}, err
+	}
+	// If unlocking fails, releaseLock discards the connection. A successfully
+	// created database still belongs to the caller and can be dropped normally.
+	defer func() { _ = releaseLock(ctx, conn, unlockShared, template) }()
 	if err := f.prepare(ctx, conn, template, p); err != nil {
 		return Database{}, err
 	}
@@ -160,20 +198,13 @@ func (f Fixture) Clone(ctx context.Context, p Installation) (Database, error) {
 }
 
 func (f Fixture) prepare(ctx context.Context, conn *sql.Conn, template string, p Installation) (err error) {
-	// An interrupted lock request may have acquired its lock on the server.
-	discard := func() { _ = conn.Raw(func(any) error { return driver.ErrBadConn }) }
-	if _, err = conn.ExecContext(ctx, "SELECT pg_catalog.pg_advisory_lock(pg_catalog.hashtextextended($1,0))", template); err != nil {
-		discard()
+	stage := stageName(template)
+	if err = acquireLock(ctx, conn, lockExclusive, stage); err != nil {
 		return err
 	}
 	defer func() {
-		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-		defer cancel()
-		var unlocked bool
-		e := conn.QueryRowContext(cleanup, "SELECT pg_catalog.pg_advisory_unlock(pg_catalog.hashtextextended($1,0))", template).Scan(&unlocked)
-		if e != nil || !unlocked {
-			discard()
-			err = errors.Join(err, errors.New("template advisory lock was not released"), e)
+		if e := releaseLock(ctx, conn, unlockExclusive, stage); e != nil {
+			err = errors.Join(err, e)
 		}
 	}()
 	exists, err := databaseExists(ctx, conn, template)
@@ -183,9 +214,8 @@ func (f Fixture) prepare(ctx context.Context, conn *sql.Conn, template string, p
 	if exists {
 		return markUsed(ctx, conn, template)
 	}
-	// Only the holder of the template lock builds its stage, so a stage that
+	// Only the holder of the publication lock builds the stage, so a stage that
 	// already exists was abandoned by an interrupted process.
-	stage := stageName(template)
 	if exists, err = databaseExists(ctx, conn, stage); err != nil {
 		return err
 	}

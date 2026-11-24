@@ -1774,16 +1774,16 @@ type Fixture struct {
 
 func (f Fixture) Clone(ctx context.Context, p Installation) (Database, error)
     Clone installs a template once per digest and clones it for one test.
-    A session-level advisory lock serializes publishers across processes. Only a
-    completely installed staging database is copied to the stable cache name.
+    A shared advisory lock protects the template through the physical copy,
+    allowing concurrent copies. Publication is serialized on the staging name.
 
 func (f Fixture) Prune(ctx context.Context, maxIdle time.Duration, keep ...Installation) ([]string, error)
     Prune drops cached templates whose last Clone is older than maxIdle and
     staging databases abandoned by interrupted builds, except the templates
     of keep. Each database is dropped through Backend.Drop while holding the
-    same advisory lock that Clone takes, so a template being built or published
-    is skipped; a Clone that starts after the drop rebuilds the template.
-    Prune returns the dropped database names.
+    same advisory lock that Clone holds through the physical copy. Templates
+    with missing or invalid last-use marks are kept. Prune returns the names it
+    dropped, including partial results if another drop failed.
 
 type Installation struct {
 	Revision   string
