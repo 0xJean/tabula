@@ -116,3 +116,105 @@ func TestTemplatePublicationAndIsolation(t *testing.T) {
 	check(names[1], 1)
 	check(clone, 2)
 }
+
+func TestPruneDropsIdleTemplatesAndAbandonedStages(t *testing.T) {
+	ctx := t.Context()
+	dsn := os.Getenv("TABULA_TEST_DSN")
+	require.NotEmpty(t, dsn)
+	db, err := sql.Open("postgres", dsn)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	b := &installer{dsn: dsn}
+	f := postgresfixture.Fixture{Admin: db, Backend: b}
+	plan := func(label string) (postgresfixture.Installation, string) {
+		p := postgresfixture.Installation{Revision: fmt.Sprintf("prune-%s-%d", label, time.Now().UnixNano()), Base: []byte("CREATE TABLE notes(id int)")}
+		name, err := p.TemplateName()
+		require.NoError(t, err)
+		stage := "tabula_stg_" + name[len("tabula_tpl_"):]
+		t.Cleanup(func() {
+			for _, n := range []string{name, stage} {
+				_, err := db.Exec("DROP DATABASE IF EXISTS " + pq.QuoteIdentifier(n))
+				require.NoError(t, err)
+			}
+		})
+		return p, name
+	}
+	clone := func(p postgresfixture.Installation) {
+		d, err := f.Clone(ctx, p)
+		require.NoError(t, err)
+		require.NoError(t, d.Drop(ctx))
+	}
+	stale := func(name string) {
+		_, err := db.Exec("COMMENT ON DATABASE " + pq.QuoteIdentifier(name) + " IS 'tabula fixture template; last used 2000-01-01T00:00:00Z'")
+		require.NoError(t, err)
+	}
+	kept, keptName := plan("kept")
+	recent, recentName := plan("recent")
+	idle, idleName := plan("idle")
+	busy, busyName := plan("busy")
+	_, abandonedName := plan("abandoned")
+	for _, p := range []postgresfixture.Installation{kept, recent, idle, busy} {
+		clone(p)
+	}
+	stale(keptName)
+	stale(idleName)
+	stale(busyName)
+	abandonedStage := "tabula_stg_" + abandonedName[len("tabula_tpl_"):]
+	_, err = db.Exec("CREATE DATABASE " + pq.QuoteIdentifier(abandonedStage))
+	require.NoError(t, err)
+	holder, err := db.Conn(ctx)
+	require.NoError(t, err)
+	_, err = holder.ExecContext(ctx, "SELECT pg_advisory_lock(hashtextextended($1,0))", busyName)
+	require.NoError(t, err)
+
+	dropped, err := f.Prune(ctx, time.Hour, kept)
+	require.NoError(t, err)
+	require.Contains(t, dropped, idleName)
+	require.Contains(t, dropped, abandonedStage)
+	for _, name := range []string{keptName, recentName, busyName} {
+		require.NotContains(t, dropped, name)
+	}
+
+	_, err = holder.ExecContext(ctx, "SELECT pg_advisory_unlock(hashtextextended($1,0))", busyName)
+	require.NoError(t, err)
+	require.NoError(t, holder.Close())
+	dropped, err = f.Prune(ctx, time.Hour)
+	require.NoError(t, err)
+	require.Contains(t, dropped, busyName)
+	require.Contains(t, dropped, keptName)
+	require.NotContains(t, dropped, recentName)
+
+	installs := b.installs.Load()
+	clone(idle)
+	require.Equal(t, installs+1, b.installs.Load(), "a pruned template is rebuilt on the next Clone")
+	clone(idle)
+	require.Equal(t, installs+1, b.installs.Load(), "the rebuilt template is cached again")
+}
+
+func TestCloneReplacesAnAbandonedStage(t *testing.T) {
+	ctx := t.Context()
+	dsn := os.Getenv("TABULA_TEST_DSN")
+	require.NotEmpty(t, dsn)
+	db, err := sql.Open("postgres", dsn)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	f := postgresfixture.Fixture{Admin: db, Backend: &installer{dsn: dsn}}
+	p := postgresfixture.Installation{Revision: fmt.Sprintf("stage-%d", time.Now().UnixNano()), Base: []byte("CREATE TABLE notes(id int)")}
+	name, err := p.TemplateName()
+	require.NoError(t, err)
+	stage := "tabula_stg_" + name[len("tabula_tpl_"):]
+	t.Cleanup(func() {
+		for _, n := range []string{name, stage} {
+			_, err := db.Exec("DROP DATABASE IF EXISTS " + pq.QuoteIdentifier(n))
+			require.NoError(t, err)
+		}
+	})
+	_, err = db.Exec("CREATE DATABASE " + pq.QuoteIdentifier(stage))
+	require.NoError(t, err)
+	d, err := f.Clone(ctx, p)
+	require.NoError(t, err)
+	require.NoError(t, d.Drop(ctx))
+	var stages int
+	require.NoError(t, db.QueryRow("SELECT count(*) FROM pg_database WHERE datname=$1", stage).Scan(&stages))
+	require.Zero(t, stages, "the build removes its stage after publishing")
+}

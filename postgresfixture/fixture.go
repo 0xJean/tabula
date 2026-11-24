@@ -79,12 +79,15 @@ func (p Installation) TemplateName() (string, error) {
 		hashPart(h, []byte(m.Name))
 		hashPart(h, m.Content)
 	}
-	return "tabula_tpl_" + hex.EncodeToString(h.Sum(nil)[:24]), nil
+	return templatePrefix + hex.EncodeToString(h.Sum(nil)[:24]), nil
 }
 
 // Backend is supplied by the test suite. Clone and Drop use the supplied
 // maintenance connection in autocommit. Install must disconnect from its
 // target before returning so PostgreSQL can clone the installed database.
+// Fixture.Prune also calls Drop for cached templates and abandoned staging
+// databases, so Drop must accept a template (clearing IS_TEMPLATE if Clone set
+// it) and may release host resources tied to it.
 type Backend interface {
 	Clone(ctx context.Context, admin *sql.Conn, source, target string) error
 	Install(ctx context.Context, target string, plan Installation) error
@@ -173,13 +176,23 @@ func (f Fixture) prepare(ctx context.Context, conn *sql.Conn, template string, p
 			err = errors.Join(err, errors.New("template advisory lock was not released"), e)
 		}
 	}()
-	var exists bool
-	if err = conn.QueryRowContext(ctx, "SELECT EXISTS(SELECT FROM pg_catalog.pg_database WHERE datname=$1)", template).Scan(&exists); err != nil || exists {
-		return err
-	}
-	stage, err := freshName("tabula_stage_")
+	exists, err := databaseExists(ctx, conn, template)
 	if err != nil {
 		return err
+	}
+	if exists {
+		return markUsed(ctx, conn, template)
+	}
+	// Only the holder of the template lock builds its stage, so a stage that
+	// already exists was abandoned by an interrupted process.
+	stage := stageName(template)
+	if exists, err = databaseExists(ctx, conn, stage); err != nil {
+		return err
+	}
+	if exists {
+		if err = f.Backend.Drop(ctx, conn, stage); err != nil {
+			return err
+		}
 	}
 	if err = f.Backend.Clone(ctx, conn, "template0", stage); err != nil {
 		return err
@@ -192,5 +205,8 @@ func (f Fixture) prepare(ctx context.Context, conn *sql.Conn, template string, p
 	if err = f.Backend.Install(ctx, stage, p); err != nil {
 		return err
 	}
-	return f.Backend.Clone(ctx, conn, stage, template)
+	if err = f.Backend.Clone(ctx, conn, stage, template); err != nil {
+		return err
+	}
+	return markUsed(ctx, conn, template)
 }
