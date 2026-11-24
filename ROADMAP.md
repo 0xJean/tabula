@@ -63,11 +63,13 @@ Design: [docs/DESIGN-v0.4.md](docs/DESIGN-v0.4.md).
   one transaction, sealed sessions (`SessionKey`), no raw `Tx()` escape by default,
   registry capability policy (`Deny`), transaction-level retry, login role hygiene check.
 - **Session-level observability**: tracer, metrics and logger on runners so hand-written
-  SQL is observed too; separate OpenTelemetry module; server-side slow log guidance.
-- **Query composition and aggregates**: single-table `Max`/`Min`/`Sum`/`Exists`/`CountBy`,
-  composed view queries (fixed base SQL plus named filter fragments, sort whitelist,
-  offset or keyset pages) with verifiable variants, embedded `.sql` files. Joins stay
-  hand-written.
+  SQL is observed too; separate `oteltabula` OpenTelemetry module; server-side slow log guidance.
+- **Query composition and aggregates**: typed single-table aggregates and filtered
+  existence checks, view-owned queries with scoped filters, verified counts, streaming
+  and offset/keyset pages, and embedded `.sql` files. Applications write the joins.
+  See [interface decisions](docs/DESIGN-v0.4.md#interface-decisions) for the decided
+  session proof / module contracts and the agreed C2 direction pending v2 compiler
+  prototype validation.
 
 ## v1.0 — stability and ecosystem adapters
 
