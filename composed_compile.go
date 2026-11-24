@@ -117,6 +117,8 @@ type QuerySpec struct {
 	Filters   []QueryFilter
 	Order     QueryOrderSpec
 	MaxLimit  int
+	// MaxOffset is the largest permitted QueryPage.Offset, inclusive. Zero allows any nonnegative offset.
+	MaxOffset int
 	Keyset    bool
 }
 
@@ -169,6 +171,7 @@ type Query[T, S any] struct {
 	sorts        []compiledSort
 	sortIndex    map[string]int
 	maxLimit     int
+	maxOffset    int
 	keyset       bool
 	opts         []StatementOption
 	meta         stmtMeta
@@ -362,6 +365,10 @@ func (v *View[T, S]) TryDefineQuery(key string, spec QuerySpec, opts ...Statemen
 		return nil, fail("MaxLimit must satisfy 0 < MaxLimit < math.MaxInt, got %d", spec.MaxLimit)
 	}
 
+	if spec.MaxOffset < 0 {
+		return nil, fail("MaxOffset must be nonnegative, got %d", spec.MaxOffset)
+	}
+
 	// Order & Keyset validation.
 	defaultDir := spec.Order.DefaultDirection
 	if defaultDir == SortDefault {
@@ -464,6 +471,7 @@ func (v *View[T, S]) TryDefineQuery(key string, spec QuerySpec, opts ...Statemen
 		sorts:        sorts,
 		sortIndex:    sortIndex,
 		maxLimit:     spec.MaxLimit,
+		maxOffset:    spec.MaxOffset,
 		keyset:       spec.Keyset,
 		opts:         slices.Clone(opts),
 		meta:         statementMeta(v.name+"."+key, opts),

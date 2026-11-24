@@ -25,11 +25,12 @@ Send the following details to the maintainers. [Report a vulnerability](https://
   with `ErrForeignSession` before I/O. `RegistryConfig.Deny` enforces `DenyDelete`,
   `DenyUpsert`, `DenyUnscopedWrites` and `DenyCopy` across derived writes and `CopyFrom`.
 - **Role-bound runners and no default raw `Tx()` escape**: `stdsql.Runner` and
-  `pgxdriver.Runner` bind one PostgreSQL role and timeout policy at construction, validate
+  `pgxdriver.Runner` bind the configured PostgreSQL roles and timeout policy at construction, validate
   declared `ManagedVars` and auto-guard them, reject nested runner calls (`ErrNested`), close
   handles on callback return (`ErrSessionClosed`), and require explicit `ExposeTx: true` for
   `WithinRaw` / `RawSession.Tx()`. `sqlcheck.CheckLoginRole` and `tabula check-login-role`
   audit login-role hygiene (`LOGIN NOINHERIT`, memberships, direct grants, ownership, `CREATE`).
+- In a read-write shared transaction, opt-in `UnscopedReadRole` selects a dedicated reader role before unscoped queries. Its PostgreSQL privileges and RLS policies enforce access inside queries and functions. Provision this role with read grants and reviewed function privileges. The handle accepts reads through `Scan` and `Each` and rejects derived writes, `Exec`, `Returning` and pgx COPY. [Reader role setup](docs/AUTHORIZATION.md#using-a-reader-role-in-a-shared-transaction)
 - Both runners set `transaction_read_only` in their setup query when a transaction requests read-only access. PostgreSQL takes the first snapshot before any callback and enforces read-only mode for the lifetime of that transaction. The guarded session rejects `SET TRANSACTION` and changes to `transaction_read_only` or `default_transaction_read_only`. A `set_config` call requires a literal unprotected key. Direct calls through `RawSession.Tx()` bypass client-side SQL guards and return native driver errors. Applications supply trusted SQL and the runner owns commit and rollback. [PostgreSQL transaction modes](https://www.postgresql.org/docs/17/sql-set-transaction.html)
 - **Sensitive data is never logged by default**: `LogConfig.Values` defaults to
   `ValuesNever`. Columns tagged `db:"...,secret"` and statements registered with

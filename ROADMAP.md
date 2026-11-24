@@ -74,12 +74,12 @@ Design record: [docs/DESIGN-v0.3.1.md](docs/DESIGN-v0.3.1.md).
   `FuzzCompileQueryFragment`), embedded `.sql` files (`MustSQLFiles`), and extended
   `sqlcheck` / `tabula inventory` support. Applications write the joins.
 
-## v0.3.2 — planned
+## v0.3.2 — implemented, pending release
 
-- Make transaction cleanup tolerate a partially consumed `iter.Pull2` iterator whose caller omitted `stop`.
-- Support unscoped reads alongside scoped writes without granting unscoped write access.
-- Define an explicit set of scalar aggregates for statement verification.
-- Consider a maximum offset for paged queries. Document the migration path before changing the existing panic behavior for invalid `Rows.ListKeyset` inputs.
+- Transactions and savepoints close unfinished database cursors on callback exit.
+- Shared transactions can use a dedicated unscoped reader role alongside scoped writes.
+- Tables can register individual scalar aggregates for SQL snapshots and role verification.
+- Composed lists accept a maximum offset. Table keyset lists report invalid options through their error result. [Migration guide](docs/MIGRATION.md#from-v031-to-v032)
 
 ## v1.0 — stability and ecosystem adapters
 

@@ -202,7 +202,7 @@ for job, err := range jobs.Bind(sess).Iter(ctx, nil, tabula.Listing{
 
 Starting a range executes one query in the bound session. Each yielded row comes from that cursor. A break releases it. Finish the range or break before issuing another statement on the same transaction. Both drivers return `tabula.ErrSessionBusy` while the cursor is open, including when another handle from `WithinShared` issues the statement. PostgreSQL retains row locks until the transaction ends. Streaming a locked table with `once` columns retains a snapshot per locked row. Unlocked exports decode one row at a time. For hand-written SQL over the table columns use `rows.SelectIter(ctx, query, args...)`. For a projection, use `view.Bind(sess).Iter(ctx, query, args...)`.
 
-When pulling rows with `next, stop := iter.Pull2(seq)`, place `defer stop()` in the `Within` or `Savepoint` callback that consumes the rows, immediately after creating the iterator. Returning with a partially consumed iterator still open can leave transaction or savepoint cleanup waiting indefinitely.
+When pulling rows with `next, stop := iter.Pull2(seq)`, place `defer stop()` in the `Within` or `Savepoint` callback that consumes the rows, immediately after creating the iterator. Both drivers close a partially consumed database cursor on transaction or savepoint exit. With a live context, a later pull reports `ErrSessionClosed`. A canceled context keeps its cancellation error. Calling `stop` also releases the Go iterator and lets you reuse the transaction earlier.
 
 ## 11. Batch upserts and atomic updates
 
@@ -265,6 +265,7 @@ var listNotes = noteView.DefineQuery("notes.search", tabula.QuerySpec{
         TieBreaker:       []tabula.QuerySortTerm{{Expr: "n.id", Column: "id"}},
     },
     MaxLimit: 100,
+    MaxOffset: 1000,
     Keyset:   true,
 })
 
@@ -276,6 +277,8 @@ if search != "" {
 page, err := listNotes.Bind(sess).ListKeyset(ctx, &params, tabula.QueryKeyset{Limit: 20, After: cursor})
 // page.Next is automatically populated when page.HasMore is true.
 ```
+
+Set `MaxOffset` to the largest offset this query should accept. Larger offsets return an error before either the count or page query runs. A zero cap allows any nonnegative offset.
 
 Declare sort and tie-breaker expressions without bind parameters. An ordering that depends on a base argument can use a projected column computed in `Select`. For keyset pagination, expose that column from a subquery so the cursor predicate in `WHERE` can reference it.
 

@@ -7,6 +7,32 @@ import (
 	"reflect"
 )
 
+// ScalarAggregates declares the columns to verify for each PostgreSQL aggregate.
+// Only listed pairs enter the definition and SQL snapshot. Runtime calls may
+// still use any declared column compatible with the PostgreSQL function.
+type ScalarAggregates struct {
+	Max, Min, Sum, Avg []string
+}
+
+func (a ScalarAggregates) columns(yield func(string, string) bool) {
+	for _, group := range []struct {
+		fn   string
+		cols []string
+	}{
+		{"MAX", a.Max}, {"MIN", a.Min}, {"SUM", a.Sum}, {"AVG", a.Avg},
+	} {
+		for _, col := range group.cols {
+			if !yield(group.fn, col) {
+				return
+			}
+		}
+	}
+}
+
+func scalarSQL(fn, col, table string) string {
+	return "SELECT " + fn + "(" + col + ") FROM " + table + " WHERE true"
+}
+
 // Max evaluates SELECT MAX(col) over live rows matching the session scope and
 // where filter. Choose V for PostgreSQL's result type; registered registry
 // codecs are reused automatically. SQL NULL (empty set or all NULL values)
@@ -101,7 +127,7 @@ func scalarAggregate[V, T, K, S any](ctx context.Context, rows *Rows[T, K, S], a
 	if where != nil {
 		where(f)
 	}
-	query := "SELECT " + fnName + "(" + col + ") FROM " + rows.t.name + " WHERE true" + f.Where()
+	query := scalarSQL(fnName, col, rows.t.name) + f.Where()
 	args := f.Args()
 	meta := stmtMeta{key: rows.t.name + "." + action + "_" + col}
 	if err := rows.scan(ctx, action, meta, query, args, target); err != nil {

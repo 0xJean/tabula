@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"iter"
 	"log/slog"
 	"os"
 	"strings"
@@ -472,4 +473,46 @@ func nilSafeTx(t *testing.T, db *sql.DB) *sql.Tx {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = tx.Rollback() })
 	return tx
+}
+
+func TestBeforeCommitClosesBodyCursor(t *testing.T) {
+	dsn := os.Getenv("TABULA_TEST_DSN")
+	require.NotEmpty(t, dsn)
+	db, err := sql.Open("postgres", dsn)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	db.SetMaxOpenConns(1)
+	runner, err := stdsql.NewRunner(db, stdsql.NoScopePolicy(), stdsql.RunnerOptions{})
+	require.NoError(t, err)
+	type row struct {
+		N int `db:"n"`
+	}
+	view := tabula.DefineView(tabula.NewRegistry(tabula.RegistryConfig[struct{}]{}), tabula.ViewSpec[row]{Name: "numbers"})
+	var old *stdsql.Session[struct{}]
+	opts := stdsql.RunOptions[struct{}]{BeforeCommit: func(ctx context.Context, fresh *stdsql.Session[struct{}]) error {
+		var n int
+		if err := old.Scan(ctx, "SELECT 1", nil, &n); !errors.Is(err, tabula.ErrSessionClosed) {
+			return fmt.Errorf("old body handle: %v", err)
+		}
+		return fresh.Scan(ctx, "SELECT 1", nil, &n)
+	}}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- runner.WithinWith(ctx, struct{}{}, opts, func(ctx context.Context, s *stdsql.Session[struct{}]) error {
+			old = s
+			next, stop := iter.Pull2(view.Bind(s).Iter(ctx, "SELECT generate_series(1,2)"))
+			_, err, _ := next()
+			t.Cleanup(stop)
+			return err
+		})
+	}()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-ctx.Done():
+		t.Fatal("BeforeCommit waited for stop")
+	}
+	require.Zero(t, db.Stats().InUse)
 }

@@ -247,16 +247,24 @@ func (r *Rows[T, K, S]) bindSingleKeys(keys []K) (any, error) {
 // unscoped session) and soft-delete predicate. A rejected binding yields a
 // FALSE predicate without consulting the session.
 func (r *Rows[T, K, S]) Scope() *Filter {
-	f := NewFilter()
 	if r.bindErr != nil {
+		f := NewFilter()
 		f.And("FALSE")
 		return f
 	}
 	if r.t.scope >= 0 && !r.s.Unscoped() {
-		f.And(r.name(r.t.scope)+" = ?", r.t.reg.scopeValue(r.s.Scope()))
+		return r.t.liveFilter(true, r.t.reg.scopeValue(r.s.Scope()))
 	}
-	if r.t.deleted >= 0 {
-		f.And(r.t.del.aliveSQL)
+	return r.t.liveFilter(false, nil)
+}
+
+func (t *Table[T, K, S]) liveFilter(scoped bool, scopeValue any) *Filter {
+	f := NewFilter()
+	if scoped {
+		f.And(t.cols[t.scope].name+" = ?", scopeValue)
+	}
+	if t.deleted >= 0 {
+		f.And(t.del.aliveSQL)
 	}
 	return f
 }

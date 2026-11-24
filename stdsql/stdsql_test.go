@@ -32,6 +32,16 @@ func TestNewRunnerValidation(t *testing.T) {
 	})
 	require.ErrorContains(t, err, "ReadOnly")
 
+	for _, opts := range []stdsql.RunnerOptions{
+		{Role: "writer", UnscopedReadRole: "reader"},
+		{Unscoped: stdsql.UnscopedReadOnly, UnscopedReadRole: "reader"},
+		{Role: "writer", Unscoped: stdsql.UnscopedReadOnly, UnscopedReadRole: "writer"},
+		{Role: "writer", Unscoped: stdsql.UnscopedReadOnly, UnscopedReadRole: " reader "},
+		{Role: "writer", Unscoped: stdsql.UnscopedReadOnly, UnscopedReadRole: "none"},
+	} {
+		_, err = stdsql.NewRunner(db, stdsql.ScopePolicy[string]{}, opts)
+		require.Error(t, err)
+	}
 	for _, bad := range []stdsql.Timeouts{
 		{Lock: -time.Second},
 		{Statement: 500 * time.Microsecond},

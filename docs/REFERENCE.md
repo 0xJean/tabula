@@ -45,7 +45,8 @@ const (
 	ErrCapabilityDenied   staticError = "operation denied by registry capability policy"
 
 	// ErrUnscopedRequiresReadOnly reports that UnscopedReadOnly denied access
-	// because the transaction is read-write. It also matches ErrReadOnly.
+	// because the transaction is read-write and no shared reader role applies.
+	// It also matches ErrReadOnly.
 	ErrUnscopedRequiresReadOnly readOnlyPolicyError = "UnscopedReadOnly requires a read-only transaction"
 
 	// ErrSessionBusy reports an overlapping operation on a transaction.
@@ -310,8 +311,8 @@ type Definition struct {
 	Columns    []DefinedColumn
 	Statements map[string]string
 	Privileges []DefinedPrivilege
-	// StatementQueries maps each composed-query variant's statement key to
-	// the exact query key supplied to View.DefineQuery.
+	// StatementQueries records the owner of each composed-query variant and
+	// registered scalar aggregate (for example, sum_rank belongs to sum:rank).
 	StatementQueries map[string]string `json:",omitempty"`
 }
     Definition is one defined table as Registry.Defined lists it.
@@ -632,9 +633,10 @@ type QueryPage struct {
 	Offset    int
 	Count     CountMode
 }
-    QueryPage requests an offset-paginated result from QueryRows.List. Direction
-    applies to sort terms declared with SortDefault. Fixed terms keep their
-    direction.
+    QueryPage requests an offset-paginated result from QueryRows.List.
+    Offset must be nonnegative and within any positive QuerySpec.MaxOffset.
+    Direction applies to sort terms declared with SortDefault. Fixed terms keep
+    their direction.
 
 type QueryParams struct {
 	// Has unexported fields.
@@ -753,6 +755,8 @@ type QuerySpec struct {
 	Filters   []QueryFilter
 	Order     QueryOrderSpec
 	MaxLimit  int
+	// MaxOffset is the largest permitted QueryPage.Offset, inclusive. Zero allows any nonnegative offset.
+	MaxOffset int
 	Keyset    bool
 }
     QuerySpec declares a view-owned composed query using explicit Select, Where,
@@ -941,7 +945,8 @@ func (r *Rows[T, K, S]) List(ctx context.Context, where func(*Filter), l Listing
 
 func (r *Rows[T, K, S]) ListKeyset(ctx context.Context, where func(*Filter), l KeysetListing) (KeysetPage[T], error)
     ListKeyset reads one cursor-paginated page of undeleted rows matching where
-    in deterministic (SortColumn, key...) order without OFFSET.
+    in deterministic (SortColumn, key...) order without OFFSET. Invalid listing
+    options return an error before the filter callback or database is used.
 
 func (r *Rows[T, K, S]) Lock(ctx context.Context, key K) (*T, error)
     Lock reads the undeleted row key FOR UPDATE; nil when missing.
@@ -1040,6 +1045,14 @@ func (f *SQLFiles) Lookup(name string) (string, bool)
 
 func (f *SQLFiles) Names() []string
     Names returns all loaded relative file names in sorted order.
+
+type ScalarAggregates struct {
+	Max, Min, Sum, Avg []string
+}
+    ScalarAggregates declares the columns to verify for each PostgreSQL
+    aggregate. Only listed pairs enter the definition and SQL snapshot. Runtime
+    calls may still use any declared column compatible with the PostgreSQL
+    function.
 
 type Session[S any] interface {
 	Scope() S
@@ -1221,6 +1234,8 @@ type TableSpec[T, K any] struct {
 	// GroupBy whitelists declared columns for CountBy aggregates and records
 	// per-column count_by_<col> statements in Definition for sqlcheck verification.
 	GroupBy []string
+	// Aggregates registers scalar function/column pairs for sqlcheck verification.
+	Aggregates ScalarAggregates
 }
     TableSpec declares one table of rows T keyed by K: the qualified name,
     the default order of List, optional SoftDelete config, and the row type's
@@ -1498,7 +1513,7 @@ func (s *RawSession[S]) Exec(ctx context.Context, query string, args ...any) (in
     Exec executes query and returns the affected row count.
 
 func (s *RawSession[S]) ReadOnly() bool
-    ReadOnly reports whether this session was opened as a READ ONLY transaction.
+    ReadOnly reports whether this handle permits only reads.
 
 func (s *RawSession[S]) Returning(ctx context.Context, query string, args []any, dest ...any) error
     Returning executes a write with RETURNING and maps pgx.ErrNoRows to
@@ -1587,18 +1602,23 @@ func (r *Runner[S]) WithinWith(ctx context.Context, scope S, runOpts RunOptions[
     an optional BeforeCommit step executed on a fresh handle before COMMIT.
 
 type RunnerOptions struct {
-	Role          string
-	RequireRole   bool
-	ReadOnly      bool
-	Unscoped      UnscopedMode
-	Timeouts      Timeouts
-	SessionKey    tabula.SessionKey
-	ExposeTx      bool
-	Tracer        tabula.Tracer
-	Metrics       tabula.Metrics
-	Log           tabula.LogConfig
-	Sanitize      func(error) string
-	TagStatements bool
+	Role        string
+	RequireRole bool
+	ReadOnly    bool
+	Unscoped    UnscopedMode
+	// UnscopedReadRole enables read-only unscoped handles within WithinShared.
+	// Requires UnscopedReadOnly and a distinct scoped Role. Migrations must grant
+	// this role read access only, including through functions and inherited grants.
+	// An empty value keeps unscoped access restricted to READ ONLY transactions.
+	UnscopedReadRole string
+	Timeouts         Timeouts
+	SessionKey       tabula.SessionKey
+	ExposeTx         bool
+	Tracer           tabula.Tracer
+	Metrics          tabula.Metrics
+	Log              tabula.LogConfig
+	Sanitize         func(error) string
+	TagStatements    bool
 }
     RunnerOptions configures a role-bound, guarded pgxdriver.Runner.
 
@@ -1632,13 +1652,14 @@ func NewSession[S any](tx pgx.Tx, scope S, policy ScopePolicy[S]) *Session[S]
     migration handle. Keyed registries require a Runner or keyed DirectPool.
 
 func (s *Session[S]) Each(ctx context.Context, query string, args []any, decode func(func(...any) error) error) error
-    Each streams all rows of query through decode.
+    Each streams rows through decode. The runner closes an unfinished cursor at
+    transaction or savepoint exit. A resumed consumer receives ErrSessionClosed.
 
 func (s *Session[S]) Exec(ctx context.Context, query string, args ...any) (int64, error)
     Exec executes query and returns the affected row count.
 
 func (s *Session[S]) ReadOnly() bool
-    ReadOnly reports whether this session was opened as a READ ONLY transaction.
+    ReadOnly reports whether this handle permits only reads.
 
 func (s *Session[S]) Returning(ctx context.Context, query string, args []any, dest ...any) error
     Returning executes a write with RETURNING and maps pgx.ErrNoRows to
@@ -1668,17 +1689,17 @@ type Shared[S any] struct {
 	// Has unexported fields.
 }
     Shared exposes scoped and unscoped Session handles sharing a single pgx
-    transaction and role. Before every user statement on a child handle,
-    the complete managed GUC state is reapplied in one batch.
+    transaction. Before every user statement on a child handle, the complete
+    managed GUC state is reapplied in one batch. With UnscopedReadRole the
+    runner also selects the handle's database role before each statement.
 
 func (s *Shared[S]) Scoped(scope S) *Session[S]
     Scoped returns a scoped Session handle sharing this transaction.
 
 func (s *Shared[S]) Unscoped() *Session[S]
     Unscoped returns an unscoped Session handle sharing this transaction.
-    UnscopedReadOnly requires the whole transaction to be read-only.
-    In a read-write transaction even a SELECT on this handle returns
-    tabula.ErrUnscopedRequiresReadOnly, which also matches tabula.ErrReadOnly.
+    UnscopedReadOnly requires a READ ONLY transaction unless UnscopedReadRole is
+    configured. That role permits Scan and Each while scoped handles use Role.
     UnscopedDenied rejects all operations with tabula.ErrCapabilityDenied.
 
 type Timeouts struct {
@@ -1696,7 +1717,8 @@ type UnscopedMode uint8
 const (
 	// UnscopedDenied rejects every unscoped transaction before BEGIN (default).
 	UnscopedDenied UnscopedMode = iota
-	// UnscopedReadOnly permits unscoped sessions only in READ ONLY transactions.
+	// UnscopedReadOnly permits unscoped reads in READ ONLY transactions or via
+	// an explicitly configured UnscopedReadRole in WithinShared.
 	UnscopedReadOnly
 	// UnscopedReadWrite permits unscoped sessions in read-only and read-write transactions.
 	UnscopedReadWrite
@@ -2237,9 +2259,12 @@ type SQLSite struct {
 	QueryKey         string `json:",omitempty"`
 	// Definition is the owning descriptor when its name is resolved from source.
 	Definition string `json:",omitempty"`
-	Kind       string `json:",omitempty"`
-	Dynamic    bool   `json:",omitempty"`
-	Exception  string `json:",omitempty"`
+	// NoFilter records a scalar aggregate call with an explicit nil where argument.
+	// Only these calls can use the aggregate SQL from a descriptor snapshot.
+	NoFilter  bool   `json:",omitempty"`
+	Kind      string `json:",omitempty"`
+	Dynamic   bool   `json:",omitempty"`
+	Exception string `json:",omitempty"`
 }
     SQLSite describes a static or dynamic SQL call, composed query definition,
     or single-table aggregate call. ID is independent of line numbers.
@@ -2335,7 +2360,7 @@ func (s *RawSession[S]) Exec(ctx context.Context, query string, args ...any) (in
     Exec executes a statement and returns its affected row count.
 
 func (s *RawSession[S]) ReadOnly() bool
-    ReadOnly reports whether this session was opened as a READ ONLY transaction.
+    ReadOnly reports whether this handle permits only reads.
 
 func (s *RawSession[S]) Returning(ctx context.Context, query string, args []any, dest ...any) error
     Returning executes a write with RETURNING and scans the returned row into
@@ -2441,6 +2466,11 @@ type RunnerOptions struct {
 	// Unscoped controls whether unscoped sessions are denied, read-only, or
 	// read-write.
 	Unscoped UnscopedMode
+	// UnscopedReadRole enables read-only unscoped handles within WithinShared.
+	// Requires UnscopedReadOnly and a distinct scoped Role. Migrations must grant
+	// this role read access only, including through functions and inherited grants.
+	// An empty value keeps unscoped access restricted to READ ONLY transactions.
+	UnscopedReadRole string
 	// Timeouts bounds lock waits, statement duration, idle-in-transaction duration
 	// and whole-attempt Go context duration.
 	Timeouts Timeouts
@@ -2503,13 +2533,14 @@ func NewSession[S any](tx *sql.Tx, scope S, policy ScopePolicy[S]) *Session[S]
     migration handle. Keyed registries require a Runner or keyed DirectPool.
 
 func (s *Session[S]) Each(ctx context.Context, query string, args []any, decode func(func(...any) error) error) error
-    Each streams all rows of query through decode.
+    Each streams rows through decode. The runner closes an unfinished cursor at
+    transaction or savepoint exit. A resumed consumer receives ErrSessionClosed.
 
 func (s *Session[S]) Exec(ctx context.Context, query string, args ...any) (int64, error)
     Exec executes a statement and returns its affected row count.
 
 func (s *Session[S]) ReadOnly() bool
-    ReadOnly reports whether this session was opened as a READ ONLY transaction.
+    ReadOnly reports whether this handle permits only reads.
 
 func (s *Session[S]) Returning(ctx context.Context, query string, args []any, dest ...any) error
     Returning executes a write with RETURNING and scans the returned row into
@@ -2539,20 +2570,19 @@ type Shared[S any] struct {
 	// Has unexported fields.
 }
     Shared exposes scoped and unscoped Session handles sharing a single
-    transaction and role. Before every user statement on a child handle,
-    the complete managed GUC state is reapplied in one batch (resetting the
-    opposite mode's variables to their declared inactive value). This adds one
-    round trip per statement and is intended for background or batch work rather
-    than latency-sensitive request hot paths.
+    transaction. Before every user statement on a child handle, the complete
+    managed GUC state is reapplied in one batch (resetting the opposite mode's
+    variables to their declared inactive value). This adds one round trip when
+    variables are configured. UnscopedReadRole adds a separate SET LOCAL ROLE
+    before each statement to select the handle's database role.
 
 func (s *Shared[S]) Scoped(scope S) *Session[S]
     Scoped returns a scoped Session handle sharing this transaction.
 
 func (s *Shared[S]) Unscoped() *Session[S]
     Unscoped returns an unscoped Session handle sharing this transaction.
-    UnscopedReadOnly requires the whole transaction to be read-only.
-    In a read-write transaction even a SELECT on this handle returns
-    tabula.ErrUnscopedRequiresReadOnly, which also matches tabula.ErrReadOnly.
+    UnscopedReadOnly requires a READ ONLY transaction unless UnscopedReadRole is
+    configured. That role permits Scan and Each while scoped handles use Role.
     UnscopedDenied rejects all operations with tabula.ErrCapabilityDenied.
 
 type Timeouts struct {
@@ -2575,7 +2605,8 @@ type UnscopedMode uint8
 const (
 	// UnscopedDenied rejects every unscoped transaction before BEGIN (default).
 	UnscopedDenied UnscopedMode = iota
-	// UnscopedReadOnly permits unscoped sessions only in READ ONLY transactions.
+	// UnscopedReadOnly permits unscoped reads in READ ONLY transactions or via
+	// an explicitly configured UnscopedReadRole in WithinShared.
 	UnscopedReadOnly
 	// UnscopedReadWrite permits unscoped sessions in read-only and read-write transactions.
 	UnscopedReadWrite

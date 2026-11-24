@@ -53,7 +53,7 @@ Copy the `CountBy` site's `ID` from `tabula inventory --config inventory.json` i
 }
 ```
 
-A missing definition or statement fails the command with the site ID. Supply named `Variants` for scalar aggregates, unregistered `Exists` statements, queries compiled with `TryDefineQuery`, or helpers used across several descriptors. Put explicit `Access` requirements on each manual variant. To skip a site verified elsewhere, register the reason in `Exceptions` and use `{"Skip":true}` as its binding.
+A missing definition or statement fails the command with the site ID. Declare the pairs needed for automatic scalar verification with, for example, `Aggregates: tabula.ScalarAggregates{Max: []string{"id"}}` in `TableSpec`. The snapshot records the query for live rows and, on a scoped table, both scope variants. Automatic scalar verification requires a literal `nil` filter at the call site. Recollect any inventory saved by an earlier version. Supply named `Variants` for calls with a filter callback, undeclared scalar aggregates, unregistered `Exists` statements, queries compiled with `TryDefineQuery`, or helpers used across several descriptors. Put explicit `Access` requirements on each manual variant. To skip a site verified elsewhere, register the reason in `Exceptions` and use `{"Skip":true}` as its binding.
 
 Consumers can also supply ordinary named statements under each execution role. Both routes use the same workload format.
 
@@ -71,6 +71,20 @@ Consumers can also supply ordinary named statements under each execution role. B
 ```
 
 `tabula verify-roles --config workload.json` uses `SET LOCAL ROLE`, `PREPARE` and a generic `EXPLAIN EXECUTE` with inferred parameter types. Existing descriptor-based `VerifyStatements` and `VerifyViewStatements` remain available. Database commands below take `--dsn` or read `TABULA_DSN`. The CLI exits 0 on success, 1 for findings and 2 for input or operational errors.
+
+## Using a reader role in a shared transaction
+
+For a job that reads shared rows then writes scoped rows atomically, give the login permission to switch to two roles. Grant the reader only the required schema usage, reads and reviewed functions. Check its inherited privileges, ownership and executable functions as well as direct table grants. Grant scoped writes to the writer and enforce scope with the application's RLS policies.
+
+```go
+opts := stdsql.RunnerOptions{
+    Role:             "records_writer",
+    Unscoped:         stdsql.UnscopedReadOnly,
+    UnscopedReadRole: "records_reader",
+}
+```
+
+Inside `WithinShared`, use `sh.Unscoped()` for reads and `sh.Scoped(scope)` for writes. A scope recognized by `IsUnscoped` gets the same reader handle. Both use the same connection and transaction. Before each statement the runner selects the handle's role with `SET LOCAL ROLE` and reapplies managed scope variables. This option adds one role-selection round trip per statement and also works with `pgxdriver.RunnerOptions`. Assign each handle's queries to its effective role when verifying the workload.
 
 ## Report grant drift before narrowing access
 

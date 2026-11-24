@@ -3,6 +3,13 @@
 All notable changes are listed here. The project follows semantic versioning; before
 v1.0 a minor version may contain breaking changes.
 
+## v0.3.2 — unreleased
+
+- Transactions and savepoints close unfinished streaming cursors before committing or rolling back. With a live context, a later pull reports `ErrSessionClosed`. A canceled context keeps its cancellation error. Call `stop` to release the Go producer when using `iter.Pull2`.
+- `UnscopedReadRole` lets a shared transaction read with a separately provisioned PostgreSQL reader role and write with its scoped role. Both handles see the transaction's own writes.
+- `TableSpec.Aggregates` registers selected `Max`, `Min`, `Sum` and `Avg` calls for SQL snapshots and role verification, including scoped and soft-delete predicates.
+- `QuerySpec.MaxOffset` sets an optional inclusive offset limit. Invalid `Rows.ListKeyset` listing options now return an error before query execution. [Upgrade notes](docs/MIGRATION.md#from-v031-to-v032)
+
 ## v0.3.1 — 2026-11-24
 
 ### Public API changes

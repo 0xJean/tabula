@@ -32,7 +32,8 @@ const (
 	ErrCapabilityDenied   staticError = "operation denied by registry capability policy"
 
 	// ErrUnscopedRequiresReadOnly reports that UnscopedReadOnly denied access
-	// because the transaction is read-write. It also matches ErrReadOnly.
+	// because the transaction is read-write and no shared reader role applies.
+	// It also matches ErrReadOnly.
 	ErrUnscopedRequiresReadOnly readOnlyPolicyError = "UnscopedReadOnly requires a read-only transaction"
 
 	// ErrSessionBusy reports an overlapping operation on a transaction.

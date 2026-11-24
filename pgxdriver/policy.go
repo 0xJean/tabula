@@ -21,7 +21,8 @@ type UnscopedMode uint8
 const (
 	// UnscopedDenied rejects every unscoped transaction before BEGIN (default).
 	UnscopedDenied UnscopedMode = iota
-	// UnscopedReadOnly permits unscoped sessions only in READ ONLY transactions.
+	// UnscopedReadOnly permits unscoped reads in READ ONLY transactions or via
+	// an explicitly configured UnscopedReadRole in WithinShared.
 	UnscopedReadOnly
 	// UnscopedReadWrite permits unscoped sessions in read-only and read-write transactions.
 	UnscopedReadWrite
@@ -54,18 +55,23 @@ func NoScopePolicy() ScopePolicy[struct{}] { return ScopePolicy[struct{}]{} }
 
 // RunnerOptions configures a role-bound, guarded pgxdriver.Runner.
 type RunnerOptions struct {
-	Role          string
-	RequireRole   bool
-	ReadOnly      bool
-	Unscoped      UnscopedMode
-	Timeouts      Timeouts
-	SessionKey    tabula.SessionKey
-	ExposeTx      bool
-	Tracer        tabula.Tracer
-	Metrics       tabula.Metrics
-	Log           tabula.LogConfig
-	Sanitize      func(error) string
-	TagStatements bool
+	Role        string
+	RequireRole bool
+	ReadOnly    bool
+	Unscoped    UnscopedMode
+	// UnscopedReadRole enables read-only unscoped handles within WithinShared.
+	// Requires UnscopedReadOnly and a distinct scoped Role. Migrations must grant
+	// this role read access only, including through functions and inherited grants.
+	// An empty value keeps unscoped access restricted to READ ONLY transactions.
+	UnscopedReadRole string
+	Timeouts         Timeouts
+	SessionKey       tabula.SessionKey
+	ExposeTx         bool
+	Tracer           tabula.Tracer
+	Metrics          tabula.Metrics
+	Log              tabula.LogConfig
+	Sanitize         func(error) string
+	TagStatements    bool
 }
 
 // RunOptions customizes a single runner transaction invocation, including an
@@ -147,6 +153,16 @@ func compilePolicy[S any](policy ScopePolicy[S], opts RunnerOptions) (compiledPo
 	if opts.Role != "" && strings.TrimSpace(opts.Role) != opts.Role {
 		return compiledPolicy[S]{}, fmt.Errorf("pgxdriver.NewRunner: invalid role %q", opts.Role)
 	}
+	if role := opts.UnscopedReadRole; role != "" {
+		if opts.Unscoped != UnscopedReadOnly || opts.Role == "" || role == opts.Role {
+			return compiledPolicy[S]{}, errors.New("pgxdriver.NewRunner: UnscopedReadRole requires UnscopedReadOnly and a distinct scoped Role")
+		}
+		// PostgreSQL identifiers can be truncated. Keep both role names distinct on the server.
+		if strings.TrimSpace(role) != role || len(role) > 63 || len(opts.Role) > 63 ||
+			strings.EqualFold(role, "none") || strings.EqualFold(opts.Role, "none") || strings.ContainsRune(role+opts.Role, 0) {
+			return compiledPolicy[S]{}, errors.New("pgxdriver.NewRunner: invalid shared role name")
+		}
+	}
 	if opts.Unscoped > UnscopedReadWrite {
 		return compiledPolicy[S]{}, fmt.Errorf("pgxdriver.NewRunner: invalid Unscoped mode %d", opts.Unscoped)
 	}
@@ -201,7 +217,7 @@ func compilePolicy[S any](policy ScopePolicy[S], opts RunnerOptions) (compiledPo
 			VariablePrefixes:           guardPrefixes,
 			ForbidRole:                 opts.Role != "",
 			ForbidSessionAuthorization: opts.Role != "",
-			ForbidSetConfig:            len(managedOrder) > 0 || hasTimeout,
+			ForbidSetConfig:            len(managedOrder) > 0 || hasTimeout || opts.UnscopedReadRole != "",
 		})
 		if err != nil {
 			return compiledPolicy[S]{}, fmt.Errorf("pgxdriver.NewRunner: session guard: %w", err)

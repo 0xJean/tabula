@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
-	"sync/atomic"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -19,6 +17,7 @@ type Runner[S any] struct {
 	compiled compiledPolicy[S]
 	opts     RunnerOptions
 	obs      *tabula.Observer
+	readObs  *tabula.Observer
 }
 
 // NewRunner validates policy and opts and creates a guarded Runner backed by pool.
@@ -30,19 +29,26 @@ func NewRunner[S any](pool *pgxpool.Pool, policy ScopePolicy[S], opts RunnerOpti
 	if err != nil {
 		return nil, err
 	}
-	obs := tabula.NewObserver(tabula.ObserverConfig{
+	obsConfig := tabula.ObserverConfig{
 		Role:          opts.Role,
 		Tracer:        opts.Tracer,
 		Metrics:       opts.Metrics,
 		Log:           opts.Log,
 		Sanitize:      opts.Sanitize,
 		TagStatements: opts.TagStatements,
-	})
+	}
+	obs := tabula.NewObserver(obsConfig)
+	var readObs *tabula.Observer
+	if opts.UnscopedReadRole != "" {
+		obsConfig.Role = opts.UnscopedReadRole
+		readObs = tabula.NewObserver(obsConfig)
+	}
 	return &Runner[S]{
 		pool:     pool,
 		compiled: compiled,
 		opts:     opts,
 		obs:      obs,
+		readObs:  readObs,
 	}, nil
 }
 
@@ -128,7 +134,7 @@ func (r *Runner[S]) checkMode(readOnly, unscoped bool) error {
 
 func (r *Runner[S]) newBoundSession(tx pgx.Tx, scope S, unscoped, readOnly bool) *Session[S] {
 	s := &Session[S]{
-		mu:          new(sync.Mutex),
+		mu:          new(statementLock),
 		tx:          tx,
 		scope:       scope,
 		unscoped:    unscoped,
@@ -237,24 +243,22 @@ func (r *Runner[S]) runTx(
 }
 
 // Shared exposes scoped and unscoped Session handles sharing a single pgx
-// transaction and role. Before every user statement on a child handle, the
-// complete managed GUC state is reapplied in one batch.
+// transaction. Before every user statement on a child handle, the
+// complete managed GUC state is reapplied in one batch. With UnscopedReadRole
+// the runner also selects the handle's database role before each statement.
 type Shared[S any] struct {
 	state *sharedState[S]
 }
 
 type sharedState[S any] struct {
-	mu       sync.Mutex
-	closed   atomic.Bool
+	mu       statementLock
 	tx       pgx.Tx
 	runner   *Runner[S]
 	readOnly bool
 }
 
 func (st *sharedState[S]) closeAll() {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	st.closed.Store(true)
+	st.mu.close()
 }
 
 func (st *sharedState[S]) applyFor(ctx context.Context, tx pgx.Tx, scope S, unscoped bool) error {
@@ -262,19 +266,37 @@ func (st *sharedState[S]) applyFor(ctx context.Context, tx pgx.Tx, scope S, unsc
 	if err != nil {
 		return err
 	}
+	if opts := st.runner.opts; opts.UnscopedReadRole != "" {
+		role := opts.Role
+		if unscoped {
+			role = opts.UnscopedReadRole
+		}
+		if err := SetLocalRole(ctx, tx, role); err != nil {
+			return err
+		}
+	}
 	return execSetConfigBatch(ctx, tx, pairs)
 }
 
-func (st *sharedState[S]) mint(scope S, unscoped bool, denied error) *Session[S] {
+func (st *sharedState[S]) mint(scope S, unscoped bool) *Session[S] {
+	readRole := unscoped && st.runner.opts.UnscopedReadRole != ""
+	var denied error
+	obs := st.runner.obs
+	if readRole {
+		obs = st.runner.readObs
+	} else {
+		denied = st.runner.checkMode(st.readOnly, unscoped)
+	}
 	s := &Session[S]{
 		mu:          &st.mu,
 		tx:          st.tx,
 		scope:       scope,
 		unscoped:    unscoped,
-		readOnly:    st.readOnly,
+		readOnly:    st.readOnly || readRole,
+		readRole:    readRole,
 		denied:      denied,
 		key:         st.runner.opts.SessionKey,
-		obs:         st.runner.obs,
+		obs:         obs,
 		scopeLog:    st.runner.compiled.policy.ScopeLog,
 		shared:      st,
 		readQueries: readQueries{db: st.tx, guard: st.runner.compiled.guard},
@@ -284,24 +306,18 @@ func (st *sharedState[S]) mint(scope S, unscoped bool, denied error) *Session[S]
 }
 
 // Unscoped returns an unscoped Session handle sharing this transaction.
-// UnscopedReadOnly requires the whole transaction to be read-only. In a
-// read-write transaction even a SELECT on this handle returns
-// tabula.ErrUnscopedRequiresReadOnly, which also matches tabula.ErrReadOnly.
+// UnscopedReadOnly requires a READ ONLY transaction unless UnscopedReadRole
+// is configured. That role permits Scan and Each while scoped handles use Role.
 // UnscopedDenied rejects all operations with tabula.ErrCapabilityDenied.
 func (s *Shared[S]) Unscoped() *Session[S] {
 	var zero S
-	denied := s.state.runner.checkMode(s.state.readOnly, true)
-	return s.state.mint(zero, true, denied)
+	return s.state.mint(zero, true)
 }
 
 // Scoped returns a scoped Session handle sharing this transaction.
 func (s *Shared[S]) Scoped(scope S) *Session[S] {
 	unscoped := s.state.runner.compiled.policy.IsUnscoped != nil && s.state.runner.compiled.policy.IsUnscoped(scope)
-	var denied error
-	if unscoped {
-		denied = s.state.runner.checkMode(s.state.readOnly, true)
-	}
-	return s.state.mint(scope, unscoped, denied)
+	return s.state.mint(scope, unscoped)
 }
 
 // WithinShared opens one transaction that can switch between scoped and

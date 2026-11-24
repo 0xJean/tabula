@@ -113,9 +113,12 @@ type SQLSite struct {
 	QueryKey         string `json:",omitempty"`
 	// Definition is the owning descriptor when its name is resolved from source.
 	Definition string `json:",omitempty"`
-	Kind       string `json:",omitempty"`
-	Dynamic    bool   `json:",omitempty"`
-	Exception  string `json:",omitempty"`
+	// NoFilter records a scalar aggregate call with an explicit nil where argument.
+	// Only these calls can use the aggregate SQL from a descriptor snapshot.
+	NoFilter  bool   `json:",omitempty"`
+	Kind      string `json:",omitempty"`
+	Dynamic   bool   `json:",omitempty"`
+	Exception string `json:",omitempty"`
 }
 
 // SQLInventory retains reviewed sites, typed security/factory call sites, and
@@ -552,6 +555,10 @@ func (p buildPackage) inventory(
 						if c := identCalls[node]; c != nil && len(c.Args) > 2 {
 							expr = c.Args[2]
 							site.Definition = source.definitionName(c.Args[1])
+							if fnName != "CountBy" && len(c.Args) == 4 {
+								arg, ok := ast.Unparen(c.Args[3]).(*ast.Ident)
+								site.NoFilter = ok && info.Uses[arg] == types.Universe.Lookup("nil")
+							}
 							if col, ok := source.constantString(expr); ok && col != "" {
 								site.QueryKey = strings.ToLower(fnName) + ":" + col
 								site.Dynamic = false

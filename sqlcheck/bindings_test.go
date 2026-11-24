@@ -107,3 +107,40 @@ func TestInventoryManualVariantAccess(t *testing.T) {
 		})
 	}
 }
+
+func TestRegisteredScalarAggregatesFromSnapshot(t *testing.T) {
+	type row struct {
+		ID    int64  `db:"id,key"`
+		Scope string `db:"scope,scope"`
+	}
+	reg := tabula.NewRegistry(tabula.RegistryConfig[string]{})
+	tabula.Define(reg, tabula.TableSpec[row, int64]{Name: "records", Aggregates: tabula.ScalarAggregates{
+		Max: []string{"id"}, Min: []string{"id"}, Sum: []string{"id"}, Avg: []string{"id"},
+	}})
+	defs, err := ParseSnapshot(RenderSnapshot(reg.Defined()))
+	require.NoError(t, err)
+	composed := SQLInventory{Sites: []SQLSite{{ID: "view", Kind: "composed_query", Definition: "records", QueryKey: "max:id"}}}
+	_, err = composed.BindRolesWithDefinitions(map[string]SQLBinding{"view": {Roles: []string{"reader"}}}, defs, nil)
+	require.ErrorContains(t, err, "no registered variants")
+	for _, op := range []string{"max", "min", "sum", "avg"} {
+		site := SQLSite{ID: "call", Kind: "aggregate", Definition: "records", QueryKey: op + ":id", NoFilter: true}
+		inv := SQLInventory{Sites: []SQLSite{site}}
+		bindings := map[string]SQLBinding{"call": {Roles: []string{"reader"}}}
+		work, err := inv.BindRolesWithDefinitions(bindings, defs, nil)
+		require.NoError(t, err)
+		require.Len(t, work["reader"], 2)
+		require.Equal(t, "call/records/"+op+"_id", work["reader"][0].Name)
+		require.Contains(t, work["reader"][0].SQL, "scope = $1")
+		require.Equal(t, "call/records/unscoped_"+op+"_id", work["reader"][1].Name)
+		require.NotContains(t, work["reader"][1].SQL, "scope")
+		inv.Sites[0].NoFilter = false
+		_, err = inv.BindRolesWithDefinitions(bindings, defs, nil)
+		require.ErrorContains(t, err, "filter callback")
+		inv.Sites[0].NoFilter = true
+		// A manually named statement, including one from an older snapshot,
+		// cannot stand in for the owned aggregate.
+		delete(defs[0].StatementQueries, op+"_id")
+		_, err = inv.BindRolesWithDefinitions(bindings, defs, nil)
+		require.ErrorContains(t, err, "named Variants")
+	}
+}

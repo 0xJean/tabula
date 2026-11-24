@@ -72,7 +72,8 @@ func (p *QueryParams) WithIf(cond bool, name string, args ...any) *QueryParams {
 	return p.With(name, args...)
 }
 
-// QueryPage requests an offset-paginated result from QueryRows.List.
+// QueryPage requests an offset-paginated result from QueryRows.List. Offset must
+// be nonnegative and within any positive QuerySpec.MaxOffset.
 // Direction applies to sort terms declared with SortDefault. Fixed terms keep their direction.
 type QueryPage struct {
 	Sort      string
@@ -216,6 +217,9 @@ func (r *QueryRows[T, S]) List(ctx context.Context, params *QueryParams, page Qu
 	}
 	if page.Size < 1 || page.Size > r.q.maxLimit || page.Offset < 0 {
 		return nil, 0, fmt.Errorf("%s.Query %s.%s: invalid page size=%d offset=%d (max=%d)", r.q.v.prefix(), r.q.v.name, r.q.key, page.Size, page.Offset, r.q.maxLimit)
+	}
+	if r.q.maxOffset > 0 && page.Offset > r.q.maxOffset {
+		return nil, 0, fmt.Errorf("%s.Query %s.%s: offset %d exceeds MaxOffset %d", r.q.v.prefix(), r.q.v.name, r.q.key, page.Offset, r.q.maxOffset)
 	}
 	if page.Count != CountExact && page.Count != CountNone {
 		return nil, 0, fmt.Errorf("%s.Query %s.%s: unsupported CountMode %d (use CountExact or CountNone)", r.q.v.prefix(), r.q.v.name, r.q.key, page.Count)

@@ -8,8 +8,6 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
-	"sync"
-	"sync/atomic"
 
 	"github.com/0xJean/tabula"
 )
@@ -46,13 +44,13 @@ func quoteIdent(ident string) string {
 // exposing the raw transaction. Overlapping statements or savepoint requests
 // on the transaction return tabula.ErrSessionBusy, including inside Each.
 type Session[S any] struct {
-	mu     *sync.Mutex // shared by handles on the same transaction
-	closed atomic.Bool
+	mu *statementLock // shared by handles on the same transaction
 	readQueries
 	tx       *sql.Tx
 	scope    S
 	unscoped bool
 	readOnly bool
+	readRole bool
 	denied   error
 	proof    tabula.SessionProof
 	obs      *tabula.Observer
@@ -85,7 +83,7 @@ func (s *RawSession[S]) Scope() S { return s.sess.Scope() }
 // Unscoped reports whether this session bypasses row-level scope predicates.
 func (s *RawSession[S]) Unscoped() bool { return s.sess.Unscoped() }
 
-// ReadOnly reports whether this session was opened as a READ ONLY transaction.
+// ReadOnly reports whether this handle permits only reads.
 func (s *RawSession[S]) ReadOnly() bool { return s.sess.ReadOnly() }
 
 // Exec executes a statement and returns its affected row count.
@@ -124,7 +122,7 @@ func NewSession[S any](tx *sql.Tx, scope S, policy ScopePolicy[S]) *Session[S] {
 		unscoped = policy.IsUnscoped(scope)
 	}
 	return &Session[S]{
-		mu:          new(sync.Mutex),
+		mu:          new(statementLock),
 		tx:          tx,
 		scope:       scope,
 		unscoped:    unscoped,
@@ -134,9 +132,7 @@ func NewSession[S any](tx *sql.Tx, scope S, policy ScopePolicy[S]) *Session[S] {
 }
 
 func (s *Session[S]) close() {
-	s.mu.Lock()
-	s.closed.Store(true)
-	s.mu.Unlock()
+	s.mu.close()
 }
 
 // Scope returns the session's bound scope value.
@@ -145,7 +141,7 @@ func (s *Session[S]) Scope() S { return s.scope }
 // Unscoped reports whether this session bypasses row-level scope predicates.
 func (s *Session[S]) Unscoped() bool { return s.unscoped }
 
-// ReadOnly reports whether this session was opened as a READ ONLY transaction.
+// ReadOnly reports whether this handle permits only reads.
 func (s *Session[S]) ReadOnly() bool { return s.readOnly }
 
 // SessionProof returns the instance-bound proof for A4 sealed registries.
@@ -177,11 +173,15 @@ func (s *Session[S]) tryLock() error {
 	if !locked {
 		return tabula.ErrSessionBusy
 	}
+	if s.mu.cursor != nil {
+		s.mu.Unlock()
+		return tabula.ErrSessionBusy
+	}
 	return nil
 }
 
 func (s *Session[S]) checkState() error {
-	if s.closed.Load() || (s.shared != nil && s.shared.closed.Load()) {
+	if s.mu == nil || s.mu.closed.Load() {
 		return tabula.ErrSessionClosed
 	}
 	return s.denied
@@ -202,7 +202,11 @@ func wrapReadOnlyErr(err error) error {
 }
 
 func (s *Session[S]) check(query string) error {
-	if s.readOnly {
+	if s.readRole {
+		if err := tabula.GuardReadOnly(query); err != nil {
+			return err
+		}
+	} else if s.readOnly {
 		if err := tabula.GuardReadOnlyTransaction(query); err != nil {
 			return err
 		}
@@ -219,6 +223,12 @@ func (s readQueries) check(query string) error {
 
 // Exec executes a statement and returns its affected row count.
 func (s *Session[S]) Exec(ctx context.Context, query string, args ...any) (int64, error) {
+	if s.readRole {
+		if err := s.checkState(); err != nil {
+			return 0, err
+		}
+		return 0, tabula.ErrReadOnly
+	}
 	if err := s.check(query); err != nil {
 		return 0, err
 	}
@@ -263,10 +273,17 @@ func (s *Session[S]) Scan(ctx context.Context, query string, args []any, dest ..
 
 // Returning executes a write with RETURNING and scans the returned row into dest.
 func (s *Session[S]) Returning(ctx context.Context, query string, args []any, dest ...any) error {
+	if s.readRole {
+		if err := s.checkState(); err != nil {
+			return err
+		}
+		return tabula.ErrReadOnly
+	}
 	return s.Scan(ctx, query, args, dest...)
 }
 
-// Each streams all rows of query through decode.
+// Each streams rows through decode. The runner closes an unfinished cursor at
+// transaction or savepoint exit. A resumed consumer receives ErrSessionClosed.
 func (s *Session[S]) Each(ctx context.Context, query string, args []any, decode func(func(...any) error) error) error {
 	if err := s.check(query); err != nil {
 		return err
@@ -286,18 +303,7 @@ func (s *Session[S]) Each(ctx context.Context, query string, args []any, decode 
 		done(0, err)
 		return err
 	}
-	defer func() { _ = rows.Close() }()
-	var count int64
-	for rows.Next() {
-		if err := decode(rows.Scan); err != nil {
-			done(count, err)
-			return err
-		}
-		count++
-	}
-	err = wrapReadOnlyErr(rows.Err())
-	done(count, err)
-	return err
+	return s.mu.each(rows, decode, done)
 }
 
 // Scan executes a single-row query on the direct read-only queryer.
@@ -353,6 +359,7 @@ func (s *Session[S]) Savepoint(ctx context.Context, name string, fn func(context
 		if err := s.checkState(); err != nil {
 			return err
 		}
+		s.mu.closeCursor(tabula.ErrSessionClosed)
 		_, err := s.tx.ExecContext(spCtx, stmt)
 		return err
 	}

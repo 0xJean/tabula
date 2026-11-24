@@ -274,3 +274,28 @@ func (r *queryArgRecorder) Each(ctx context.Context, q string, args []any, dec f
 	r.onCall(q, args)
 	return r.fakeSession.Each(ctx, q, args, dec)
 }
+
+func TestComposedMaxOffset(t *testing.T) {
+	v := DefineView(NewRegistry(RegistryConfig[customTenant]{}), ViewSpec[cqRow]{Name: "notes"})
+	spec := QuerySpec{Select: "SELECT id, rank, due, caption FROM notes", Scope: ScopeByRLS(),
+		Order:    QueryOrderSpec{Default: "rank", Sorts: []QuerySort{{Key: "rank", Expr: "rank"}}},
+		MaxLimit: 5, MaxOffset: -1}
+	_, err := v.TryDefineQuery("page", spec)
+	require.ErrorContains(t, err, "MaxOffset")
+	sess := &queryArgRecorder{onCall: func(string, []any) { t.Fatal("unexpected database access") }}
+	spec.MaxOffset = 10
+	q := v.DefineQuery("page", spec)
+	for _, count := range []CountMode{CountExact, CountNone} {
+		_, _, err := q.Bind(sess).List(t.Context(), nil, QueryPage{Size: 1, Offset: 11, Count: count})
+		require.ErrorContains(t, err, "exceeds MaxOffset 10")
+	}
+	var args []any
+	sess.onCall = func(_ string, a []any) { args = a }
+	_, _, err = q.Bind(sess).List(t.Context(), nil, QueryPage{Size: 1, Offset: 10, Count: CountNone})
+	require.NoError(t, err)
+	require.Equal(t, []any{1, 10}, args)
+	spec.MaxOffset = 0
+	_, _, err = v.DefineQuery("uncapped", spec).Bind(sess).List(t.Context(), nil, QueryPage{Size: 1, Offset: math.MaxInt, Count: CountNone})
+	require.NoError(t, err)
+	require.Equal(t, []any{1, math.MaxInt}, args)
+}

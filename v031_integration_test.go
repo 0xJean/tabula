@@ -125,9 +125,10 @@ func TestV031AggregatesComposedQueriesAndSQLFilesIntegration(t *testing.T) {
 	tabula.RegisterType(reg, func(p *cents) any { return p })
 	labelsTbl := tabula.Define(reg, tabula.TableSpec[label, int64]{Name: schema + ".labels", Order: "id ASC"})
 	notesTbl := tabula.Define(reg, tabula.TableSpec[note, int64]{
-		Name:    schema + ".notes",
-		Order:   "id ASC",
-		GroupBy: []string{"category"},
+		Name:       schema + ".notes",
+		Order:      "id ASC",
+		GroupBy:    []string{"category"},
+		Aggregates: tabula.ScalarAggregates{Max: []string{"rank"}, Min: []string{"rank"}, Sum: []string{"amount"}, Avg: []string{"amount"}},
 	})
 
 	// C4: embedded SQL files feed Select and CountBase.
@@ -165,8 +166,9 @@ func TestV031AggregatesComposedQueriesAndSQLFilesIntegration(t *testing.T) {
 				{Expr: "n.id", Column: "id"},
 			},
 		},
-		MaxLimit: 10,
-		Keyset:   true,
+		MaxLimit:  10,
+		MaxOffset: 20,
+		Keyset:    true,
 	})
 
 	// Grouped query with Tail (GROUP BY / HAVING) + wrapped count.
@@ -332,6 +334,11 @@ func TestV031AggregatesComposedQueriesAndSQLFilesIntegration(t *testing.T) {
 
 		// Tied rank values (two rows with rank=10, one with rank=5): continuous keyset paging with limit=1!
 		pAll := tabula.NewQueryParams(now, true)
+		_, _, err = q.List(txCtx, pAll, tabula.QueryPage{Size: 1, Offset: 21})
+		require.ErrorContains(t, err, "MaxOffset")
+		last, _, err := q.List(txCtx, pAll, tabula.QueryPage{Size: 1, Offset: 20, Count: tabula.CountNone})
+		require.NoError(t, err)
+		require.Empty(t, last)
 		var pagedIDs []int64
 		var cursor []any
 		for {

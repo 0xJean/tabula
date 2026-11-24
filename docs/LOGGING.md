@@ -65,7 +65,7 @@ in every application.
 | `tabula.args` | list of strings | Bound arguments when the value policy includes them. See section 4. |
 | `tabula.sql` | string | SQL text when `Level` is `LogAll` and `LogConfig.SQL` is enabled |
 | `tabula.sqlstate` | string | PostgreSQL SQLSTATE, when the driver exposes it |
-| `tabula.role` | string | Runner PostgreSQL role when configured on `RunnerOptions.Role` |
+| `tabula.role` | string | Effective runner role for the handle, including `UnscopedReadRole` in a shared transaction |
 | `tabula.scope` | string | Only what the application's `ScopeLog` function returns (for example a tenant ID); omitted when not configured |
 
 - Request IDs, trace IDs and user IDs are not added by the library. Use a `slog.Handler`

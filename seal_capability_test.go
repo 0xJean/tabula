@@ -250,3 +250,33 @@ func TestSQLFilesAndAggregatesUnit(t *testing.T) {
 	tbl := Define(reg, TableSpec[customRow, int64]{Name: "public.items", GroupBy: []string{"code"}})
 	require.Contains(t, tbl.Definition().Statements, "count_by_code")
 }
+
+func TestScalarAggregateDeclarations(t *testing.T) {
+	reg := NewRegistry(RegistryConfig[customTenant]{})
+	spec := TableSpec[customRow, int64]{Name: "items"}
+	for _, invalid := range []ScalarAggregates{{Max: []string{"unknown"}}, {Sum: []string{"id", "id"}}} {
+		spec.Aggregates = invalid
+		_, err := TryDefine(reg, spec)
+		require.Error(t, err)
+	}
+	spec.Aggregates = ScalarAggregates{Max: []string{"id"}, Min: []string{"id"}, Sum: []string{"version"}, Avg: []string{"version"}}
+	tbl := Define(reg, spec)
+	def := tbl.Definition()
+	require.Len(t, def.StatementQueries, 8)
+	require.Equal(t, "max:id", def.StatementQueries["max_id"])
+	require.Equal(t, "max:id", def.StatementQueries["unscoped_max_id"])
+	require.NotContains(t, def.Statements, "sum_code")
+	require.Contains(t, def.Statements["max_id"], "tenant_id = $1")
+	require.NotContains(t, def.Statements["unscoped_max_id"], "tenant_id")
+	require.Contains(t, def.Statements["unscoped_max_id"], "deleted_at IS NULL")
+	for _, unscoped := range []bool{false, true} {
+		sess := &fakeSession{unscoped: unscoped}
+		_, _, err := Max[int64](t.Context(), tbl.Bind(sess), "id", nil)
+		require.NoError(t, err)
+		key := "max_id"
+		if unscoped {
+			key = "unscoped_max_id"
+		}
+		require.Equal(t, def.Statements[key], sess.lastQuery)
+	}
+}

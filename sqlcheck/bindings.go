@@ -146,7 +146,12 @@ func (site SQLSite) expand(d tabula.Definition, b SQLBinding) ([]Statement, erro
 	case site.Kind == "composed_query":
 		exact := strings.TrimSuffix(b.Prefix, ".")
 		for key, query := range d.StatementQueries {
-			if query == site.QueryKey && query != "" && (strings.HasPrefix(key, b.Prefix) || key == exact) {
+			// Composed variants have a dotted suffix. Scalar registrations can
+			// share an owner string with a user-chosen composed query key.
+			if query != site.QueryKey || query == "" || !strings.HasPrefix(key, query+".") {
+				continue
+			}
+			if strings.HasPrefix(key, b.Prefix) || key == exact {
 				keys = append(keys, key)
 			}
 		}
@@ -157,11 +162,28 @@ func (site SQLSite) expand(d tabula.Definition, b SQLBinding) ([]Statement, erro
 	case site.QueryKey == "exists":
 		keys = []string{"exists"}
 	default:
-		column, ok := strings.CutPrefix(site.QueryKey, "countby:")
+		op, column, ok := strings.Cut(site.QueryKey, ":")
 		if !ok || column == "" {
 			return nil, fmt.Errorf("aggregate %q in definition %q requires named Variants", site.QueryKey, d.Name)
 		}
-		keys = []string{"count_by_" + column}
+		key := op + "_" + column
+		switch op {
+		case "countby":
+			key = "count_by_" + column
+		case "max", "min", "sum", "avg":
+			if !site.NoFilter {
+				return nil, fmt.Errorf("aggregate %q: supply named Variants for a filter callback or recollect the inventory for a nil filter", site.QueryKey)
+			}
+			if d.StatementQueries[key] != site.QueryKey {
+				return nil, fmt.Errorf("aggregate %q in definition %q: declare TableSpec.Aggregates and regenerate the snapshot or supply named Variants", site.QueryKey, d.Name)
+			}
+		default:
+			return nil, fmt.Errorf("unknown aggregate %q in definition %q", site.QueryKey, d.Name)
+		}
+		keys = []string{key}
+		if unscoped := "unscoped_" + key; d.StatementQueries[unscoped] == site.QueryKey {
+			keys = append(keys, unscoped)
+		}
 	}
 	stmts := make([]Statement, 0, len(keys))
 	for _, key := range keys {

@@ -2,6 +2,14 @@
 
 Follow this guide when upgrading an application to v0.3. For the full surface after the upgrade, see the [integration guide](INTEGRATION.md).
 
+## From v0.3.1 to v0.3.2
+
+- Check the error returned by `Rows.ListKeyset` for invalid limits, directions, sort columns, cursor lengths and lock modes. Remove any panic recovery used for request validation. The limit must leave room for the extra row used to compute `HasMore`.
+- Set `QuerySpec.MaxOffset` on composed lists to bound offset scans. A positive value includes its endpoint. Zero preserves the previous unlimited offset.
+- To audit scalar aggregates, list columns per function in `TableSpec.Aggregates`, regenerate the SQL snapshot and run the role inventory. Existing runtime calls and explicit workload variants continue to work.
+- For unscoped reads alongside scoped writes, grant a dedicated reader role access to the required rows and configure `UnscopedReadRole` on a runner with `UnscopedReadOnly` and a distinct `Role`. Without that option, unscoped handles still require a read-only transaction. [Role configuration](AUTHORIZATION.md#using-a-reader-role-in-a-shared-transaction)
+- With `iter.Pull2`, defer `stop()` in the callback that consumes the rows. Both drivers close the database cursor when the transaction or savepoint callback returns. Calling `stop` releases the suspended Go iterator.
+
 ## From v0.3.0 to v0.3.1
 
 v0.3.1 moves role pinning, timeouts, managed scope variables, session sealing, raw-tx opt-in, session-level observability, aggregates and composed view queries into Tabula. The following changes apply to `stdsql` and `pgxdriver` callers.

@@ -71,6 +71,16 @@ func TestNewRunnerValidationAndPreBeginChecks(t *testing.T) {
 	_, err = NewRunner(pool, ScopePolicy[string]{}, RunnerOptions{ReadOnly: true, Unscoped: UnscopedReadWrite})
 	require.ErrorContains(t, err, "ReadOnly")
 
+	for _, opts := range []RunnerOptions{
+		{Role: "writer", UnscopedReadRole: "reader"},
+		{Unscoped: UnscopedReadOnly, UnscopedReadRole: "reader"},
+		{Role: "writer", Unscoped: UnscopedReadOnly, UnscopedReadRole: "writer"},
+		{Role: "writer", Unscoped: UnscopedReadOnly, UnscopedReadRole: " reader "},
+		{Role: "writer", Unscoped: UnscopedReadOnly, UnscopedReadRole: "none"},
+	} {
+		_, err = NewRunner(pool, ScopePolicy[string]{}, opts)
+		require.Error(t, err)
+	}
 	for _, bad := range []Timeouts{
 		{Lock: -time.Second},
 		{Statement: 500 * time.Microsecond},

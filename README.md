@@ -109,7 +109,8 @@ Run `scripts/workspace.sh` from the Tabula repository root to use all local modu
 Applications may use `stdsql` or `pgxdriver` directly, or wrap `tabula` in a thin
 binding package of their own to enforce compile-time session/scope invariants.
 Both runners establish read-only transactions before the callback. Select the
-isolation level in the transaction options. [Runner migration notes](docs/MIGRATION.md#from-v030-to-v031)
+isolation level in the transaction options. For unscoped reads alongside scoped writes in
+one transaction, configure a dedicated reader with `UnscopedReadRole`. [Runner migration notes](docs/MIGRATION.md#from-v031-to-v032)
 
 ## Contributing
 
