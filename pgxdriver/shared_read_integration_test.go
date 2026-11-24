@@ -61,6 +61,19 @@ func TestSharedReadRoleAndCursorLifetime(t *testing.T) {
 	exec("GRANT SELECT, INSERT ON " + table + " TO " + writer)
 	exec("GRANT SELECT ON " + table + " TO " + reader)
 
+	deferredItems, commitRoles := schema+".deferred_items", schema+".commit_roles"
+	exec("CREATE TABLE " + deferredItems + " (item text PRIMARY KEY)")
+	exec("CREATE TABLE " + commitRoles + " (item text PRIMARY KEY, actor name NOT NULL)")
+	exec("GRANT INSERT ON " + deferredItems + ", " + commitRoles + " TO " + writer)
+	exec("CREATE FUNCTION " + schema + `.record_commit_role() RETURNS trigger LANGUAGE plpgsql SECURITY INVOKER AS $$
+        BEGIN
+            INSERT INTO ` + commitRoles + ` (item, actor) VALUES (NEW.item, current_user);
+            RETURN NULL;
+        END;
+    $$`)
+	exec("CREATE CONSTRAINT TRIGGER record_role AFTER INSERT ON " + deferredItems +
+		" DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION " + schema + ".record_commit_role()")
+
 	policy := stdsql.ScopePolicy[string]{ManagedVars: []string{"app.scope"},
 		ScopeVars:  func(s string) map[string]string { return map[string]string{"app.scope": s} },
 		IsUnscoped: func(s string) bool { return s == "all" }}
@@ -159,6 +172,50 @@ func TestSharedReadRoleAndCursorLifetime(t *testing.T) {
 			}
 			require.Equal(t, reader, roles["shared.read"])
 			require.Equal(t, writer, roles["shared.write"])
+			t.Run("deferred_commit", func(t *testing.T) {
+				for _, order := range []string{"read_then_write", "write_then_read"} {
+					t.Run(order, func(t *testing.T) {
+						key := t.Name()
+						var readRole string
+						err := a.shared(ctx, func(ctx context.Context, scoped, unscoped, _ readSession) error {
+							read := func() error { return unscoped.Scan(ctx, "SELECT current_user", nil, &readRole) }
+							write := func() error {
+								_, err := scoped.Exec(ctx, "INSERT INTO "+deferredItems+" (item) VALUES ($1)", key)
+								return err
+							}
+							first, last := read, write
+							if order == "write_then_read" {
+								first, last = write, read
+							}
+							if err := first(); err != nil {
+								return err
+							}
+							return last()
+						})
+						require.NoError(t, err)
+						require.Equal(t, reader, readRole)
+						var commitRole string
+						require.NoError(t, db.QueryRowContext(ctx, "SELECT actor FROM "+commitRoles+" WHERE item = $1", key).Scan(&commitRole))
+						require.Equal(t, writer, commitRole)
+					})
+				}
+				t.Run("restore_error", func(t *testing.T) {
+					key := t.Name()
+					err := a.shared(ctx, func(ctx context.Context, scoped, unscoped, _ readSession) error {
+						if _, err := scoped.Exec(ctx, "INSERT INTO "+deferredItems+" (item) VALUES ($1)", key); err != nil {
+							return err
+						}
+						var n int
+						err := unscoped.Scan(ctx, "SELECT 1 / $1::integer", []any{0}, &n)
+						require.Equal(t, "22012", tabula.SQLState(err))
+						return nil // Leave the transaction aborted when the runner restores Role.
+					})
+					require.Equal(t, "25P02", tabula.SQLState(err))
+					var exists bool
+					require.NoError(t, db.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM "+deferredItems+" WHERE item = $1)", key).Scan(&exists))
+					require.False(t, exists)
+				})
+			})
 			for _, end := range []string{"canceled", "deadline"} {
 				t.Run(end, func(t *testing.T) { checkPullBoundary(t, a, end, false) })
 			}

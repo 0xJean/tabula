@@ -1,6 +1,6 @@
 # Tabula v0.3.1 design: guarded runners, session observability, query composition
 
-**Status: Implemented in v0.3.1.** All groups (A1–A8, B1–B3, C1–C4, D) have been
+**The untagged v0.3.1 candidate is included in v0.3.2.** All groups (A1–A8, B1–B3, C1–C4, D) have been
 implemented with unit tests, real PostgreSQL integration tests and
 `FuzzCompileQueryFragment`, and the proposal-only `docs/internal/v04` test package has
 been removed prior to tagging. For the shipped API use the
@@ -523,7 +523,7 @@ decisions are implemented and locked for v0.3.1.
 | B1 runner hooks take precedence over registry hooks | Behaviour change only when both are configured |
 | A3, A4, A6–A8, C1–C4 | New capabilities. A4 enforcement and A6 denials require explicit configuration. |
 
-[MIGRATION.md](MIGRATION.md) gains a v0.3.0 → v0.3.1 section in the release commit.
+The [migration guide](MIGRATION.md#from-v030-to-v032) covers the upgrade from v0.3.0 to v0.3.2.
 
 ## Out of scope
 

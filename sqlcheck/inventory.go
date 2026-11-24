@@ -57,7 +57,7 @@ type CallSite struct {
 	Escaped  bool   `json:",omitempty"`
 }
 
-// DefaultSecurityCallTargets returns the v0.3.1 security-review call targets:
+// DefaultSecurityCallTargets returns the built-in security-review call targets:
 // session keys, registry sealing, proof signing, keyed runner/Direct factories,
 // nested-transaction marker helpers, and both drivers' raw transaction access.
 func DefaultSecurityCallTargets() []CallTarget {

@@ -331,6 +331,7 @@ func (r *Runner[S]) WithinShared(ctx context.Context, fn func(context.Context, *
 }
 
 // WithinSharedOptions is WithinShared with explicit pgx.TxOptions.
+// With UnscopedReadRole configured, the runner restores Role before COMMIT.
 func (r *Runner[S]) WithinSharedOptions(ctx context.Context, opts pgx.TxOptions, fn func(context.Context, *Shared[S]) error) error {
 	if fn == nil {
 		return errors.New("pgxdriver: callback is required")
@@ -372,6 +373,12 @@ func (r *Runner[S]) WithinSharedOptions(ctx context.Context, opts pgx.TxOptions,
 	state.closeAll()
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if r.opts.UnscopedReadRole != "" {
+		// Deferred triggers can run under the role active at COMMIT.
+		if err := SetLocalRole(ctx, tx, r.opts.Role); err != nil {
+			return fmt.Errorf("pgxdriver: restore role before commit: %w", err)
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("pgxdriver: commit tx: %w", err)

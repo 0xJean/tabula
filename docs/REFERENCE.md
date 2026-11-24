@@ -1592,7 +1592,8 @@ func (r *Runner[S]) WithinShared(ctx context.Context, fn func(context.Context, *
     unscoped handles via Shared.Scoped and Shared.Unscoped.
 
 func (r *Runner[S]) WithinSharedOptions(ctx context.Context, opts pgx.TxOptions, fn func(context.Context, *Shared[S]) error) error
-    WithinSharedOptions is WithinShared with explicit pgx.TxOptions.
+    WithinSharedOptions is WithinShared with explicit pgx.TxOptions. With
+    UnscopedReadRole configured, the runner restores Role before COMMIT.
 
 func (r *Runner[S]) WithinTxOptions(ctx context.Context, scope S, opts pgx.TxOptions, fn func(context.Context, *Session[S]) error) error
     WithinTxOptions runs fn inside a transaction opened with opts.
@@ -1959,8 +1960,8 @@ type CallTarget struct {
     and symbol name. Field targets also match selections promoted by embedding.
 
 func DefaultSecurityCallTargets() []CallTarget
-    DefaultSecurityCallTargets returns the v0.3.1 security-review call targets:
-    session keys, registry sealing, proof signing, keyed runner/Direct
+    DefaultSecurityCallTargets returns the built-in security-review call
+    targets: session keys, registry sealing, proof signing, keyed runner/Direct
     factories, nested-transaction marker helpers, and both drivers' raw
     transaction access.
 
@@ -2449,7 +2450,8 @@ func (r *Runner[S]) WithinShared(ctx context.Context, fn func(context.Context, *
     sessions via Shared.Scoped and Shared.Unscoped.
 
 func (r *Runner[S]) WithinSharedOptions(ctx context.Context, opts *sql.TxOptions, fn func(context.Context, *Shared[S]) error) error
-    WithinSharedOptions is WithinShared with explicit sql.TxOptions.
+    WithinSharedOptions is WithinShared with explicit sql.TxOptions. With
+    UnscopedReadRole configured, the runner restores Role before COMMIT.
 
 func (r *Runner[S]) WithinWith(ctx context.Context, scope S, runOpts RunOptions[S], fn func(context.Context, *Session[S]) error) error
     WithinWith runs fn inside a transaction configured with runOpts, including

@@ -84,7 +84,7 @@ opts := stdsql.RunnerOptions{
 }
 ```
 
-Inside `WithinShared`, use `sh.Unscoped()` for reads and `sh.Scoped(scope)` for writes. A scope recognized by `IsUnscoped` gets the same reader handle. Both use the same connection and transaction. Before each statement the runner selects the handle's role with `SET LOCAL ROLE` and reapplies managed scope variables. This option adds one role-selection round trip per statement and also works with `pgxdriver.RunnerOptions`. Assign each handle's queries to its effective role when verifying the workload.
+Inside `WithinShared`, use `sh.Unscoped()` for reads and `sh.Scoped(scope)` for writes. A scope recognized by `IsUnscoped` gets the same reader handle. Both use the same connection and transaction. Before each statement the runner selects the handle's role with `SET LOCAL ROLE` and reapplies managed scope variables. After the callback succeeds and its handles close, the runner restores `Role` before `COMMIT`. A deferred invoker trigger runs under that role even when the last statement was an unscoped read. A trigger that needs the scope of a particular write can read it from the triggering row. This option adds one role-selection round trip per statement and one before commit in both drivers. Assign each handle's queries to its effective role when verifying the workload.
 
 ## Report grant drift before narrowing access
 

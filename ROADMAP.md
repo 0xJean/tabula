@@ -54,7 +54,7 @@ Items keep the red lines in [docs/DESIGN.md](docs/DESIGN.md).
 - Snapshot policies, FORCE RLS tables, grants and SECURITY DEFINER routines. Classify policies with application rules, check command coverage and exercise a role/scope/statement matrix.
 - Distinguish RLS and privilege denials, configure session guards and clone content-addressed PostgreSQL test templates through a chosen migration. [Design and configuration](docs/AUTHORIZATION.md)
 
-## v0.3.1
+## v0.3.1 candidate — included in v0.3.2
 
 Design record: [docs/DESIGN-v0.3.1.md](docs/DESIGN-v0.3.1.md).
 
@@ -79,12 +79,12 @@ Design record: [docs/DESIGN-v0.3.1.md](docs/DESIGN-v0.3.1.md).
 - Transactions and savepoints close unfinished database cursors on callback exit.
 - Shared transactions can use a dedicated unscoped reader role alongside scoped writes.
 - Tables can register individual scalar aggregates for SQL snapshots and role verification.
-- Composed lists accept a maximum offset. Table keyset lists report invalid options through their error result. [Migration guide](docs/MIGRATION.md#from-v031-to-v032)
+- Composed lists accept a maximum offset. Table keyset lists report invalid options through their error result. [Migration guide](docs/MIGRATION.md#from-v030-to-v032)
 
 ## v1.0 — stability and ecosystem adapters
 
 - API freeze and semver compatibility promise.
-- Optional Prometheus adapter module over `Metrics` (OpenTelemetry shipped in v0.3.1).
+- Optional Prometheus adapter module over `Metrics` (the OpenTelemetry adapter is included in v0.3.2).
 - Optional prepared-statement cache.
 
 ## Out of scope

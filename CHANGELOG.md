@@ -5,25 +5,24 @@ v1.0 a minor version may contain breaking changes.
 
 ## v0.3.2 — unreleased
 
-- Transactions and savepoints close unfinished streaming cursors before committing or rolling back. With a live context, a later pull reports `ErrSessionClosed`. A canceled context keeps its cancellation error. Call `stop` to release the Go producer when using `iter.Pull2`.
-- `UnscopedReadRole` lets a shared transaction read with a separately provisioned PostgreSQL reader role and write with its scoped role. Both handles see the transaction's own writes.
-- `TableSpec.Aggregates` registers selected `Max`, `Min`, `Sum` and `Avg` calls for SQL snapshots and role verification, including scoped and soft-delete predicates.
-- `QuerySpec.MaxOffset` sets an optional inclusive offset limit. Invalid `Rows.ListKeyset` listing options now return an error before query execution. [Upgrade notes](docs/MIGRATION.md#from-v031-to-v032)
+v0.3.2 includes the work from the untagged v0.3.1 candidate. Applications can upgrade directly from v0.3.0. [Migration guide](docs/MIGRATION.md#from-v030-to-v032)
 
-## v0.3.1 — 2026-11-24
+- Transactions and savepoints close unfinished streaming cursors before committing or rolling back. With a live context, a later pull reports `ErrSessionClosed`. A canceled context keeps its cancellation error. Call `stop` to release the Go producer when using `iter.Pull2`.
+- `UnscopedReadRole` lets a shared transaction read with a separately provisioned PostgreSQL reader role and write with its scoped role. Both handles see the transaction's own writes. Before committing, the runner restores the scoped role so deferred invoker triggers use it regardless of the last handle.
+- `TableSpec.Aggregates` registers selected `Max`, `Min`, `Sum` and `Avg` calls for SQL snapshots and role verification, including scoped and soft-delete predicates.
+- `QuerySpec.MaxOffset` sets an optional inclusive offset limit. Invalid `Rows.ListKeyset` listing options now return an error before query execution.
 
 ### Public API changes
 
-- **Role-bound runners & explicit policies (A1–A2)**: `stdsql.NewRunner(db, policy, opts)` and `pgxdriver.NewRunner(pool, policy, opts)` take `RunnerOptions` (`Role`, `RequireRole`, `ReadOnly`, `Unscoped`, `Timeouts`, `SessionKey`, `ExposeTx`, `Tracer`, `Metrics`, `Log`, `Sanitize`, `TagStatements`) and return `(*Runner[S], error)`. `ScopePolicy` replaces `SetupTx` with declarative `ManagedVars`, `ScopeVars`, `ContextVars`, `UnscopedVars`, `InactiveVars`, and `ScopeLog`; runners auto-guard managed variables and timeout settings, reject nested runner calls with `ErrNested` (opt-out via `tabula.WithoutTransaction(ctx)`), close handles on callback return (`ErrSessionClosed`), and support `RunOptions.BeforeCommit`.
+- **Role-bound runners & explicit policies (A1–A2)**: `stdsql.NewRunner(db, policy, opts)` and `pgxdriver.NewRunner(pool, policy, opts)` take `RunnerOptions` (`Role`, `RequireRole`, `ReadOnly`, `Unscoped`, `UnscopedReadRole`, `Timeouts`, `SessionKey`, `ExposeTx`, `Tracer`, `Metrics`, `Log`, `Sanitize`, `TagStatements`) and return `(*Runner[S], error)`. `ScopePolicy` replaces `SetupTx` with declarative `ManagedVars`, `ScopeVars`, `ContextVars`, `UnscopedVars`, `InactiveVars`, and `ScopeLog`; runners auto-guard managed variables and timeout settings, reject nested runner calls with `ErrNested` (opt-out via `tabula.WithoutTransaction(ctx)`), close handles on callback return (`ErrSessionClosed`), and support `RunOptions.BeforeCommit`.
 - **Opt-in raw transaction escape (A5)**: removed default `Session.Tx()` on both `stdsql` and `pgxdriver`; raw access now requires `RunnerOptions{ExposeTx: true}` and `WithinRaw` / `WithinRawOptions` / `WithinRawTxOptions` returning `*RawSession[S]`.
 - **Session-level observability precedence (B1)**: when both a runner and a registry configure telemetry, the runner takes precedence per enabled signal (`Tracer`, `Metrics`, `Log`) so descriptor statements are emitted once while hand-written inline SQL is also observed.
 - Overlapping statements and savepoint requests on the same transaction return `tabula.ErrSessionBusy` in both drivers. This includes using a second shared handle while a row cursor is open.
 - Both drivers establish PostgreSQL read-only mode before the callback, even with an empty scope policy and zero timeouts. Guarded sessions reject `SET TRANSACTION` and changes to the current or default read-only mode with an error matching `tabula.ErrReadOnly` and `tabula.ErrForbiddenStatement` and remain usable for reads.
 - `GuardNoSessionEscape` and any configured `NewSessionGuard` protecting role, session authorization, or managed variables now reject transaction-ending commands (`COMMIT`, `END`, `ABORT`, non-savepoint `ROLLBACK`, `PREPARE TRANSACTION`) with `tabula.ErrForbiddenStatement`, preventing read-write guarded sessions from ending the runner transaction early and falling back to the login role. Savepoints remain allowed.
-- `UnscopedReadOnly` requires the entire shared transaction to be read-only. In a read-write `WithinShared`, even `SELECT` on `Shared.Unscoped()` returns `tabula.ErrUnscopedRequiresReadOnly`. It also matches `tabula.ErrReadOnly` through `errors.Is`.
+- Without a dedicated `UnscopedReadRole`, `UnscopedReadOnly` requires the entire shared transaction to be read-only for unscoped access. In a read-write `WithinShared`, even `SELECT` on `Shared.Unscoped()` returns `tabula.ErrUnscopedRequiresReadOnly`. It also matches `tabula.ErrReadOnly` through `errors.Is`.
 - Composed keyset queries compare `After` in the declared sort direction when a sort is fixed, including when the request specifies the opposite direction.
 - Composed queries reject parameter placeholders in sort and tie-breaker expressions at definition time. Quoted text and comments can contain literal `$n` text.
-- See [MIGRATION.md](docs/MIGRATION.md#from-v030-to-v031) for upgrade details.
 
 ### Additions
 

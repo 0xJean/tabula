@@ -2,26 +2,18 @@
 
 Follow this guide when upgrading an application to v0.3. For the full surface after the upgrade, see the [integration guide](INTEGRATION.md).
 
-## From v0.3.1 to v0.3.2
+## From v0.3.0 to v0.3.2
 
-- Check the error returned by `Rows.ListKeyset` for invalid limits, directions, sort columns, cursor lengths and lock modes. Remove any panic recovery used for request validation. The limit must leave room for the extra row used to compute `HasMore`.
-- Set `QuerySpec.MaxOffset` on composed lists to bound offset scans. A positive value includes its endpoint. Zero preserves the previous unlimited offset.
-- To audit scalar aggregates, list columns per function in `TableSpec.Aggregates`, regenerate the SQL snapshot and run the role inventory. Existing runtime calls and explicit workload variants continue to work.
-- For unscoped reads alongside scoped writes, grant a dedicated reader role access to the required rows and configure `UnscopedReadRole` on a runner with `UnscopedReadOnly` and a distinct `Role`. Without that option, unscoped handles still require a read-only transaction. [Role configuration](AUTHORIZATION.md#using-a-reader-role-in-a-shared-transaction)
-- With `iter.Pull2`, defer `stop()` in the callback that consumes the rows. Both drivers close the database cursor when the transaction or savepoint callback returns. Calling `stop` releases the suspended Go iterator.
+v0.3.2 includes the untagged v0.3.1 candidate. Upgrade directly from v0.3.0. This release moves role pinning, timeouts, managed scope variables, session sealing, raw-tx opt-in, session-level observability, aggregates and composed view queries into Tabula. The following changes apply to `stdsql` and `pgxdriver` callers.
 
-## From v0.3.0 to v0.3.1
-
-v0.3.1 moves role pinning, timeouts, managed scope variables, session sealing, raw-tx opt-in, session-level observability, aggregates and composed view queries into Tabula. The following changes apply to `stdsql` and `pgxdriver` callers.
-
-| v0.3.0 | v0.3.1 | Notes |
+| v0.3.0 | v0.3.2 | Notes |
 | --- | --- | --- |
 | `stdsql.NewRunner(db, policy)` | `stdsql.NewRunner(db, policy, stdsql.RunnerOptions{...})` returning `(*Runner[S], error)` | Validates role requirements, timeout bounds, `Unscoped` mode and `ManagedVars` at construction. |
 | `pgxdriver.NewRunner(pool, policy)` | `pgxdriver.NewRunner(pool, policy, pgxdriver.RunnerOptions{...})` returning `(*Runner[S], error)` | Same validation and role/timeout/GUC guarantees as `stdsql`. |
 | `ScopePolicy.SetupTx` | `ScopePolicy.ManagedVars` + `ScopeVars` + `ContextVars` + `UnscopedVars` + `RunnerOptions.Role` + `RunnerOptions.Timeouts` | The runner applies the role and settings during transaction setup and guards managed variables and timeouts. `Direct` rejects policies declaring managed variables. |
 | `sess.Tx()` | `RunnerOptions{ExposeTx: true}` + `runner.WithinRaw` / `WithinRawOptions` / `WithinRawTxOptions` → `rawSess.Tx()` | Default `*Session[S]` no longer exposes `*sql.Tx` / `pgx.Tx`. Raw escape sites are opt-in and reported by `tabula inventory` (`AuditSecurityCalls: true`). |
 | A read-only transaction with an empty policy could defer its first snapshot until user SQL | Both runners take the first snapshot during setup and guard the current and default read-only modes | Select the isolation level in the transaction options. PostgreSQL requires snapshot import before the first query, so a read-only callback cannot import a snapshot. Use literal keys for application `set_config` calls on a guarded read-only session. |
-| Unscoped sessions permitted by default on `Runner` | `RunnerOptions.Unscoped` defaults to `UnscopedDenied` | `UnscopedReadOnly` permits reads only in a read-only transaction. Reading unscoped and writing scoped in the same transaction requires `UnscopedReadWrite`, which also permits unscoped writes subject to database privileges and registry policy. |
+| Unscoped sessions permitted by default on `Runner` | `RunnerOptions.Unscoped` defaults to `UnscopedDenied` | Use `UnscopedReadOnly` for reads in read-only transactions. To also read unscoped in a read-write shared transaction, configure a separate `UnscopedReadRole`. Enable `UnscopedReadWrite` only when the workload needs unscoped writes. |
 | Nested runner calls allowed | Nested `Within*` using a transaction context returns `tabula.ErrNested` before `BEGIN` | Use `Savepoint` for nested work, or `tabula.WithoutTransaction(ctx)` only for deliberate independent transactions (beware connection pool deadlock). |
 | Issuing SQL with an open row cursor depended on the driver | Overlapping transaction statements and savepoint requests return `tabula.ErrSessionBusy` | Collect the IDs you need, finish or break the iteration, then query on the same transaction. |
 | Retained session handles stayed callable | Handles close automatically when the callback returns (including errors/panics), returning `tabula.ErrSessionClosed` | Use `RunOptions.BeforeCommit` for pre-commit work on a fresh handle. |
@@ -33,6 +25,14 @@ To adopt **sealed sessions (A4)** incrementally:
 3. Unsealed handles (including `NewSession` migration wrappers) fail closed with `tabula.ErrForeignSession` on keyed registries.
 
 For applications using the v0.3.1 preview, regenerate composed-query snapshots with `RenderAllSnapshot` and rerun `tabula inventory`. A resolved descriptor name is part of the site's identity, so review the bindings for changed IDs. Existing SQL snapshots remain readable by `tabula check`. [Role workload configuration](AUTHORIZATION.md)
+
+### Pagination, aggregates and shared sessions
+
+- Check the error returned by `Rows.ListKeyset` for invalid limits, directions, sort columns, cursor lengths and lock modes. Remove any panic recovery used for request validation. The limit must leave room for the extra row used to compute `HasMore`.
+- Set `QuerySpec.MaxOffset` on composed lists to bound offset scans. A positive value includes its endpoint. Zero preserves the previous unlimited offset.
+- To audit scalar aggregates, list columns per function in `TableSpec.Aggregates`, regenerate the SQL snapshot and run the role inventory. Existing runtime calls and explicit workload variants continue to work.
+- For unscoped reads alongside scoped writes, grant a dedicated reader role access to the required rows and configure `UnscopedReadRole` on a runner with `UnscopedReadOnly` and a distinct `Role`. The runner restores `Role` before committing so deferred invoker triggers see the scoped role even after an unscoped read. [Role configuration](AUTHORIZATION.md#using-a-reader-role-in-a-shared-transaction)
+- With `iter.Pull2`, defer `stop()` in the callback that consumes the rows. Both drivers close the database cursor when the transaction or savepoint callback returns. Calling `stop` releases the suspended Go iterator.
 
 ## From the v0.2.0 release
 
