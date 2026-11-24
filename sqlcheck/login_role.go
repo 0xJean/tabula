@@ -12,8 +12,9 @@ import (
 // LoginRoleExpectation configures PostgreSQL login-role hygiene verification
 // (A8). A compliant application login role has LOGIN NOINHERIT, no privileged
 // attributes, exact expected role memberships (the NOLOGIN roles it switches
-// into via SET LOCAL ROLE), no direct table or column grants, owns no database
-// objects, and cannot CREATE in the selected schemas.
+// into via SET LOCAL ROLE) with per-grant INHERIT disabled on PostgreSQL 16+,
+// no direct table or column grants, owns no database objects, and cannot CREATE
+// in the selected schemas.
 type LoginRoleExpectation struct {
 	// Role is the PostgreSQL login role name to audit (required).
 	Role string
@@ -94,25 +95,58 @@ func CheckLoginRole(ctx context.Context, db *sql.DB, exp LoginRoleExpectation) (
 		failures = append(failures, fmt.Sprintf("role %s: must not have REPLICATION", exp.Role))
 	}
 
-	// 1. Exact direct role memberships.
-	members, err := readRows(ctx, tx, `
-		SELECT DISTINCT r.rolname
-		FROM pg_catalog.pg_auth_members m
-		JOIN pg_catalog.pg_roles r ON r.oid = m.roleid
-		JOIN pg_catalog.pg_roles member ON member.oid = m.member
-		WHERE member.rolname = $1`,
-		func(r *sql.Rows) (string, error) {
-			var name string
-			return name, r.Scan(&name)
-		}, exp.Role)
+	// 1. Exact direct role memberships (and PG 16+ per-membership inherit_option).
+	var hasInheritOption bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM pg_catalog.pg_attribute
+			WHERE attrelid = 'pg_catalog.pg_auth_members'::regclass
+			  AND attname = 'inherit_option'
+			  AND NOT attisdropped
+		)`).Scan(&hasInheritOption); err != nil {
+		return nil, fmt.Errorf("check pg_auth_members.inherit_option: %w", err)
+	}
+	type memberRow struct {
+		name          string
+		inheritOption bool
+	}
+	var members []memberRow
+	if hasInheritOption {
+		members, err = readRows(ctx, tx, `
+			SELECT r.rolname, bool_or(m.inherit_option)
+			FROM pg_catalog.pg_auth_members m
+			JOIN pg_catalog.pg_roles r ON r.oid = m.roleid
+			JOIN pg_catalog.pg_roles member ON member.oid = m.member
+			WHERE member.rolname = $1
+			GROUP BY r.rolname`,
+			func(r *sql.Rows) (memberRow, error) {
+				var m memberRow
+				return m, r.Scan(&m.name, &m.inheritOption)
+			}, exp.Role)
+	} else {
+		members, err = readRows(ctx, tx, `
+			SELECT DISTINCT r.rolname
+			FROM pg_catalog.pg_auth_members m
+			JOIN pg_catalog.pg_roles r ON r.oid = m.roleid
+			JOIN pg_catalog.pg_roles member ON member.oid = m.member
+			WHERE member.rolname = $1`,
+			func(r *sql.Rows) (memberRow, error) {
+				var m memberRow
+				return m, r.Scan(&m.name)
+			}, exp.Role)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("read memberships for %s: %w", exp.Role, err)
 	}
 	actualMembers := map[string]bool{}
 	for _, m := range members {
-		actualMembers[m] = true
-		if !expectedMembers[m] {
-			failures = append(failures, fmt.Sprintf("role %s: unexpected membership in %s", exp.Role, m))
+		actualMembers[m.name] = true
+		if !expectedMembers[m.name] {
+			failures = append(failures, fmt.Sprintf("role %s: unexpected membership in %s", exp.Role, m.name))
+		}
+		if m.inheritOption {
+			failures = append(failures, fmt.Sprintf("role %s: membership in %s has INHERIT enabled", exp.Role, m.name))
 		}
 	}
 	for m := range expectedMembers {

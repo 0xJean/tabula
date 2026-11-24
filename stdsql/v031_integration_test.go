@@ -230,17 +230,28 @@ func TestV031RoleRunnerSharedSealedAndObserve(t *testing.T) {
 		require.Equal(t, "scoped", appMode)
 		require.Equal(t, "req-42", appReq)
 
-		// Built-in guard blocks SET ROLE, set_config, and timeout overrides.
+		// Built-in guard blocks SET ROLE, set_config, timeout overrides, and transaction-ending commands.
 		for _, bad := range []string{
 			"SET ROLE postgres",
 			"SET SESSION AUTHORIZATION DEFAULT",
 			"SELECT set_config('app.scope', 't2', true)",
 			"SET lock_timeout = '100s'",
 			"SET statement_timeout = 0",
+			"COMMIT",
+			"COMMIT WORK",
+			"END",
+			"ABORT",
+			"ROLLBACK",
+			"ROLLBACK WORK",
+			"PREPARE TRANSACTION 'tx1'",
 		} {
 			_, gErr := s.Exec(txCtx, bad)
 			require.ErrorIs(t, gErr, tabula.ErrForbiddenStatement, bad)
 		}
+		// Transaction role and scope variables must remain intact after rejected transaction control.
+		require.NoError(t, s.Scan(txCtx, `SELECT current_user, current_setting('app.scope')`, nil, &curRole, &appScope))
+		require.Equal(t, roleName, curRole)
+		require.Equal(t, "t1", appScope)
 
 		// Nested runner call returns ErrNested before BEGIN.
 		require.ErrorIs(t, runner.Within(txCtx, "t2", func(context.Context, *stdsql.Session[scope]) error {

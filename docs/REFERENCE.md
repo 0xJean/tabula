@@ -77,10 +77,12 @@ func CountBy[V comparable, T, K, S any](ctx context.Context, rows *Rows[T, K, S]
     non-nil empty map. Grouping keys must be non-null.
 
 func GuardNoSessionEscape(query string) error
-    GuardNoSessionEscape rejects role and session-authorization changes, RESET
-    ALL, DISCARD ALL, and calls to set_config. It checks each statement and
-    rejects anonymous DO blocks and Unicode-escaped identifiers. Ordinary quoted
-    identifiers, literals and comments follow PostgreSQL token boundaries.
+    GuardNoSessionEscape rejects role and session-authorization changes,
+    RESET ALL, DISCARD ALL, transaction-ending commands (COMMIT, END, ABORT,
+    non-savepoint ROLLBACK, PREPARE TRANSACTION), and calls to set_config.
+    It checks each statement and rejects anonymous DO blocks and Unicode-escaped
+    identifiers. Ordinary quoted identifiers, literals and comments follow
+    PostgreSQL token boundaries.
 
     Pass it directly to stdsql.ScopePolicy.GuardQuery or
     pgxdriver.ScopePolicy.GuardQuery.
@@ -92,11 +94,12 @@ func GuardReadOnly(query string) error
 
 func GuardReadOnlyTransaction(query string) error
     GuardReadOnlyTransaction keeps transaction control with the runner.
-    It returns ErrReadOnly for transaction-ending commands, SET TRANSACTION,
-    and changes to transaction_read_only or default_transaction_read_only.
-    Calls to set_config require a literal unprotected key. Savepoints remain
-    available. Use it with an established PostgreSQL READ ONLY transaction to
-    enforce access inside functions and other indirect SQL.
+    It returns an error matching both ErrReadOnly and ErrForbiddenStatement
+    for transaction-ending commands, SET TRANSACTION, and changes to
+    transaction_read_only or default_transaction_read_only. Calls to set_config
+    require a literal unprotected key. Savepoints remain available. Use it with
+    an established PostgreSQL READ ONLY transaction to enforce access inside
+    functions and other indirect SQL.
 
 func InTransaction(ctx context.Context) bool
     InTransaction reports whether ctx carries an active transaction marker from
@@ -160,9 +163,11 @@ func Min[V, T, K, S any](ctx context.Context, rows *Rows[T, K, S], col string, w
 
 func NewSessionGuard(cfg SessionGuardConfig) (func(string) error, error)
     NewSessionGuard compiles an application GuardQuery for trusted adapter SQL.
-    RESET ALL and DISCARD ALL are rejected if they could reset protected state.
-    Any active restriction rejects anonymous DO blocks and Unicode-escaped
-    identifiers. A zero config permits all statements.
+    RESET ALL, DISCARD ALL, and transaction-ending commands (COMMIT, END, ABORT,
+    non-savepoint ROLLBACK, PREPARE TRANSACTION) are rejected whenever the
+    guard protects role, session-authorization, or variable state. Any active
+    restriction rejects anonymous DO blocks and Unicode-escaped identifiers.
+    A zero config permits all statements.
 
 func RegisterType[S, V any](r *Registry[S], wrap func(*V) any)
     RegisterType registers a converter wrapping a pointer to a value of type T.
@@ -1376,7 +1381,10 @@ FUNCTIONS
 func NewMetrics(mp metric.MeterProvider, opts ...Option) (tabula.Metrics, error)
     NewMetrics returns a tabula.Metrics backed by mp (defaulting to
     otel.GetMeterProvider when mp is nil). It records tabula.statement.duration
-    (seconds) and tabula.statement.count ({statement}).
+    (seconds) and tabula.statement.count ({statement}) with bounded-cardinality
+    attributes (db.system, tabula.table, tabula.action, tabula.role,
+    tabula.error_class, plus any static WithAttributes). Per-tenant scope and
+    inline statement keys are emitted on trace spans only.
 
 func NewTracer(tp trace.TracerProvider, opts ...Option) tabula.Tracer
     NewTracer returns a tabula.Tracer backed by tp (defaulting to
@@ -2028,8 +2036,9 @@ type LoginRoleExpectation struct {
     LoginRoleExpectation configures PostgreSQL login-role hygiene verification
     (A8). A compliant application login role has LOGIN NOINHERIT, no privileged
     attributes, exact expected role memberships (the NOLOGIN roles it switches
-    into via SET LOCAL ROLE), no direct table or column grants, owns no database
-    objects, and cannot CREATE in the selected schemas.
+    into via SET LOCAL ROLE) with per-grant INHERIT disabled on PostgreSQL 16+,
+    no direct table or column grants, owns no database objects, and cannot
+    CREATE in the selected schemas.
 
 type MinimizeConfig struct {
 	Role       string

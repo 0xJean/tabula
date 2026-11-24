@@ -209,11 +209,23 @@ func TestV031PgxRoleRunnerSharedSealedCopyAndCrossDriverNesting(t *testing.T) {
 		require.Equal(t, "scoped", appMode)
 		require.Equal(t, "pgx-req-7", appReq)
 
-		// Built-in guard rejects SET ROLE / set_config / timeout overrides.
-		_, gErr := s.Exec(txCtx, "SET ROLE postgres")
-		require.ErrorIs(t, gErr, tabula.ErrForbiddenStatement)
-		_, gErr = s.Exec(txCtx, "SELECT set_config('app.scope', 't2', true)")
-		require.ErrorIs(t, gErr, tabula.ErrForbiddenStatement)
+		// Built-in guard rejects SET ROLE, set_config, timeout overrides, and transaction-ending commands.
+		for _, bad := range []string{
+			"SET ROLE postgres",
+			"SELECT set_config('app.scope', 't2', true)",
+			"COMMIT",
+			"END",
+			"ABORT",
+			"ROLLBACK",
+			"PREPARE TRANSACTION 'tx1'",
+		} {
+			_, gErr := s.Exec(txCtx, bad)
+			require.ErrorIs(t, gErr, tabula.ErrForbiddenStatement, bad)
+		}
+		// Transaction role and scope variables must remain intact after rejected transaction control.
+		require.NoError(t, s.Scan(txCtx, `SELECT current_user, current_setting('app.scope')`, nil, &curRole, &appScope))
+		require.Equal(t, roleName, curRole)
+		require.Equal(t, "t1", appScope)
 
 		// Cross-module ErrNested: stdsql runner must reject pgxdriver's marked context before BEGIN.
 		require.ErrorIs(t, stdRunner.Within(txCtx, "t1", func(context.Context, *stdsql.Session[scope]) error {

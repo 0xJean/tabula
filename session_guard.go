@@ -20,9 +20,11 @@ type SessionGuardConfig struct {
 }
 
 // NewSessionGuard compiles an application GuardQuery for trusted adapter SQL.
-// RESET ALL and DISCARD ALL are rejected if they could reset protected state.
-// Any active restriction rejects anonymous DO blocks and Unicode-escaped
-// identifiers. A zero config permits all statements.
+// RESET ALL, DISCARD ALL, and transaction-ending commands (COMMIT, END, ABORT,
+// non-savepoint ROLLBACK, PREPARE TRANSACTION) are rejected whenever the guard
+// protects role, session-authorization, or variable state. Any active
+// restriction rejects anonymous DO blocks and Unicode-escaped identifiers. A
+// zero config permits all statements.
 func NewSessionGuard(cfg SessionGuardConfig) (func(string) error, error) {
 	prefixes := slices.Clone(cfg.VariablePrefixes)
 	for i, p := range prefixes {
@@ -86,13 +88,13 @@ func compileSessionGuard(cfg SessionGuardConfig, readOnlyTx bool) func([]pgstmt.
 				return fmt.Errorf("%w: DO", ErrForbiddenStatement)
 			}
 			op := at(i)
-			if readOnlyTx && tok.Kind == pgstmt.Word {
+			if guardsState && tok.Kind == pgstmt.Word {
 				switch op {
 				case "commit", "end", "abort":
-					return ErrForbiddenStatement
+					return fmt.Errorf("%w: transaction control (%s)", ErrForbiddenStatement, op)
 				case "prepare":
 					if i+1 < len(t) && t[i+1] == (pgstmt.Token{Kind: pgstmt.Word, Text: "transaction"}) {
-						return ErrForbiddenStatement
+						return fmt.Errorf("%w: transaction control (prepare transaction)", ErrForbiddenStatement)
 					}
 				case "rollback":
 					n := i + 1
@@ -100,12 +102,12 @@ func compileSessionGuard(cfg SessionGuardConfig, readOnlyTx bool) func([]pgstmt.
 						n++
 					}
 					if at(n) != "to" {
-						return ErrForbiddenStatement
+						return fmt.Errorf("%w: transaction control (rollback)", ErrForbiddenStatement)
 					}
 				}
 			}
 			if op == "discard" && at(i+1) == "all" && guardsState {
-				return ErrForbiddenStatement
+				return fmt.Errorf("%w: discard all", ErrForbiddenStatement)
 			}
 			if op != "set" && op != "reset" {
 				continue
@@ -121,7 +123,7 @@ func compileSessionGuard(cfg SessionGuardConfig, readOnlyTx bool) func([]pgstmt.
 			if readOnlyTx && op == "set" {
 				if name == "transaction" ||
 					name == "characteristics" && at(n+1) == "as" && at(n+2) == "transaction" && setsAccessMode(t[n+3:]) {
-					return ErrForbiddenStatement
+					return fmt.Errorf("%w: set transaction", ErrForbiddenStatement)
 				}
 			}
 			if (op == "reset" && name == "all" && guardsState) ||

@@ -64,6 +64,32 @@ func TestCheckLoginRole(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, failures)
 
+	// 1b. PostgreSQL 16+: per-membership WITH INHERIT TRUE overrides NOINHERIT and must fail.
+	var serverVer int
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT current_setting('server_version_num')::int`).Scan(&serverVer))
+	if serverVer >= 160000 {
+		mustExec(`REVOKE ` + workerRole + ` FROM ` + loginRole)
+		mustExec(`GRANT ` + workerRole + ` TO ` + loginRole + ` WITH INHERIT TRUE`)
+		failures, err = sqlcheck.CheckLoginRole(ctx, db, sqlcheck.LoginRoleExpectation{
+			Role:     loginRole,
+			MemberOf: []string{workerRole},
+			Schemas:  []string{schema},
+		})
+		require.NoError(t, err)
+		require.Equal(t, []string{fmt.Sprintf("role %s: membership in %s has INHERIT enabled", loginRole, workerRole)}, failures)
+
+		// Restoring WITH INHERIT FALSE passes cleanly again.
+		mustExec(`REVOKE ` + workerRole + ` FROM ` + loginRole)
+		mustExec(`GRANT ` + workerRole + ` TO ` + loginRole + ` WITH INHERIT FALSE`)
+		failures, err = sqlcheck.CheckLoginRole(ctx, db, sqlcheck.LoginRoleExpectation{
+			Role:     loginRole,
+			MemberOf: []string{workerRole},
+			Schemas:  []string{schema},
+		})
+		require.NoError(t, err)
+		require.Empty(t, failures)
+	}
+
 	// 2. Missing role reports not found.
 	failures, err = sqlcheck.CheckLoginRole(ctx, db, sqlcheck.LoginRoleExpectation{
 		Role:    "no_such_role_" + suffix,

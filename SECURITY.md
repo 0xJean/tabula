@@ -32,10 +32,11 @@ Send the following details to the maintainers. [Report a vulnerability](https://
   `ValuesNever`. Columns tagged `db:"...,secret"` and statements registered with
   `tabula.Secret()` are redacted as `"[redacted]"` even when `ValuesAllowed` is enabled.
 - `tabula.GuardNoSessionEscape` blocks role and session-authorization changes, `RESET ALL`,
-  `DISCARD ALL`, and calls to `set_config`. It rejects Unicode-escaped identifiers.
-  The lexer recognizes comments, quoted identifiers, dollar-quoted strings, `E'...'`
-  escape strings, and single-quoted literals. `tabula.GuardReadOnly` applies the same
-  session checks to a single `SELECT` or `WITH` statement. Both Direct adapters also set
+  `DISCARD ALL`, transaction-ending commands (`COMMIT`, `END`, `ABORT`, non-savepoint
+  `ROLLBACK`, `PREPARE TRANSACTION`), and calls to `set_config`. It rejects Unicode-escaped
+  identifiers. The lexer recognizes comments, quoted identifiers, dollar-quoted strings,
+  `E'...'` escape strings, and single-quoted literals. `tabula.GuardReadOnly` applies the
+  same session checks to a single `SELECT` or `WITH` statement. Both Direct adapters also set
   `default_transaction_read_only=on` on the PostgreSQL connection.
 
 - The built-in session guard and any configured `NewSessionGuard` with an active restriction reject anonymous `DO` blocks, including after a statement separator. PostgreSQL executes the body as procedural code, so the guard rejects the whole command. Ordinary upserts can use `ON CONFLICT … DO NOTHING` and `DO UPDATE`. [PostgreSQL DO](https://www.postgresql.org/docs/17/sql-do.html)

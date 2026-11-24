@@ -100,11 +100,17 @@ func TestMetricsRecordsHistogramAndCounter(t *testing.T) {
 
 	info := tabula.TraceInfo{
 		Key:    "tabula.inline.abcdef012345",
+		Table:  "orders",
 		Action: "select",
 		Role:   "app_reader",
 		Scope:  "t-1",
 	}
 	m.Observe(t.Context(), info, 25*time.Millisecond, 3, "")
+	// Different tenant scope and inline key must aggregate into the same low-cardinality series.
+	infoOtherTenant := info
+	infoOtherTenant.Scope = "t-2"
+	infoOtherTenant.Key = "tabula.inline.fedcba987654"
+	m.Observe(t.Context(), infoOtherTenant, 15*time.Millisecond, 1, "")
 	m.Observe(t.Context(), info, 50*time.Millisecond, 0, tabula.ClassRLSDenied)
 
 	var rm metricdata.ResourceMetrics
@@ -120,7 +126,7 @@ func TestMetricsRecordsHistogramAndCounter(t *testing.T) {
 
 	hist, ok := metricsByName["tabula.statement.duration"].Data.(metricdata.Histogram[float64])
 	require.True(t, ok)
-	require.Len(t, hist.DataPoints, 2)
+	require.Len(t, hist.DataPoints, 2, "scope and inline key must not split metric series")
 
 	sum, ok := metricsByName["tabula.statement.count"].Data.(metricdata.Sum[int64])
 	require.True(t, ok)
@@ -129,11 +135,18 @@ func TestMetricsRecordsHistogramAndCounter(t *testing.T) {
 	var sawRLS bool
 	for _, dp := range sum.DataPoints {
 		total += dp.Value
+		_, hasScope := dp.Attributes.Value("tabula.scope")
+		_, hasKey := dp.Attributes.Value("tabula.key")
+		require.False(t, hasScope, "tabula.scope must be omitted from metrics")
+		require.False(t, hasKey, "tabula.key must be omitted from metrics")
+		vTable, okTable := dp.Attributes.Value("tabula.table")
+		require.True(t, okTable)
+		require.Equal(t, "orders", vTable.AsString())
 		if v, exists := dp.Attributes.Value("tabula.error_class"); exists && v.AsString() == string(tabula.ClassRLSDenied) {
 			sawRLS = true
 		}
 	}
-	require.Equal(t, int64(2), total)
+	require.Equal(t, int64(3), total)
 	require.True(t, sawRLS)
 
 	// Works end-to-end through tabula.Observer.

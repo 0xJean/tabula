@@ -25,8 +25,13 @@ func TestGuardReadOnlyTransaction(t *testing.T) {
 		"SELECT 'safe'; /* end */ COMMIT",
 		"END WORK", "ABORT", "ROLLBACK WORK", "PREPARE TRANSACTION 'name'",
 	} {
-		require.ErrorIs(t, GuardReadOnlyTransaction(query), ErrReadOnly, query)
+		err := GuardReadOnlyTransaction(query)
+		require.ErrorIs(t, err, ErrReadOnly, query)
+		require.ErrorIs(t, err, ErrForbiddenStatement, query)
 	}
+	commitErr := GuardReadOnlyTransaction("COMMIT")
+	require.ErrorContains(t, commitErr, "transaction control (commit)")
+	require.NotContains(t, commitErr.Error(), "requires a writable session")
 	for _, query := range []string{
 		"SHOW transaction_read_only", "SHOW default_transaction_read_only",
 		"SET LOCAL statement_timeout = '1s'", "SET LOCAL transaction_read_only.label = 'one'",
@@ -51,10 +56,26 @@ func TestConfiguredSessionGuard(t *testing.T) {
 		"SET ROLE reader", "SET SESSION AUTHORIZATION DEFAULT", "SELECT pg_catalog.set_config('role','reader',true)",
 		"SELECT set_config('session_authorization','reader',true)", "SELECT set_config($1,$2,true)", "SELECT set_config('scope.id','a',true)",
 		`SELECT $tag$RESET ALL$tag$; /* scope */ RESET "scope"."id"`,
+		"COMMIT", "COMMIT WORK", "COMMIT AND CHAIN", "COMMIT PREPARED 'x'",
+		"END", "END TRANSACTION", "ABORT", "ABORT WORK",
+		"ROLLBACK", "ROLLBACK WORK", "ROLLBACK TRANSACTION", "ROLLBACK AND CHAIN", "ROLLBACK PREPARED 'x'",
+		"PREPARE TRANSACTION 'tx1'", "SELECT 1; /* comment */ COMMIT",
 	} {
 		require.ErrorIs(t, guard(q), ErrForbiddenStatement, q)
 	}
-	for _, q := range []string{"SELECT 'RESET ALL'", "SET LOCAL unrelated.id = 'a'", "RESET timezone", "UPDATE items SET role=$1", "SELECT set_config('unrelated.id','a',true)", `SELECT $$set_config('scope.id','a',true)$$`} {
+	for _, q := range []string{
+		"COMMIT", "END", "ABORT", "ROLLBACK", "ROLLBACK WORK", "PREPARE TRANSACTION 'tx1'", "SELECT 1; COMMIT",
+	} {
+		require.ErrorIs(t, GuardNoSessionEscape(q), ErrForbiddenStatement, q)
+	}
+	for _, q := range []string{
+		"SELECT 'RESET ALL'", "SELECT 'COMMIT'", `SELECT $$ROLLBACK; END; ABORT$$`,
+		"SAVEPOINT sp; ROLLBACK TO SAVEPOINT sp; RELEASE SAVEPOINT sp",
+		"ROLLBACK WORK TO sp", "ROLLBACK TRANSACTION TO SAVEPOINT sp",
+		"PREPARE lookup AS SELECT 1", `PREPARE "transaction" AS SELECT 1`,
+		"SET LOCAL unrelated.id = 'a'", "RESET timezone", "UPDATE items SET role=$1",
+		"SELECT set_config('unrelated.id','a',true)", `SELECT $$set_config('scope.id','a',true)$$`,
+	} {
 		require.NoError(t, guard(q), q)
 	}
 	strict, err := NewSessionGuard(SessionGuardConfig{ForbidSetConfig: true})

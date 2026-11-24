@@ -92,7 +92,11 @@ configured on `RegistryConfig` or on `RunnerOptions` (`Tracer`, `Metrics`, `Log`
 The separate OpenTelemetry module `github.com/0xJean/tabula/oteltabula` implements
 `tabula.Tracer` (`oteltabula.NewTracer`) and `tabula.Metrics` (`oteltabula.NewMetrics`)
 over `go.opentelemetry.io/otel` without adding third-party dependencies to core packages.
-See the [Go reference](REFERENCE.md#oteltabula).
+Spans carry full statement context (`tabula.key`, `tabula.table`, `tabula.action`,
+`tabula.role`, `tabula.scope`, `tabula.rows`, `tabula.error_class`), while metrics emit
+bounded-cardinality labels (`db.system`, `tabula.table`, `tabula.action`, `tabula.role`,
+`tabula.error_class`) and omit per-tenant `tabula.scope` and statement/inline-fingerprint
+`tabula.key` values. See the [Go reference](REFERENCE.md#oteltabula).
 
 ## 6. Database-side slow statement logs
 

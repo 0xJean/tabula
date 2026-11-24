@@ -142,12 +142,27 @@ func FuzzGuardNoSessionEscape(f *testing.F) {
 	f.Add("RESET default_transaction_read_only")
 	f.Add(`SELECT $$SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY$$`)
 	f.Add(`SELECT $$COMMIT$$, E'can\'t' /* ROLLBACK */`)
+	f.Add("COMMIT")
+	f.Add("SELECT 1; COMMIT AND CHAIN")
+	f.Add("ROLLBACK WORK")
+	f.Add("ROLLBACK WORK TO SAVEPOINT sp")
+	f.Add("END TRANSACTION")
+	f.Add("ABORT")
+	f.Add("PREPARE TRANSACTION 'tx1'")
 	f.Fuzz(func(t *testing.T, query string) {
 		if err := GuardReadOnlyTransaction(query); err != nil && !errors.Is(err, ErrReadOnly) {
 			t.Fatalf("read-only transaction guard returned %v for %q", err, query)
 		}
 		if err := GuardReadOnlyTransaction("SET TRANSACTION READ WRITE;" + query); !errors.Is(err, ErrReadOnly) {
 			t.Fatalf("read-only transaction guard returned %v for a mode change", err)
+		}
+		for _, txEnd := range []string{"COMMIT;", "ROLLBACK;", "END;", "ABORT;", "PREPARE TRANSACTION 'x';"} {
+			if err := GuardNoSessionEscape(txEnd + query); !errors.Is(err, ErrForbiddenStatement) {
+				t.Fatalf("session guard allowed transaction-ending prefix %q: %v", txEnd, err)
+			}
+			if err := configured(txEnd + query); !errors.Is(err, ErrForbiddenStatement) {
+				t.Fatalf("configured guard allowed transaction-ending prefix %q: %v", txEnd, err)
+			}
 		}
 		quoted := "SELECT '" + strings.ReplaceAll(query, "'", "''") + "'"
 		if err := GuardReadOnlyTransaction(quoted); err != nil {

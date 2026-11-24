@@ -62,7 +62,7 @@ func WithAttributes(attrs ...attribute.KeyValue) Option {
 	}
 }
 
-func commonAttrs(info tabula.TraceInfo, extra []attribute.KeyValue) []attribute.KeyValue {
+func spanAttrs(info tabula.TraceInfo, extra []attribute.KeyValue) []attribute.KeyValue {
 	attrs := make([]attribute.KeyValue, 0, 6+len(extra))
 	attrs = append(attrs, attribute.String("db.system", "postgresql"))
 	if info.Key != "" {
@@ -79,6 +79,27 @@ func commonAttrs(info tabula.TraceInfo, extra []attribute.KeyValue) []attribute.
 	}
 	if info.Scope != "" {
 		attrs = append(attrs, attribute.String("tabula.scope", info.Scope))
+	}
+	attrs = append(attrs, extra...)
+	return attrs
+}
+
+// metricAttrs keeps metric cardinality bounded by omitting per-tenant scope
+// labels and statement/inline-fingerprint keys (those remain on trace spans).
+func metricAttrs(info tabula.TraceInfo, errClass tabula.ErrorClass, extra []attribute.KeyValue) []attribute.KeyValue {
+	attrs := make([]attribute.KeyValue, 0, 5+len(extra))
+	attrs = append(attrs, attribute.String("db.system", "postgresql"))
+	if info.Table != "" {
+		attrs = append(attrs, attribute.String("tabula.table", info.Table))
+	}
+	if info.Action != "" {
+		attrs = append(attrs, attribute.String("tabula.action", info.Action))
+	}
+	if info.Role != "" {
+		attrs = append(attrs, attribute.String("tabula.role", info.Role))
+	}
+	if errClass != "" {
+		attrs = append(attrs, attribute.String("tabula.error_class", string(errClass)))
 	}
 	attrs = append(attrs, extra...)
 	return attrs
@@ -114,7 +135,7 @@ func (t *otelTracer) Start(ctx context.Context, info tabula.TraceInfo) (context.
 	}
 	ctx, span := t.tracer.Start(ctx, spanName,
 		trace.WithSpanKind(trace.SpanKindClient),
-		trace.WithAttributes(commonAttrs(info, t.extra)...),
+		trace.WithAttributes(spanAttrs(info, t.extra)...),
 	)
 	return ctx, func(rows int64, err error) {
 		if rows >= 0 {
@@ -144,7 +165,10 @@ type otelMetrics struct {
 
 // NewMetrics returns a tabula.Metrics backed by mp (defaulting to
 // otel.GetMeterProvider when mp is nil). It records tabula.statement.duration
-// (seconds) and tabula.statement.count ({statement}).
+// (seconds) and tabula.statement.count ({statement}) with bounded-cardinality
+// attributes (db.system, tabula.table, tabula.action, tabula.role,
+// tabula.error_class, plus any static WithAttributes). Per-tenant scope and
+// inline statement keys are emitted on trace spans only.
 func NewMetrics(mp metric.MeterProvider, opts ...Option) (tabula.Metrics, error) {
 	if mp == nil {
 		mp = otel.GetMeterProvider()
@@ -179,11 +203,7 @@ func NewMetrics(mp metric.MeterProvider, opts ...Option) (tabula.Metrics, error)
 }
 
 func (m *otelMetrics) Observe(ctx context.Context, info tabula.TraceInfo, duration time.Duration, _ int64, errClass tabula.ErrorClass) {
-	attrs := commonAttrs(info, m.extra)
-	if errClass != "" {
-		attrs = append(attrs, attribute.String("tabula.error_class", string(errClass)))
-	}
-	opt := metric.WithAttributes(attrs...)
+	opt := metric.WithAttributes(metricAttrs(info, errClass, m.extra)...)
 	m.duration.Record(ctx, duration.Seconds(), opt)
 	m.count.Add(ctx, 1, opt)
 }
