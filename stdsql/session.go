@@ -201,6 +201,15 @@ func wrapReadOnlyErr(err error) error {
 	return err
 }
 
+func (s *Session[S]) check(query string) error {
+	if s.readOnly {
+		if err := tabula.GuardReadOnlyTransaction(query); err != nil {
+			return err
+		}
+	}
+	return s.readQueries.check(query)
+}
+
 func (s readQueries) check(query string) error {
 	if s.guard != nil {
 		return s.guard(query)

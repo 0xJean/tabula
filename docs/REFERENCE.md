@@ -86,6 +86,13 @@ func GuardReadOnly(query string) error
     GuardNoSessionEscape. Adapters must also use a read-only PostgreSQL
     connection to enforce write restrictions inside CTEs and functions.
 
+func GuardReadOnlyTransaction(query string) error
+    GuardReadOnlyTransaction keeps transaction control with the runner.
+    It returns ErrReadOnly for commands that end the transaction, request READ
+    WRITE, or directly change transaction_read_only. Savepoints and ordinary
+    queries remain available. Use it with an established PostgreSQL READ ONLY
+    transaction to enforce access inside functions and other indirect SQL.
+
 func InTransaction(ctx context.Context) bool
     InTransaction reports whether ctx carries an active transaction marker from
     MarkTransaction (and has not been detached with WithoutTransaction).
@@ -1530,7 +1537,8 @@ func (r *Runner[S]) WithinRawTxOptions(ctx context.Context, scope S, opts pgx.Tx
     pgx.TxOptions.
 
 func (r *Runner[S]) WithinReadOnly(ctx context.Context, scope S, fn func(context.Context, *Session[S]) error) error
-    WithinReadOnly runs fn in a READ ONLY transaction.
+    WithinReadOnly runs fn in a READ ONLY transaction. The runner establishes
+    the first PostgreSQL snapshot before calling fn, even with an empty policy.
 
 func (r *Runner[S]) WithinRetry(ctx context.Context, scope S, cfg tabula.RetryConfig, fn func(context.Context, *Session[S]) error) error
     WithinRetry runs the full transaction attempt up to cfg.MaxAttempts times
@@ -1646,6 +1654,10 @@ func (s *Shared[S]) Scoped(scope S) *Session[S]
 
 func (s *Shared[S]) Unscoped() *Session[S]
     Unscoped returns an unscoped Session handle sharing this transaction.
+    UnscopedReadOnly requires the whole transaction to be read-only.
+    In a read-write transaction even a SELECT on this handle returns
+    tabula.ErrReadOnly. UnscopedDenied rejects all operations with
+    tabula.ErrCapabilityDenied.
 
 type Timeouts struct {
 	Lock              time.Duration
@@ -2368,7 +2380,8 @@ func (r *Runner[S]) WithinRawOptions(ctx context.Context, scope S, opts *sql.TxO
     WithinRawOptions runs fn with a *RawSession[S] under explicit sql.TxOptions.
 
 func (r *Runner[S]) WithinReadOnly(ctx context.Context, scope S, fn func(context.Context, *Session[S]) error) error
-    WithinReadOnly runs fn in a READ ONLY transaction.
+    WithinReadOnly runs fn in a READ ONLY transaction. The runner establishes
+    the first PostgreSQL snapshot before calling fn, even with an empty policy.
 
 func (r *Runner[S]) WithinRetry(ctx context.Context, scope S, cfg tabula.RetryConfig, fn func(context.Context, *Session[S]) error) error
     WithinRetry runs the full transaction attempt up to cfg.MaxAttempts times
@@ -2511,9 +2524,11 @@ func (s *Shared[S]) Scoped(scope S) *Session[S]
     Scoped returns a scoped Session handle sharing this transaction.
 
 func (s *Shared[S]) Unscoped() *Session[S]
-    Unscoped returns an unscoped Session handle sharing this transaction. It
-    obeys the runner's UnscopedMode; when disallowed, operations on the returned
-    handle fail closed with tabula.ErrReadOnly or tabula.ErrCapabilityDenied.
+    Unscoped returns an unscoped Session handle sharing this transaction.
+    UnscopedReadOnly requires the whole transaction to be read-only.
+    In a read-write transaction even a SELECT on this handle returns
+    tabula.ErrReadOnly. UnscopedDenied rejects all operations with
+    tabula.ErrCapabilityDenied.
 
 type Timeouts struct {
 	// Lock maps to PostgreSQL lock_timeout via set_config(..., true).

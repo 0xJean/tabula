@@ -137,7 +137,17 @@ func FuzzGuardNoSessionEscape(f *testing.F) {
 	f.Add(`SET "local" /* namespace */ . "label" FROM CURRENT`)
 	f.Add("SET LOCAL session.label TO DEFAULT")
 	f.Add("SET SESSION other.label = 'three'")
+	f.Add("SET TRANSACTION READ WRITE")
+	f.Add("SET TRANSACTION READ ONLY; SHOW transaction_read_only")
+	f.Add(`SELECT $$COMMIT$$, E'can\'t' /* ROLLBACK */`)
 	f.Fuzz(func(t *testing.T, query string) {
+		if err := GuardReadOnlyTransaction("SET TRANSACTION READ WRITE;" + query); !errors.Is(err, ErrReadOnly) {
+			t.Fatalf("read-only transaction guard returned %v for a mode change", err)
+		}
+		quoted := "SELECT '" + strings.ReplaceAll(query, "'", "''") + "'"
+		if err := GuardReadOnlyTransaction(quoted); err != nil {
+			t.Fatalf("read-only transaction guard rejected a quoted value: %v", err)
+		}
 		sessionErr := GuardNoSessionEscape(query)
 		readErr := GuardReadOnly(query)
 		if !errors.Is(readErr, ErrReadOnly) && errors.Is(readErr, ErrForbiddenStatement) != errors.Is(sessionErr, ErrForbiddenStatement) {

@@ -53,7 +53,9 @@ runner, err := stdsql.NewRunner(db, policy, stdsql.RunnerOptions{
   deadline wins. The three server timeouts bound individual waits, statements and idle
   periods. After BEGIN, issue the quoted `SET LOCAL ROLE` when configured, then one
   parameterized SELECT of transaction-local `set_config` calls for all timeouts and
-  scope/context variables. Validate the complete set and reject duplicate names first.
+  scope/context variables. For read-only transactions this batch also sets
+  `transaction_read_only` and takes the first snapshot before user SQL runs.
+  Validate the complete set and reject duplicate names first.
   This takes at most two setup round trips. Setup failure rolls back before user code.
 - Pass a marked context to the callback. A nested runner entry using that context
   (including another runner) returns `ErrNested` before BEGIN. Use a savepoint for
@@ -114,8 +116,9 @@ err := runner.WithinShared(ctx, func(ctx context.Context, tx *stdsql.Shared[Scop
   database round trip per statement inside `WithinShared`. This is acceptable for
   background jobs and batch reconciliation, but `WithinShared` is not intended for
   latency-sensitive request hot paths.
-- Use case: a background job reads shared configuration unscoped, then writes per-scope
-  rows in the same transaction.
+- A background job that reads shared configuration unscoped and then writes per-scope
+  rows in the same transaction requires `UnscopedReadWrite`. With `UnscopedReadOnly`,
+  even reads on the unscoped handle require a read-only shared transaction.
 
 ### A4. Sealed sessions
 

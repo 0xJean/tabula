@@ -52,7 +52,8 @@ func (r *Runner[S]) Within(ctx context.Context, scope S, fn func(context.Context
 	return r.WithinWith(ctx, scope, RunOptions[S]{}, fn)
 }
 
-// WithinReadOnly runs fn in a READ ONLY transaction.
+// WithinReadOnly runs fn in a READ ONLY transaction. The runner establishes
+// the first PostgreSQL snapshot before calling fn, even with an empty policy.
 func (r *Runner[S]) WithinReadOnly(ctx context.Context, scope S, fn func(context.Context, *Session[S]) error) error {
 	return r.WithinWith(ctx, scope, RunOptions[S]{TxOptions: pgx.TxOptions{AccessMode: pgx.ReadOnly}}, fn)
 }
@@ -141,11 +142,16 @@ func (r *Runner[S]) newBoundSession(tx pgx.Tx, scope S, unscoped, readOnly bool)
 	return s
 }
 
-func (r *Runner[S]) setupTx(ctx context.Context, tx pgx.Tx, pairs []gucPair) error {
+func (r *Runner[S]) setupTx(ctx context.Context, tx pgx.Tx, pairs []gucPair, readOnly bool) error {
 	if r.opts.Role != "" {
 		if err := SetLocalRole(ctx, tx, r.opts.Role); err != nil {
 			return err
 		}
+	}
+	if readOnly {
+		// The setup SELECT takes the first snapshot. PostgreSQL then keeps
+		// this transaction read-only for its remaining lifetime.
+		pairs = append(pairs, gucPair{"transaction_read_only", "on"})
 	}
 	return execSetConfigBatch(ctx, tx, pairs)
 }
@@ -189,7 +195,7 @@ func (r *Runner[S]) runTx(
 		}
 	}()
 
-	if err := r.setupTx(ctx, tx, gucs); err != nil {
+	if err := r.setupTx(ctx, tx, gucs, readOnly); err != nil {
 		return err
 	}
 
@@ -275,6 +281,9 @@ func (st *sharedState[S]) mint(scope S, unscoped bool, denied error) *Session[S]
 }
 
 // Unscoped returns an unscoped Session handle sharing this transaction.
+// UnscopedReadOnly requires the whole transaction to be read-only. In a
+// read-write transaction even a SELECT on this handle returns tabula.ErrReadOnly.
+// UnscopedDenied rejects all operations with tabula.ErrCapabilityDenied.
 func (s *Shared[S]) Unscoped() *Session[S] {
 	var zero S
 	denied := s.state.runner.checkMode(s.state.readOnly, true)
@@ -328,7 +337,7 @@ func (r *Runner[S]) WithinSharedOptions(ctx context.Context, opts pgx.TxOptions,
 			_ = tx.Rollback(context.WithoutCancel(ctx))
 		}
 	}()
-	if err := r.setupTx(ctx, tx, timeoutPairs(r.opts.Timeouts)); err != nil {
+	if err := r.setupTx(ctx, tx, timeoutPairs(r.opts.Timeouts), readOnly); err != nil {
 		return err
 	}
 	state := &sharedState[S]{

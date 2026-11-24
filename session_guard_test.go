@@ -6,6 +6,32 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestGuardReadOnlyTransaction(t *testing.T) {
+	for _, query := range []string{
+		"SET TRANSACTION READ WRITE",
+		"SET TRANSACTION ISOLATION LEVEL READ COMMITTED, READ WRITE",
+		`SET LOCAL "transaction_read_only" = off`,
+		"RESET transaction_read_only",
+		"SELECT pg_catalog.set_config('transaction_read_only', 'off', true)",
+		"SELECT 'safe'; /* end */ COMMIT",
+		"END WORK", "ABORT", "ROLLBACK WORK", "PREPARE TRANSACTION 'name'",
+	} {
+		require.ErrorIs(t, GuardReadOnlyTransaction(query), ErrReadOnly, query)
+	}
+	for _, query := range []string{
+		"SHOW transaction_read_only", "SET TRANSACTION READ ONLY",
+		"SET LOCAL statement_timeout = '1s'", "SET LOCAL transaction_read_only.label = 'one'",
+		"SELECT pg_catalog.set_config('application_name', 'reader', true)",
+		"SET TRANSACTION ISOLATION LEVEL READ COMMITTED; SELECT 'read write'",
+		"SAVEPOINT part; ROLLBACK TRANSACTION TO SAVEPOINT part; RELEASE SAVEPOINT part",
+		"PREPARE lookup AS SELECT 1", "PREPARE \"transaction\" AS SELECT 1",
+		`SELECT 'SET TRANSACTION READ WRITE', $$COMMIT; END$$, E'can\'t', 1 AS "rollback"`,
+		"SELECT 1 /* SET TRANSACTION READ WRITE */ -- COMMIT",
+	} {
+		require.NoError(t, GuardReadOnlyTransaction(query), query)
+	}
+}
+
 func TestConfiguredSessionGuard(t *testing.T) {
 	prefixes := []string{"Scope."}
 	guard, err := NewSessionGuard(SessionGuardConfig{VariablePrefixes: prefixes, ForbidRole: true, ForbidSessionAuthorization: true})

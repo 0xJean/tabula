@@ -27,6 +27,7 @@ Send the following details to the maintainers. [Report a vulnerability](https://
   handles on callback return (`ErrSessionClosed`), and require explicit `ExposeTx: true` for
   `WithinRaw` / `RawSession.Tx()`. `sqlcheck.CheckLoginRole` and `tabula check-login-role`
   audit login-role hygiene (`LOGIN NOINHERIT`, memberships, direct grants, ownership, `CREATE`).
+- Both runners set `transaction_read_only` in their transaction-local setup query when a transaction requests read-only access. PostgreSQL takes the first snapshot before any callback and enforces read-only mode for the lifetime of that transaction. The guarded session rejects explicit requests for read-write mode with `ErrReadOnly`. An opt-in raw transaction uses the driver's native errors. User SQL belongs to the application, and the runner owns commit and rollback. [PostgreSQL transaction modes](https://www.postgresql.org/docs/17/sql-set-transaction.html)
 - **Sensitive data is never logged by default**: `LogConfig.Values` defaults to
   `ValuesNever`. Columns tagged `db:"...,secret"` and statements registered with
   `tabula.Secret()` are redacted as `"[redacted]"` even when `ValuesAllowed` is enabled.

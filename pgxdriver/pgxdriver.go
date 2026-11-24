@@ -213,6 +213,15 @@ func (s *Session[S]) applyScope(ctx context.Context) error {
 	return s.shared.applyFor(ctx, s.tx, s.scope, s.unscoped)
 }
 
+func (s *Session[S]) check(query string) error {
+	if s.readOnly {
+		if err := tabula.GuardReadOnlyTransaction(query); err != nil {
+			return err
+		}
+	}
+	return s.readQueries.check(query)
+}
+
 func (s readQueries) check(query string) error {
 	if s.guard != nil {
 		return s.guard(query)

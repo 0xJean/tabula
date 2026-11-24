@@ -11,12 +11,68 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
 	"github.com/0xJean/tabula"
 	"github.com/0xJean/tabula/pgxdriver"
 )
+
+func TestReadOnlyTransactionMode(t *testing.T) {
+	dsn := os.Getenv("TABULA_TEST_DSN")
+	require.NotEmpty(t, dsn, "TABULA_TEST_DSN is required for integration tests")
+	ctx := t.Context()
+	db, err := pgxpool.New(ctx, dsn)
+	require.NoError(t, err)
+	t.Cleanup(db.Close)
+
+	scope := struct{}{}
+	ro, err := pgxdriver.NewRunner(db, pgxdriver.NoScopePolicy(), pgxdriver.RunnerOptions{
+		ReadOnly: true, Unscoped: pgxdriver.UnscopedReadOnly, ExposeTx: true,
+	})
+	require.NoError(t, err)
+	check := func(ctx context.Context, s *pgxdriver.Session[struct{}]) error {
+		_, err := s.Exec(ctx, "SET TRANSACTION READ WRITE")
+		require.ErrorIs(t, err, tabula.ErrReadOnly)
+		require.True(t, s.ReadOnly())
+		var mode string
+		require.NoError(t, s.Scan(ctx, "SHOW transaction_read_only", nil, &mode))
+		require.Equal(t, "on", mode)
+		return nil
+	}
+	require.NoError(t, ro.WithinReadOnly(ctx, scope, check))
+	require.NoError(t, ro.WithinShared(ctx, func(ctx context.Context, shared *pgxdriver.Shared[struct{}]) error {
+		return check(ctx, shared.Unscoped())
+	}))
+
+	// The first snapshot also precedes the callback on the shared path.
+	opts := pgx.TxOptions{AccessMode: pgx.ReadOnly, IsoLevel: pgx.ReadCommitted}
+	err = ro.WithinSharedOptions(ctx, opts, func(ctx context.Context, shared *pgxdriver.Shared[struct{}]) error {
+		_, err := shared.Scoped(scope).Exec(ctx, "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+		return err
+	})
+	require.Equal(t, "25001", tabula.SQLState(err))
+
+	// Raw driver calls reach PostgreSQL directly. Setup must have acquired
+	// the first snapshot even when there are no timeouts or managed variables.
+	err = ro.WithinRawTxOptions(ctx, scope, pgx.TxOptions{AccessMode: pgx.ReadOnly}, func(ctx context.Context, s *pgxdriver.RawSession[struct{}]) error {
+		_, err := s.Tx().Exec(ctx, "SET TRANSACTION READ WRITE")
+		return err
+	})
+	require.Equal(t, "25001", tabula.SQLState(err))
+
+	rw, err := pgxdriver.NewRunner(db, pgxdriver.NoScopePolicy(), pgxdriver.RunnerOptions{Unscoped: pgxdriver.UnscopedReadOnly})
+	require.NoError(t, err)
+	require.NoError(t, rw.WithinReadOnly(ctx, scope, check))
+	require.NoError(t, rw.WithinShared(ctx, func(ctx context.Context, shared *pgxdriver.Shared[struct{}]) error {
+		var mode string
+		require.ErrorIs(t, shared.Unscoped().Scan(ctx, "SHOW transaction_read_only", nil, &mode), tabula.ErrReadOnly)
+		require.NoError(t, shared.Scoped(scope).Scan(ctx, "SHOW transaction_read_only", nil, &mode))
+		require.Equal(t, "off", mode)
+		return nil
+	}))
+}
 
 func TestPgxRunnerAndTabulaIntegration(t *testing.T) {
 	dsn := os.Getenv("TABULA_TEST_DSN")

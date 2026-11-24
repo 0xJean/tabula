@@ -202,6 +202,8 @@ for job, err := range jobs.Bind(sess).Iter(ctx, nil, tabula.Listing{
 
 Starting a range executes one query in the bound session. Each yielded row comes from that cursor. A break releases it. Finish the range or break before issuing another statement on the same transaction. Both drivers return `tabula.ErrSessionBusy` while the cursor is open, including when another handle from `WithinShared` issues the statement. PostgreSQL retains row locks until the transaction ends. Streaming a locked table with `once` columns retains a snapshot per locked row. Unlocked exports decode one row at a time. For hand-written SQL over the table columns use `rows.SelectIter(ctx, query, args...)`. For a projection, use `view.Bind(sess).Iter(ctx, query, args...)`.
 
+When pulling rows with `next, stop := iter.Pull2(seq)`, place `defer stop()` inside the transaction callback, immediately after creating the iterator. If the callback returns with a partially consumed iterator still open, transaction cleanup can wait indefinitely.
+
 ## 11. Batch upserts and atomic updates
 
 ```go

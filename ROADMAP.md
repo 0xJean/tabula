@@ -54,7 +54,7 @@ Items keep the red lines in [docs/DESIGN.md](docs/DESIGN.md).
 - Snapshot policies, FORCE RLS tables, grants and SECURITY DEFINER routines. Classify policies with application rules, check command coverage and exercise a role/scope/statement matrix.
 - Distinguish RLS and privilege denials, configure session guards and clone content-addressed PostgreSQL test templates through a chosen migration. [Design and configuration](docs/AUTHORIZATION.md)
 
-## v0.3.1 — shipped
+## v0.3.1
 
 Design record: [docs/DESIGN-v0.3.1.md](docs/DESIGN-v0.3.1.md).
 
@@ -73,6 +73,13 @@ Design record: [docs/DESIGN-v0.3.1.md](docs/DESIGN-v0.3.1.md).
   filters, three-state scope, verified C3 variants, keyset `Next` cursors and
   `FuzzCompileQueryFragment`), embedded `.sql` files (`MustSQLFiles`), and extended
   `sqlcheck` / `tabula inventory` support. Applications write the joins.
+
+## v0.3.2 — planned
+
+- Make transaction cleanup tolerate a partially consumed `iter.Pull2` iterator whose caller omitted `stop`.
+- Support unscoped reads alongside scoped writes without granting unscoped write access.
+- Include scalar aggregates in the statement inventory and reject parameter placeholders in sort expressions.
+- Bound offset pagination and return errors for invalid `Rows.ListKeyset` inputs.
 
 ## v1.0 — stability and ecosystem adapters
 

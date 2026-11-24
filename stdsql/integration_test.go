@@ -18,6 +18,61 @@ import (
 	"github.com/0xJean/tabula/stdsql"
 )
 
+func TestReadOnlyTransactionMode(t *testing.T) {
+	dsn := os.Getenv("TABULA_TEST_DSN")
+	require.NotEmpty(t, dsn, "TABULA_TEST_DSN is required for integration tests")
+	ctx := t.Context()
+	db, err := sql.Open("postgres", dsn)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	scope := struct{}{}
+	ro, err := stdsql.NewRunner(db, stdsql.NoScopePolicy(), stdsql.RunnerOptions{
+		ReadOnly: true, Unscoped: stdsql.UnscopedReadOnly, ExposeTx: true,
+	})
+	require.NoError(t, err)
+	check := func(ctx context.Context, s *stdsql.Session[struct{}]) error {
+		_, err := s.Exec(ctx, "SET TRANSACTION READ WRITE")
+		require.ErrorIs(t, err, tabula.ErrReadOnly)
+		require.True(t, s.ReadOnly())
+		var mode string
+		require.NoError(t, s.Scan(ctx, "SHOW transaction_read_only", nil, &mode))
+		require.Equal(t, "on", mode)
+		return nil
+	}
+	require.NoError(t, ro.WithinReadOnly(ctx, scope, check))
+	require.NoError(t, ro.WithinShared(ctx, func(ctx context.Context, shared *stdsql.Shared[struct{}]) error {
+		return check(ctx, shared.Unscoped())
+	}))
+
+	// The first snapshot also precedes the callback on the shared path.
+	opts := &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelReadCommitted}
+	err = ro.WithinSharedOptions(ctx, opts, func(ctx context.Context, shared *stdsql.Shared[struct{}]) error {
+		_, err := shared.Scoped(scope).Exec(ctx, "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+		return err
+	})
+	require.Equal(t, "25001", tabula.SQLState(err))
+
+	// Raw driver calls reach PostgreSQL directly. Setup must have acquired
+	// the first snapshot even when there are no timeouts or managed variables.
+	err = ro.WithinRawOptions(ctx, scope, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, s *stdsql.RawSession[struct{}]) error {
+		_, err := s.Tx().ExecContext(ctx, "SET TRANSACTION READ WRITE")
+		return err
+	})
+	require.Equal(t, "25001", tabula.SQLState(err))
+
+	rw, err := stdsql.NewRunner(db, stdsql.NoScopePolicy(), stdsql.RunnerOptions{Unscoped: stdsql.UnscopedReadOnly})
+	require.NoError(t, err)
+	require.NoError(t, rw.WithinReadOnly(ctx, scope, check))
+	require.NoError(t, rw.WithinShared(ctx, func(ctx context.Context, shared *stdsql.Shared[struct{}]) error {
+		var mode string
+		require.ErrorIs(t, shared.Unscoped().Scan(ctx, "SHOW transaction_read_only", nil, &mode), tabula.ErrReadOnly)
+		require.NoError(t, shared.Scoped(scope).Scan(ctx, "SHOW transaction_read_only", nil, &mode))
+		require.Equal(t, "off", mode)
+		return nil
+	}))
+}
+
 func TestRunnerScopeSavepointAndRetry(t *testing.T) {
 	dsn := os.Getenv("TABULA_TEST_DSN")
 	require.NotEmpty(t, dsn, "TABULA_TEST_DSN is required for integration tests")
