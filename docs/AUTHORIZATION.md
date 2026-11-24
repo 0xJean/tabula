@@ -25,7 +25,33 @@ The default inventory covers production sources selected by the current Go build
 
 Assign each site ID to an entry such as `{"Roles":["docs_reader"]}` in a bindings file. Run `tabula inventory --config inventory.json --bindings bindings.json > workload.json` to collect statements and check their assignments together. `SQLInventory.BindRoles` reports missing or retired assignments. A dynamic entry supplies named `Variants` with their SQL. An explicitly skipped site requires a registered exception. A static site can supply `Access` for command coverage. The same site can be assigned to several roles.
 
-For composed queries and aggregates, add `--snapshot statements.sql`, generated with `sqlcheck.RenderAllSnapshot(reg.Defined(), reg.DefinedViews())`. The collector resolves literal descriptor names in direct declarations and single-assignment local or private package handles. For an injected, mutable or exported handle, name its descriptor in the binding, for example `{"Roles":["docs_reader"],"Definition":"docs.notes"}`. A query key such as `list` can be reused on several views. Each role receives the variants registered for its own view and query. An optional `Prefix` selects a subset of those variants.
+For composed queries and aggregates, add `--snapshot statements.sql`, generated with `sqlcheck.RenderAllSnapshot(reg.Defined(), reg.DefinedViews())`. The collector resolves literal descriptor names in direct declarations and single-assignment local or private package handles. A query key such as `list` can be reused on several views. Each role receives the variants registered for its own view and query. An optional `Prefix` selects a subset of those variants.
+
+Use `Definition` for an injected, mutable or exported handle. For example, another package can reassign the exported variable `Items` below. Here `reg` has scope type `struct{}` and `item` maps the `id` key and the `kind` column.
+
+`items.go`
+
+```go
+var Items = tabula.Define(reg, tabula.TableSpec[item, int64]{
+	Name:     "public.items",
+	ReadOnly: true,
+	GroupBy:  []string{"kind"},
+})
+
+func CountsByKind(ctx context.Context, sess tabula.Session[struct{}]) (map[string]int64, error) {
+	return tabula.CountBy[string](ctx, Items.Bind(sess), "kind", nil)
+}
+```
+
+Copy the `CountBy` site's `ID` from `tabula inventory --config inventory.json` into the bindings file. Set `Definition` to the descriptor's `TableSpec.Name`. This assigns the registered `public.items/count_by_kind` statement to `items_reader`.
+
+`bindings.json`
+
+```json
+{
+  "<CountBy site ID>": {"Roles":["items_reader"], "Definition":"public.items"}
+}
+```
 
 A missing definition or statement fails the command with the site ID. Supply named `Variants` for scalar aggregates, unregistered `Exists` statements, queries compiled with `TryDefineQuery`, or helpers used across several descriptors. Put explicit `Access` requirements on each manual variant. To skip a site verified elsewhere, register the reason in `Exceptions` and use `{"Skip":true}` as its binding.
 

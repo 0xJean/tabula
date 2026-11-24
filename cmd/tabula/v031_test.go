@@ -72,13 +72,17 @@ func TestInventoryCLIWithComposedQuerySnapshot(t *testing.T) {
 		bindings[site.ID] = binding
 	}
 	bindPath := writeJSON("bindings.json", bindings)
-	snapPath := filepath.Join(dir, "statements.sql")
-	bind := func(tables []tabula.Definition, views []tabula.ViewDefinition, wantCode int) sqlcheck.RoleStatements {
+	render := func(tables []tabula.Definition, views []tabula.ViewDefinition) string {
 		t.Helper()
-		require.NoError(t, os.WriteFile(snapPath, []byte(sqlcheck.RenderAllSnapshot(tables, views)), 0600))
+		path := filepath.Join(dir, "statements.sql")
+		require.NoError(t, os.WriteFile(path, []byte(sqlcheck.RenderAllSnapshot(tables, views)), 0600))
+		return path
+	}
+	bind := func(snapshotPath string, wantCode int) sqlcheck.RoleStatements {
+		t.Helper()
 		out.Reset()
 		diag.Reset()
-		code := run(t.Context(), []string{"inventory", "--config", cfg, "--bindings", bindPath, "--snapshot", snapPath}, &out, &diag)
+		code := run(t.Context(), []string{"inventory", "--config", cfg, "--bindings", bindPath, "--snapshot", snapshotPath}, &out, &diag)
 		require.Equal(t, wantCode, code, diag.String())
 		var work sqlcheck.RoleStatements
 		require.NoError(t, json.Unmarshal(out.Bytes(), &work))
@@ -87,7 +91,7 @@ func TestInventoryCLIWithComposedQuerySnapshot(t *testing.T) {
 
 	reg := inventoryfixture.Registry()
 	tables, views := reg.Defined(), reg.DefinedViews()
-	work := bind(tables, views, 0)
+	work := bind(render(tables, views), 0)
 	require.Len(t, work, 4)
 	for _, group := range []struct{ role, view, query, relation string }{
 		{"notes_view_reader", "notes_view", "list", "notes"},
@@ -104,12 +108,17 @@ func TestInventoryCLIWithComposedQuerySnapshot(t *testing.T) {
 	require.Len(t, work["counts_reader"], 1)
 	require.Equal(t, ids["counts_reader"]+"/records/count_by_category", work["counts_reader"][0].Name)
 
-	require.Nil(t, bind(tables, views[:1], 1))
+	require.Nil(t, bind(render(tables, views[:1]), 1))
 	require.Contains(t, diag.String(), ids["labels_view_reader"])
 	require.Contains(t, diag.String(), "labels_view")
-	require.Nil(t, bind(nil, views, 1))
+	require.Nil(t, bind(render(nil, views), 1))
 	require.Contains(t, diag.String(), ids["counts_reader"])
 	require.Contains(t, diag.String(), "records")
+
+	// The v0.3.0 renderer wrote the same fixture statements without query ownership.
+	require.Nil(t, bind(filepath.Join("testdata", "inventory-v0.3.0.sql"), 1))
+	require.Contains(t, diag.String(), "no registered variants for")
+	require.Contains(t, diag.String(), "regenerate the snapshot or supply named Variants")
 }
 
 func TestCheckLoginRoleCLI_Integration(t *testing.T) {
