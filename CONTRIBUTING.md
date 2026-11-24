@@ -2,6 +2,8 @@
 
 Thank you for your interest in contributing to Tabula!
 
+The code of conduct applies to contributors and maintainers in issues, pull requests and reviews. [Code of conduct](CODE_OF_CONDUCT.md)
+
 ## Design Red Lines
 
 Before opening a pull request, please read [docs/DESIGN.md](docs/DESIGN.md). Every change
