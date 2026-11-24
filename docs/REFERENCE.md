@@ -1751,6 +1751,9 @@ type Backend interface {
     Backend is supplied by the test suite. Clone and Drop use the supplied
     maintenance connection in autocommit. Install must disconnect from its
     target before returning so PostgreSQL can clone the installed database.
+    Fixture.Prune also calls Drop for cached templates and abandoned staging
+    databases, so Drop must accept a template (clearing IS_TEMPLATE if Clone set
+    it) and may release host resources tied to it.
 
 type Database struct {
 	// Has unexported fields.
@@ -1771,8 +1774,16 @@ type Fixture struct {
 
 func (f Fixture) Clone(ctx context.Context, p Installation) (Database, error)
     Clone installs a template once per digest and clones it for one test.
-    A session-level advisory lock serializes publishers across processes. Only a
-    completely installed staging database is copied to the stable cache name.
+    A shared advisory lock protects the template through the physical copy,
+    allowing concurrent copies. Publication is serialized on the staging name.
+
+func (f Fixture) Prune(ctx context.Context, maxIdle time.Duration, keep ...Installation) ([]string, error)
+    Prune drops cached templates whose last Clone is older than maxIdle and
+    staging databases abandoned by interrupted builds, except the templates
+    of keep. Each database is dropped through Backend.Drop while holding the
+    same advisory lock that Clone holds through the physical copy. Templates
+    with missing or invalid last-use marks are kept. Prune returns the names it
+    dropped, including partial results if another drop failed.
 
 type Installation struct {
 	Revision   string

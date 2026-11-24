@@ -75,5 +75,6 @@ Call the [sqlcheck Go API](REFERENCE.md#sqlcheck) in tests or use the commands b
 | Whether a role has policy coverage for the SQL commands it uses | `CheckPolicyCoverage` | [check-coverage](REFERENCE.md#tabula-check-coverage) |
 | Which rows a role sees or changes for a given scope | `RunRLSMatrix` | [test-rls](REFERENCE.md#tabula-test-rls) |
 | Clone a migrated database for an isolated test, optionally through a selected migration | `postgresfixture.Installation.Through` and `Fixture.Clone` with an application-supplied backend and installer | [postgresfixture](REFERENCE.md#postgresfixture) |
+| Drop cached test templates that are no longer used | `postgresfixture.Fixture.Prune` | [postgresfixture](REFERENCE.md#postgresfixture) |
 
 A successful plan checks that PostgreSQL can prepare and explain the statement as the role. To verify row visibility or a denial at execution time, give the behavior matrix representative rows and expected outcomes.

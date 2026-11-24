@@ -2,6 +2,7 @@ package postgresfixture_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/0xJean/tabula/postgresfixture"
 	"github.com/stretchr/testify/require"
@@ -33,4 +34,6 @@ func TestInstallIdentity(t *testing.T) {
 	_, err = (postgresfixture.Fixture{}).Clone(t.Context(), p)
 	require.Error(t, err)
 	require.Error(t, (postgresfixture.Database{}).Drop(t.Context()))
+	_, err = (postgresfixture.Fixture{}).Prune(t.Context(), time.Hour)
+	require.Error(t, err)
 }

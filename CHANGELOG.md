@@ -3,6 +3,16 @@
 All notable changes are listed here. The project follows semantic versioning; before
 v1.0 a minor version may contain breaking changes.
 
+## v0.3.4 — 2026-11-25
+
+### Additions
+
+- `postgresfixture.Fixture.Prune(ctx, maxIdle, keep...)` drops idle templates and abandoned staging databases through the host backend. It checks the fixture's digest naming format and the template's last-use mark against the server clock. It preserves explicitly kept templates, active copies and templates with missing or invalid marks.
+
+### Changes
+
+- A build uses the deterministic `tabula_stg_<digest>` staging database and recovers its abandoned stage on retry. Parallel copies share a template lock until the physical copy finishes. [Fixture migration notes](docs/MIGRATION.md#from-v033-to-v034)
+
 ## v0.3.3 — 2026-11-24
 
 ### Security

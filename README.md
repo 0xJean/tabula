@@ -20,9 +20,9 @@ builds joins, never generates DDL, and never runs hidden callbacks.
 
 Read the README at the Git tag or commit your application builds. The [migration guide](docs/MIGRATION.md) covers upgrading to v0.3. The [changelog](CHANGELOG.md) records release status.
 
-## Install v0.3.3
+## Install v0.3.4
 
-Run `go get github.com/0xJean/tabula@v0.3.3` in your application module with Go 1.26 or later. If you use the native pgx/v5 adapter or the OpenTelemetry bridge, also run `go get github.com/0xJean/tabula/pgxdriver@v0.3.3` and/or `go get github.com/0xJean/tabula/oteltabula@v0.3.3`.
+Run `go get github.com/0xJean/tabula@v0.3.4` in your application module with Go 1.26 or later. If you use the native pgx/v5 adapter or the OpenTelemetry bridge, also run `go get github.com/0xJean/tabula/pgxdriver@v0.3.4` and/or `go get github.com/0xJean/tabula/oteltabula@v0.3.4`.
 
 ## Read a row by primary key
 
@@ -103,7 +103,7 @@ Run `scripts/workspace.sh` from the Tabula repository root to use all local modu
 | `tabula/pqdriver` | `lib/pq` array converters | `github.com/lib/pq` |
 | `tabula/pgxdriver` | Separate module: role-bound `pgx/v5` pool `Runner`, `Shared`, `RawSession`, `Session`, `Direct`, binary COPY and array converters | `github.com/jackc/pgx/v5` |
 | `tabula/oteltabula` | Separate module: OpenTelemetry `Tracer` and `Metrics` adapters | `go.opentelemetry.io/otel` |
-| `tabula/postgresfixture` | Content-addressed installation templates, migration prefixes and isolated per-test databases | standard library only |
+| `tabula/postgresfixture` | Content-addressed templates, migration prefixes, isolated test databases and idle template cleanup | standard library only |
 | `tabula/cmd/tabula` | SQL verification (`tabula check`), RLS audit (`tabula check-rls`), login role audit (`tabula check-login-role`) and role workload tools. [All commands and flags](docs/REFERENCE.md#cli) | `sqlcheck`, `github.com/lib/pq` |
 
 Applications may use `stdsql` or `pgxdriver` directly, or wrap `tabula` in a thin

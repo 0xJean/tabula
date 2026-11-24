@@ -2,6 +2,12 @@
 
 Follow this guide when upgrading an application to v0.3. For the full surface after the upgrade, see the [integration guide](INTEGRATION.md).
 
+## From v0.3.3 to v0.3.4
+
+Test suites can call `fixture.Prune(ctx, 7*24*time.Hour, currentPlan)` after creating a fixture to retain the current installation and remove idle cached templates. Choose the retention interval in the test suite. Enable pruning once every worker sharing the cache uses v0.3.4 or later and the same maintenance database on the disposable cluster. The maintenance role needs permission to comment on the templates. The host's `Backend.Drop` handles templates, stages and per-test copies, including any template flags or resources it owns.
+
+Existing templates acquire a server-time mark on their next `Clone`. Pruning preserves templates with missing or invalid marks. After all old workers have stopped, any leftover v0.3.3 `tabula_stage_` databases can be removed during offline test-cluster cleanup. New stages use `tabula_stg_` followed by the template's digest.
+
 ## From v0.3.2 to v0.3.3
 
 Active session guards now reject updates to the PostgreSQL `pg_settings` view. Set runner-owned parameters during transaction setup. Existing configurations keep their previous read policy.
