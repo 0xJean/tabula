@@ -3,7 +3,7 @@
 All notable changes are listed here. The project follows semantic versioning; before
 v1.0 a minor version may contain breaking changes.
 
-## Unreleased — v0.3 development
+## v0.3.0 — 2026-11-24
 
 ### Public API changes
 

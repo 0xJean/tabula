@@ -11,6 +11,10 @@ else
   go work edit -go=1.26.0
 fi
 
-# Go 1.26 checks the go directive of the tagged dependency during graph
-# loading. v0.2.0 required Go 1.27. Override only that version in the workspace.
-go work edit -replace=github.com/0xJean/tabula@v0.2.0=.
+# Go reads versioned go.mod files while loading the workspace graph. Resolve
+# each child's core pin locally, including a release that has yet to be tagged.
+module=github.com/0xJean/tabula
+for child in pgxdriver benchmarks; do
+  version=$(go mod edit -json "$child/go.mod" | jq -er --arg m "$module" '.Require[] | select(.Path == $m) | .Version')
+  go work edit "-replace=$module@$version=."
+done

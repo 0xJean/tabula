@@ -13,7 +13,7 @@ Items keep the red lines in [docs/DESIGN.md](docs/DESIGN.md).
 - `pqdriver`; `sqlcheck`: snapshots, schema columns, privilege derivation and role grants,
   `PrepareStatement` / `VerifyStatements` (PREPARE plus EXPLAIN EXECUTE on a real database).
 
-## v0.3 — in development
+## v0.3.0
 
 - **Immutable descriptors & generic row scope**: `TableSpec` / `ViewSpec`, bound-scope
   sessions (`Scope` / `Unscoped` / `db:"...,scope"`), driver-independent `tabula.Retry` and

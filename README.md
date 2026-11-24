@@ -15,6 +15,10 @@ builds joins, never generates DDL, and never runs hidden callbacks.
 
 Read the README at the Git tag or commit your application builds. The [migration guide](docs/MIGRATION.md) covers upgrading to v0.3. The [changelog](CHANGELOG.md) records release status.
 
+## Install v0.3.0
+
+Run `go get github.com/0xJean/tabula@v0.3.0` in your application module with Go 1.26 or later. If you use the native pgx/v5 adapter, also run `go get github.com/0xJean/tabula/pgxdriver@v0.3.0`.
+
 ## Read a row by primary key
 
 Suppose `public.items` has a `bigint` primary key named `id` and a non-null `text` column named `name`. Import `github.com/0xJean/tabula` and `github.com/0xJean/tabula/stdsql`.

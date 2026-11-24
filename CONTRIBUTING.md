@@ -20,7 +20,7 @@ must preserve Tabula's core boundaries:
 
 ## Local Development & Testing
 
-From the repository root, run `scripts/workspace.sh` once per checkout. It creates a Git-ignored `go.work` for the core, pgxdriver and benchmarks. The tagged core v0.2.0 requires Go 1.27. A version-specific workspace override lets Go 1.26 load the local core while the child manifests still name that tag.
+With Go and jq installed, run `scripts/workspace.sh` from the repository root. It creates a Git-ignored `go.work` and maps each child module's core dependency to the local checkout. Run it again after changing the module pins.
 
 ```sh
 # One-command local gate (static + unit -race + 1s fuzzing)
