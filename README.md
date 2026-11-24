@@ -43,7 +43,7 @@ session := stdsql.NewSession(tx, struct{}{}, stdsql.NoScopePolicy())
 item, err := items.Bind(session).Get(ctx, 42)
 ```
 
-`Get` returns a pointer to the matching `Item`, or `(nil, nil)` if the key is missing.
+`Get` returns a pointer to the matching `Item`, or `(nil, nil)` if the key is missing. When streaming with `Iter`, finish the loop or break before using the transaction for another lookup. Overlapping operations return `tabula.ErrSessionBusy`. [Streaming example](docs/COOKBOOK.md#10-stream-a-worker-batch)
 
 ## Try it locally
 

@@ -10,6 +10,8 @@ v1.0 a minor version may contain breaking changes.
 - **Role-bound runners & explicit policies (A1–A2)**: `stdsql.NewRunner(db, policy, opts)` and `pgxdriver.NewRunner(pool, policy, opts)` take `RunnerOptions` (`Role`, `RequireRole`, `ReadOnly`, `Unscoped`, `Timeouts`, `SessionKey`, `ExposeTx`, `Tracer`, `Metrics`, `Log`, `Sanitize`, `TagStatements`) and return `(*Runner[S], error)`. `ScopePolicy` replaces `SetupTx` with declarative `ManagedVars`, `ScopeVars`, `ContextVars`, `UnscopedVars`, `InactiveVars`, and `ScopeLog`; runners auto-guard managed variables and timeout settings, reject nested runner calls with `ErrNested` (opt-out via `tabula.WithoutTransaction(ctx)`), close handles on callback return (`ErrSessionClosed`), and support `RunOptions.BeforeCommit`.
 - **Opt-in raw transaction escape (A5)**: removed default `Session.Tx()` on both `stdsql` and `pgxdriver`; raw access now requires `RunnerOptions{ExposeTx: true}` and `WithinRaw` / `WithinRawOptions` / `WithinRawTxOptions` returning `*RawSession[S]`.
 - **Session-level observability precedence (B1)**: when both a runner and a registry configure telemetry, the runner takes precedence per enabled signal (`Tracer`, `Metrics`, `Log`) so descriptor statements are emitted once while hand-written inline SQL is also observed.
+- Overlapping statements and savepoint requests on the same transaction return `tabula.ErrSessionBusy` in both drivers. This includes using a second shared handle while a row cursor is open.
+- Composed keyset queries compare `After` in the declared sort direction when a sort is fixed, including when the request specifies the opposite direction.
 - See [MIGRATION.md](docs/MIGRATION.md#from-v030-to-v031) for upgrade details.
 
 ### Additions

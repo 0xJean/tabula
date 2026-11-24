@@ -4,7 +4,7 @@ Follow this guide when upgrading an application to v0.3. For the full surface af
 
 ## From v0.3.0 to v0.3.1
 
-v0.3.1 moves role pinning, timeouts, managed scope variables, session sealing, raw-tx opt-in, session-level observability, aggregates and composed view queries into Tabula. Four breaking or behavioral changes apply to `stdsql` and `pgxdriver` callers:
+v0.3.1 moves role pinning, timeouts, managed scope variables, session sealing, raw-tx opt-in, session-level observability, aggregates and composed view queries into Tabula. The following changes apply to `stdsql` and `pgxdriver` callers.
 
 | v0.3.0 | v0.3.1 | Notes |
 | --- | --- | --- |
@@ -14,6 +14,7 @@ v0.3.1 moves role pinning, timeouts, managed scope variables, session sealing, r
 | `sess.Tx()` | `RunnerOptions{ExposeTx: true}` + `runner.WithinRaw` / `WithinRawOptions` / `WithinRawTxOptions` → `rawSess.Tx()` | Default `*Session[S]` no longer exposes `*sql.Tx` / `pgx.Tx`. Raw escape sites are opt-in and reported by `tabula inventory` (`AuditSecurityCalls: true`). |
 | Unscoped sessions permitted by default on `Runner` | `RunnerOptions.Unscoped` defaults to `UnscopedDenied` | Explicitly choose `UnscopedReadOnly` or `UnscopedReadWrite` on runners that serve unscoped operations. |
 | Nested runner calls allowed | Nested `Within*` using a transaction context returns `tabula.ErrNested` before `BEGIN` | Use `Savepoint` for nested work, or `tabula.WithoutTransaction(ctx)` only for deliberate independent transactions (beware connection pool deadlock). |
+| Issuing SQL with an open row cursor depended on the driver | Overlapping transaction statements and savepoint requests return `tabula.ErrSessionBusy` | Collect the IDs you need, finish or break the iteration, then query on the same transaction. |
 | Retained session handles stayed callable | Handles close automatically when the callback returns (including errors/panics), returning `tabula.ErrSessionClosed` | Use `RunOptions.BeforeCommit` for pre-commit work on a fresh handle. |
 | Registry hooks only | `RunnerOptions.Tracer` / `Metrics` / `Log` / `TagStatements` take precedence per signal over `RegistryConfig` | Each enabled signal has one owner so descriptor statements are never double-emitted; hand-written inline SQL is also observed. |
 

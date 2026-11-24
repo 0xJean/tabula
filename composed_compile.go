@@ -1,6 +1,7 @@
 package tabula
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"math"
@@ -12,8 +13,8 @@ import (
 	"github.com/0xJean/tabula/internal/pgstmt"
 )
 
-// SortDirection selects the sort order of a composed query. SortDefault uses
-// the QueryOrderSpec's declared DefaultDirection.
+// SortDirection selects the order of a composed query. SortDefault uses the
+// primary term's fixed direction when set, then the QueryOrderSpec's default.
 type SortDirection uint8
 
 const (
@@ -139,10 +140,8 @@ type compiledSortTerm struct {
 }
 
 type compiledSort struct {
-	key      string
-	primary  compiledSortTerm
-	terms    []compiledSortTerm // primary + deduplicated tie-breakers
-	fixedDir SortDirection
+	key   string
+	terms []compiledSortTerm // primary + deduplicated tie-breakers
 }
 
 // Query is a validated, compiled composed query owned by a View.
@@ -431,7 +430,7 @@ func (v *View[T, S]) TryDefineQuery(key string, spec QuerySpec, opts ...Statemen
 			}
 		}
 		sortIndex[sKey] = len(sorts)
-		sorts = append(sorts, compiledSort{key: sKey, primary: primary, terms: terms, fixedDir: primary.dir})
+		sorts = append(sorts, compiledSort{key: sKey, terms: terms})
 	}
 	defSort := strings.TrimSpace(spec.Order.Default)
 	if defSort == "" {
@@ -575,27 +574,19 @@ func (q *Query[T, S]) resolveOrder(sortKey string, dir SortDirection) (compiledS
 		return compiledSort{}, SortDefault, "", fmt.Errorf("%s.Query %s.%s: unknown sort key %q", q.v.prefix(), q.v.name, q.key, sortKey)
 	}
 	cs := q.sorts[idx]
-	effDir := dir
-	if effDir == SortDefault {
-		if cs.fixedDir != SortDefault {
-			effDir = cs.fixedDir
-		} else {
-			effDir = q.defaultDir
-		}
-	}
-	if _, err := effDir.sql(); err != nil {
+	primaryDir := cs.terms[0].dir
+	fallback := cmp.Or(dir, primaryDir, q.defaultDir)
+	if _, err := fallback.sql(); err != nil {
 		return compiledSort{}, SortDefault, "", fmt.Errorf("%s.Query %s.%s: %w", q.v.prefix(), q.v.name, q.key, err)
 	}
 	orderParts := make([]string, len(cs.terms))
 	for i, term := range cs.terms {
-		td := term.dir
-		if td == SortDefault {
-			td = effDir
-		}
-		dirSQL, _ := td.sql()
+		dirSQL, _ := cmp.Or(term.dir, fallback).sql()
 		orderParts[i] = term.expr + " " + dirSQL
 	}
-	return cs, effDir, "\nORDER BY " + strings.Join(orderParts, ", "), nil
+	// Keyset terms have one uniform direction. Compare the cursor in the
+	// primary term's actual order, including when the caller asked to reverse it.
+	return cs, cmp.Or(primaryDir, fallback), "\nORDER BY " + strings.Join(orderParts, ", "), nil
 }
 
 func (q *Query[T, S]) buildSelectSQL(scoped bool, enabled []int, sortKey string, dir SortDirection, withOffset, withKeysetLimit, withAfter bool) (string, error) {

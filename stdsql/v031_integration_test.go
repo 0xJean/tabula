@@ -74,6 +74,20 @@ func (m *metricRec) snapshot() []metricEvent {
 	return out
 }
 
+// The caller holds an open cursor. Timing out unwinds the iteration so a
+// regression can release the blocked operation and finish the test.
+func requireSessionBusy(t *testing.T, op func() error) {
+	t.Helper()
+	result := make(chan error, 1)
+	go func() { result <- op() }()
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, tabula.ErrSessionBusy)
+	case <-time.After(3 * time.Second):
+		t.Fatal("operation waited for the active row cursor")
+	}
+}
+
 func TestV031RoleRunnerSharedSealedAndObserve(t *testing.T) {
 	dsn := os.Getenv("TABULA_TEST_DSN")
 	require.NotEmpty(t, dsn)
@@ -228,6 +242,18 @@ func TestV031RoleRunnerSharedSealedAndObserve(t *testing.T) {
 		require.NoError(t, tbl.Bind(s).Insert(txCtx, &row))
 		require.NotZero(t, row.ID)
 
+		for got, err := range tbl.Bind(s).Iter(txCtx, nil, tabula.Listing{}) {
+			require.NoError(t, err)
+			requireSessionBusy(t, func() error {
+				_, err := tbl.Bind(s).Get(txCtx, got.ID)
+				return err
+			})
+			requireSessionBusy(t, func() error {
+				return s.Savepoint(txCtx, "inner", func(context.Context) error { return nil })
+			})
+			break
+		}
+
 		// Unsealed NewSession must be rejected with ErrForeignSession.
 		unsealed := stdsql.NewSession(nilSafeTx(t, db), scope("t1"), policy)
 		_, fErr := tbl.Bind(unsealed).Get(txCtx, row.ID)
@@ -312,8 +338,15 @@ func TestV031RoleRunnerSharedSealedAndObserve(t *testing.T) {
 
 		// Early break on Iter via unscoped handle cleanly closes cursor and leaves shared tx usable.
 		var seen int
-		for _, iterErr := range tbl.Bind(all).Iter(txCtx, nil, tabula.Listing{}) {
+		for row, iterErr := range tbl.Bind(all).Iter(txCtx, nil, tabula.Listing{}) {
 			require.NoError(t, iterErr)
+			requireSessionBusy(t, func() error {
+				_, err := tbl.Bind(sh.Scoped("t1")).Get(txCtx, row.ID)
+				return err
+			})
+			requireSessionBusy(t, func() error {
+				return s2.Savepoint(txCtx, "busy", func(context.Context) error { return nil })
+			})
 			seen++
 			break
 		}

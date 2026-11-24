@@ -374,3 +374,67 @@ func TestV031AggregatesComposedQueriesAndSQLFilesIntegration(t *testing.T) {
 		return nil
 	}))
 }
+
+func TestComposedKeysetDirectionPostgres(t *testing.T) {
+	dsn := os.Getenv("TABULA_TEST_DSN")
+	require.NotEmpty(t, dsn)
+	db, err := sql.Open("postgres", dsn)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	runner, err := stdsql.NewRunner(db, stdsql.NoScopePolicy(), stdsql.RunnerOptions{})
+	require.NoError(t, err)
+
+	type row struct {
+		ID   int64 `db:"id"`
+		Rank int64 `db:"rank"`
+	}
+	asc := []int64{2, 4, 1, 3}
+	desc := []int64{3, 1, 4, 2}
+	for _, tc := range []struct {
+		name           string
+		fixed, request tabula.SortDirection
+		want           []int64
+	}{
+		{"fixed ascending, descending request", tabula.SortAsc, tabula.SortDesc, asc},
+		{"fixed descending, ascending request", tabula.SortDesc, tabula.SortAsc, desc},
+		{"fixed ascending, default request", tabula.SortAsc, tabula.SortDefault, asc},
+		{"caller selects ascending", tabula.SortDefault, tabula.SortAsc, asc},
+		{"caller selects descending", tabula.SortDefault, tabula.SortDesc, desc},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reg := tabula.NewRegistry(tabula.RegistryConfig[struct{}]{})
+			view := tabula.DefineView(reg, tabula.ViewSpec[row]{Name: "ranked"})
+			query := view.DefineQuery("page", tabula.QuerySpec{
+				Select: "SELECT id, rank FROM (VALUES (1::bigint,20::bigint),(2,10),(3,20),(4,10)) AS v(id,rank)",
+				Scope:  tabula.ScopeGlobal(),
+				Order: tabula.QueryOrderSpec{
+					Default:          "rank",
+					DefaultDirection: tabula.SortDesc,
+					Sorts:            []tabula.QuerySort{{Key: "rank", Expr: "rank", Column: "rank", Direction: tc.fixed}},
+					TieBreaker:       []tabula.QuerySortTerm{{Expr: "id", Column: "id", Direction: tc.fixed}},
+				},
+				Keyset:   true,
+				MaxLimit: 1,
+			})
+			require.NoError(t, runner.WithinReadOnly(t.Context(), struct{}{}, func(ctx context.Context, s *stdsql.Session[struct{}]) error {
+				rows := query.Bind(s)
+				request := tabula.QueryKeyset{Limit: 1, Direction: tc.request}
+				for i, id := range tc.want {
+					page, err := rows.ListKeyset(ctx, nil, request)
+					require.NoError(t, err)
+					require.Len(t, page.Items, 1)
+					item := page.Items[0]
+					require.Equal(t, id, item.ID)
+					require.Equal(t, i+1 < len(tc.want), page.HasMore)
+					if page.HasMore {
+						require.Equal(t, []any{item.Rank, item.ID}, page.Next)
+					} else {
+						require.Nil(t, page.Next)
+					}
+					request.After = page.Next
+				}
+				return nil
+			}))
+		})
+	}
+}

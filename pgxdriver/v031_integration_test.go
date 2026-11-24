@@ -50,6 +50,20 @@ func (r *pgxTraceRec) snapshot() []pgxTraceEvent {
 	return out
 }
 
+// The caller holds an open cursor. Timing out unwinds the iteration so a
+// regression can release the blocked operation and finish the test.
+func requireSessionBusy(t *testing.T, op func() error) {
+	t.Helper()
+	result := make(chan error, 1)
+	go func() { result <- op() }()
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, tabula.ErrSessionBusy)
+	case <-time.After(3 * time.Second):
+		t.Fatal("operation waited for the active row cursor")
+	}
+}
+
 func TestV031PgxRoleRunnerSharedSealedCopyAndCrossDriverNesting(t *testing.T) {
 	dsn := os.Getenv("TABULA_TEST_DSN")
 	require.NotEmpty(t, dsn)
@@ -200,7 +214,23 @@ func TestV031PgxRoleRunnerSharedSealedCopyAndCrossDriverNesting(t *testing.T) {
 		require.NoError(t, s.Savepoint(txCtx, func(spCtx context.Context, child *pgxdriver.Session[scope]) error {
 			retainedChildSP = child
 			row := item{Tenant: "t1", Label: "sp-child", SecretToken: "hidden-secret"}
-			return tbl.Bind(child).Insert(spCtx, &row)
+			require.NoError(t, tbl.Bind(child).Insert(spCtx, &row))
+			for got, err := range tbl.Bind(child).Iter(spCtx, nil, tabula.Listing{}) {
+				require.NoError(t, err)
+				requireSessionBusy(t, func() error {
+					_, err := tbl.Bind(child).Get(spCtx, got.ID)
+					return err
+				})
+				requireSessionBusy(t, func() error {
+					return s.Savepoint(spCtx, func(context.Context, *pgxdriver.Session[scope]) error { return nil })
+				})
+				requireSessionBusy(t, func() error {
+					_, err := pgxdriver.CopyFrom(spCtx, s, tbl, []item{row})
+					return err
+				})
+				break
+			}
+			return nil
 		}))
 		_, childClosedErr := retainedChildSP.Exec(txCtx, "SELECT 1")
 		require.ErrorIs(t, childClosedErr, tabula.ErrSessionClosed)
@@ -259,6 +289,19 @@ func TestV031PgxRoleRunnerSharedSealedCopyAndCrossDriverNesting(t *testing.T) {
 		checkVars(s1, "t1", "scoped")
 		checkVars(all, "", "unscoped")
 		checkVars(s2, "t2", "scoped")
+
+		for got, err := range tbl.Bind(s1).Iter(txCtx, nil, tabula.Listing{}) {
+			require.NoError(t, err)
+			requireSessionBusy(t, func() error {
+				_, err := tbl.Bind(sh.Unscoped()).Get(txCtx, got.ID)
+				return err
+			})
+			requireSessionBusy(t, func() error {
+				return all.Savepoint(txCtx, func(context.Context, *pgxdriver.Session[scope]) error { return nil })
+			})
+			break
+		}
+		checkVars(s1, "t1", "scoped")
 
 		// Nested savepoint rollback inside WithinShared followed by reusing s1.
 		spErr := s2.Savepoint(txCtx, func(spCtx context.Context, child *pgxdriver.Session[scope]) error {

@@ -44,6 +44,10 @@ const (
 	ErrSessionClosed      staticError = "session is closed"
 	ErrCapabilityDenied   staticError = "operation denied by registry capability policy"
 
+	// ErrSessionBusy reports an overlapping operation on a transaction.
+	// Finish the active statement or row iteration before using the transaction again.
+	ErrSessionBusy staticError = "another operation is using the transaction"
+
 	// PostgreSQL error-class sentinels returned by default error classification.
 	ErrUnique                staticError = "unique constraint violation"
 	ErrForeignKey            staticError = "foreign key constraint violation"
@@ -581,6 +585,8 @@ type QueryKeyset struct {
 	After     []any
 }
     QueryKeyset requests a cursor-paginated result from QueryRows.ListKeyset.
+    A fixed sort direction governs both the row order and the After comparison.
+    Direction selects the order for sorts declared with SortDefault.
 
 type QueryOrder struct {
 	Sort      string
@@ -1075,8 +1081,8 @@ type SoftDelete struct {
     (is_deleted = FALSE).
 
 type SortDirection uint8
-    SortDirection selects the sort order of a composed query. SortDefault uses
-    the QueryOrderSpec's declared DefaultDirection.
+    SortDirection selects the order of a composed query. SortDefault uses the
+    primary term's fixed direction when set, then the QueryOrderSpec's default.
 
 const (
 	SortDefault SortDirection = iota
@@ -1586,8 +1592,10 @@ func NoScopePolicy() ScopePolicy[struct{}]
 type Session[S any] struct {
 	// Has unexported fields.
 }
-    Session implements tabula.Session[S] over one pgx.Tx without exposing the
-    raw transaction.
+    Session implements tabula.Session[S] over one pgx.Tx without exposing
+    the raw transaction. Overlapping statements or savepoint requests on the
+    transaction return tabula.ErrSessionBusy, including inside Each or a binary
+    COPY.
 
 func NewSession[S any](tx pgx.Tx, scope S, policy ScopePolicy[S]) *Session[S]
     NewSession wraps an existing pgx.Tx with scope and policy as an unsealed
@@ -1606,7 +1614,7 @@ func (s *Session[S]) Returning(ctx context.Context, query string, args []any, de
     Returning executes a write with RETURNING and maps pgx.ErrNoRows to
     sql.ErrNoRows.
 
-func (s *Session[S]) Savepoint(ctx context.Context, fn func(context.Context, *Session[S]) error) error
+func (s *Session[S]) Savepoint(ctx context.Context, fn func(context.Context, *Session[S]) error) (err error)
     Savepoint runs fn inside a nested pgx transaction (PostgreSQL SAVEPOINT).
     The child *Session[S] receives a fresh instance-bound SessionProof and is
     closed when Savepoint returns.
@@ -2449,7 +2457,8 @@ type Session[S any] struct {
 	// Has unexported fields.
 }
     Session implements tabula.Session[S] over one database/sql *sql.Tx without
-    exposing the raw transaction.
+    exposing the raw transaction. Overlapping statements or savepoint requests
+    on the transaction return tabula.ErrSessionBusy, including inside Each.
 
 func NewSession[S any](tx *sql.Tx, scope S, policy ScopePolicy[S]) *Session[S]
     NewSession wraps an existing *sql.Tx with scope and policy as an unsealed

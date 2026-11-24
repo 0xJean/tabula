@@ -81,6 +81,8 @@ func TestScopedReadsAndBatchWrites(t *testing.T) {
 		for job, err := range r.Iter(ctx, nil, tabula.Listing{Lock: tabula.LockUpdate, Size: 1}) {
 			require.NoError(t, err)
 			claimed = job.ID
+			_, err = r.Get(ctx, job.ID)
+			require.ErrorIs(t, err, tabula.ErrSessionBusy)
 			break
 		}
 		require.EqualValues(t, 1, claimed)

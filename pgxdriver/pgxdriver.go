@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/jackc/pgx/v5"
 
@@ -60,10 +61,11 @@ func quoteIdent(ident string) string {
 }
 
 // Session implements tabula.Session[S] over one pgx.Tx without exposing the raw
-// transaction.
+// transaction. Overlapping statements or savepoint requests on the transaction
+// return tabula.ErrSessionBusy, including inside Each or a binary COPY.
 type Session[S any] struct {
-	mu     sync.Mutex
-	active bool
+	mu     *sync.Mutex // shared by handles on the same transaction
+	closed atomic.Bool
 	readQueries
 	tx       pgx.Tx
 	scope    S
@@ -141,7 +143,7 @@ func NewSession[S any](tx pgx.Tx, scope S, policy ScopePolicy[S]) *Session[S] {
 		unscoped = policy.IsUnscoped(scope)
 	}
 	return &Session[S]{
-		active:      true,
+		mu:          new(sync.Mutex),
 		tx:          tx,
 		scope:       scope,
 		unscoped:    unscoped,
@@ -152,29 +154,8 @@ func NewSession[S any](tx pgx.Tx, scope S, policy ScopePolicy[S]) *Session[S] {
 
 func (s *Session[S]) close() {
 	s.mu.Lock()
-	s.active = false
+	s.closed.Store(true)
 	s.mu.Unlock()
-}
-
-func (s *Session[S]) checkClosed() error {
-	if s.shared != nil {
-		s.shared.mu.Lock()
-		active := s.shared.active
-		denied := s.denied
-		s.shared.mu.Unlock()
-		if !active {
-			return tabula.ErrSessionClosed
-		}
-		return denied
-	}
-	s.mu.Lock()
-	active := s.active
-	denied := s.denied
-	s.mu.Unlock()
-	if !active {
-		return tabula.ErrSessionClosed
-	}
-	return denied
 }
 
 // Scope returns the session's bound scope value.
@@ -199,33 +180,37 @@ func (s *Session[S]) scopeLabel() string {
 	return s.scopeLog(s.scope)
 }
 
-func (s *Session[S]) beginStmt(ctx context.Context) (func(), error) {
-	if s.shared != nil {
-		s.shared.mu.Lock()
-		if !s.shared.active {
-			s.shared.mu.Unlock()
-			return nil, tabula.ErrSessionClosed
-		}
-		if s.denied != nil {
-			s.shared.mu.Unlock()
-			return nil, s.denied
-		}
-		if err := s.shared.applyFor(ctx, s.tx, s.scope, s.unscoped); err != nil {
-			s.shared.mu.Unlock()
-			return nil, err
-		}
-		return s.shared.mu.Unlock, nil
+// tryLock reserves the transaction for one operation, including row callbacks.
+func (s *Session[S]) tryLock() error {
+	if s.mu == nil {
+		return tabula.ErrSessionClosed
 	}
-	s.mu.Lock()
-	if !s.active {
-		s.mu.Unlock()
-		return nil, tabula.ErrSessionClosed
+	locked := s.mu.TryLock()
+	// A closed or denied handle keeps its error while a sibling holds the lock.
+	if err := s.checkState(); err != nil {
+		if locked {
+			s.mu.Unlock()
+		}
+		return err
 	}
-	if s.denied != nil {
-		s.mu.Unlock()
-		return nil, s.denied
+	if !locked {
+		return tabula.ErrSessionBusy
 	}
-	return s.mu.Unlock, nil
+	return nil
+}
+
+func (s *Session[S]) checkState() error {
+	if s.closed.Load() || (s.shared != nil && s.shared.closed.Load()) {
+		return tabula.ErrSessionClosed
+	}
+	return s.denied
+}
+
+func (s *Session[S]) applyScope(ctx context.Context) error {
+	if s.shared == nil {
+		return nil
+	}
+	return s.shared.applyFor(ctx, s.tx, s.scope, s.unscoped)
 }
 
 func (s readQueries) check(query string) error {
@@ -240,11 +225,13 @@ func (s *Session[S]) Exec(ctx context.Context, query string, args ...any) (int64
 	if err := s.check(query); err != nil {
 		return 0, err
 	}
-	unlock, err := s.beginStmt(ctx)
-	if err != nil {
+	if err := s.tryLock(); err != nil {
 		return 0, err
 	}
-	defer unlock()
+	defer s.mu.Unlock()
+	if err := s.applyScope(ctx); err != nil {
+		return 0, err
+	}
 	tagged := s.obs.TagSQL(ctx, query)
 	opCtx, done := s.obs.Start(ctx, s.scopeLabel(), query, args)
 	tag, err := s.tx.Exec(opCtx, tagged, args...)
@@ -263,14 +250,16 @@ func (s *Session[S]) Scan(ctx context.Context, query string, args []any, dest ..
 	if err := s.check(query); err != nil {
 		return err
 	}
-	unlock, err := s.beginStmt(ctx)
-	if err != nil {
+	if err := s.tryLock(); err != nil {
 		return err
 	}
-	defer unlock()
+	defer s.mu.Unlock()
+	if err := s.applyScope(ctx); err != nil {
+		return err
+	}
 	tagged := s.obs.TagSQL(ctx, query)
 	opCtx, done := s.obs.Start(ctx, s.scopeLabel(), query, args)
-	err = s.tx.QueryRow(opCtx, tagged, args...).Scan(dest...)
+	err := s.tx.QueryRow(opCtx, tagged, args...).Scan(dest...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		err = sql.ErrNoRows
 	} else {
@@ -290,11 +279,13 @@ func (s *Session[S]) Each(ctx context.Context, query string, args []any, decode 
 	if err := s.check(query); err != nil {
 		return err
 	}
-	unlock, err := s.beginStmt(ctx)
-	if err != nil {
+	if err := s.tryLock(); err != nil {
 		return err
 	}
-	defer unlock()
+	defer s.mu.Unlock()
+	if err := s.applyScope(ctx); err != nil {
+		return err
+	}
 	tagged := s.obs.TagSQL(ctx, query)
 	opCtx, done := s.obs.Start(ctx, s.scopeLabel(), query, args)
 	rows, err := s.tx.Query(opCtx, tagged, args...)
@@ -350,30 +341,15 @@ func (s readQueries) Each(ctx context.Context, query string, args []any, decode 
 // Savepoint runs fn inside a nested pgx transaction (PostgreSQL SAVEPOINT). The
 // child *Session[S] receives a fresh instance-bound SessionProof and is closed
 // when Savepoint returns.
-func (s *Session[S]) Savepoint(ctx context.Context, fn func(context.Context, *Session[S]) error) error {
+func (s *Session[S]) Savepoint(ctx context.Context, fn func(context.Context, *Session[S]) error) (err error) {
 	if fn == nil {
 		return errors.New("pgxdriver.Savepoint: callback is required")
 	}
 	beginNested := func() (pgx.Tx, error) {
-		if s.shared != nil {
-			s.shared.mu.Lock()
-			defer s.shared.mu.Unlock()
-			if !s.shared.active {
-				return nil, tabula.ErrSessionClosed
-			}
-			if s.denied != nil {
-				return nil, s.denied
-			}
-			return s.tx.Begin(ctx)
+		if err := s.tryLock(); err != nil {
+			return nil, err
 		}
-		s.mu.Lock()
 		defer s.mu.Unlock()
-		if !s.active {
-			return nil, tabula.ErrSessionClosed
-		}
-		if s.denied != nil {
-			return nil, s.denied
-		}
 		return s.tx.Begin(ctx)
 	}
 	nested, err := beginNested()
@@ -381,7 +357,7 @@ func (s *Session[S]) Savepoint(ctx context.Context, fn func(context.Context, *Se
 		return err
 	}
 	child := &Session[S]{
-		active:      true,
+		mu:          s.mu,
 		tx:          nested,
 		scope:       s.scope,
 		unscoped:    s.unscoped,
@@ -394,34 +370,23 @@ func (s *Session[S]) Savepoint(ctx context.Context, fn func(context.Context, *Se
 		readQueries: readQueries{db: nested, guard: s.guard},
 	}
 	child.proof = s.key.Sign(child)
-	defer child.close()
 
-	committed := false
+	release := false
 	defer func() {
-		if !committed {
-			if s.shared != nil {
-				s.shared.mu.Lock()
-				_ = nested.Rollback(context.WithoutCancel(ctx))
-				s.shared.mu.Unlock()
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		child.closed.Store(true)
+		if release {
+			err = nested.Commit(ctx)
+			if err == nil {
 				return
 			}
-			_ = nested.Rollback(context.WithoutCancel(ctx))
 		}
+		_ = nested.Rollback(context.WithoutCancel(ctx))
 	}()
 	if err := fn(ctx, child); err != nil {
 		return err
 	}
-	child.close()
-	if s.shared != nil {
-		s.shared.mu.Lock()
-		err = nested.Commit(ctx)
-		s.shared.mu.Unlock()
-	} else {
-		err = nested.Commit(ctx)
-	}
-	if err != nil {
-		return err
-	}
-	committed = true
+	release = true
 	return nil
 }

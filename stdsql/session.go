@@ -9,6 +9,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/0xJean/tabula"
 )
@@ -42,10 +43,11 @@ func quoteIdent(ident string) string {
 }
 
 // Session implements tabula.Session[S] over one database/sql *sql.Tx without
-// exposing the raw transaction.
+// exposing the raw transaction. Overlapping statements or savepoint requests
+// on the transaction return tabula.ErrSessionBusy, including inside Each.
 type Session[S any] struct {
-	mu     sync.Mutex
-	active bool
+	mu     *sync.Mutex // shared by handles on the same transaction
+	closed atomic.Bool
 	readQueries
 	tx       *sql.Tx
 	scope    S
@@ -122,7 +124,7 @@ func NewSession[S any](tx *sql.Tx, scope S, policy ScopePolicy[S]) *Session[S] {
 		unscoped = policy.IsUnscoped(scope)
 	}
 	return &Session[S]{
-		active:      true,
+		mu:          new(sync.Mutex),
 		tx:          tx,
 		scope:       scope,
 		unscoped:    unscoped,
@@ -133,7 +135,7 @@ func NewSession[S any](tx *sql.Tx, scope S, policy ScopePolicy[S]) *Session[S] {
 
 func (s *Session[S]) close() {
 	s.mu.Lock()
-	s.active = false
+	s.closed.Store(true)
 	s.mu.Unlock()
 }
 
@@ -159,33 +161,37 @@ func (s *Session[S]) scopeLabel() string {
 	return s.scopeLog(s.scope)
 }
 
-func (s *Session[S]) beginStmt(ctx context.Context) (func(), error) {
-	if s.shared != nil {
-		s.shared.mu.Lock()
-		if !s.shared.active {
-			s.shared.mu.Unlock()
-			return nil, tabula.ErrSessionClosed
-		}
-		if s.denied != nil {
-			s.shared.mu.Unlock()
-			return nil, s.denied
-		}
-		if err := s.shared.applyFor(ctx, s.scope, s.unscoped); err != nil {
-			s.shared.mu.Unlock()
-			return nil, err
-		}
-		return s.shared.mu.Unlock, nil
+// tryLock reserves the transaction for one operation, including row callbacks.
+func (s *Session[S]) tryLock() error {
+	if s.mu == nil {
+		return tabula.ErrSessionClosed
 	}
-	s.mu.Lock()
-	if !s.active {
-		s.mu.Unlock()
-		return nil, tabula.ErrSessionClosed
+	locked := s.mu.TryLock()
+	// A closed or denied handle keeps its error while a sibling holds the lock.
+	if err := s.checkState(); err != nil {
+		if locked {
+			s.mu.Unlock()
+		}
+		return err
 	}
-	if s.denied != nil {
-		s.mu.Unlock()
-		return nil, s.denied
+	if !locked {
+		return tabula.ErrSessionBusy
 	}
-	return s.mu.Unlock, nil
+	return nil
+}
+
+func (s *Session[S]) checkState() error {
+	if s.closed.Load() || (s.shared != nil && s.shared.closed.Load()) {
+		return tabula.ErrSessionClosed
+	}
+	return s.denied
+}
+
+func (s *Session[S]) applyScope(ctx context.Context) error {
+	if s.shared == nil {
+		return nil
+	}
+	return s.shared.applyFor(ctx, s.scope, s.unscoped)
 }
 
 func wrapReadOnlyErr(err error) error {
@@ -207,11 +213,13 @@ func (s *Session[S]) Exec(ctx context.Context, query string, args ...any) (int64
 	if err := s.check(query); err != nil {
 		return 0, err
 	}
-	unlock, err := s.beginStmt(ctx)
-	if err != nil {
+	if err := s.tryLock(); err != nil {
 		return 0, err
 	}
-	defer unlock()
+	defer s.mu.Unlock()
+	if err := s.applyScope(ctx); err != nil {
+		return 0, err
+	}
 	tagged := s.obs.TagSQL(ctx, query)
 	opCtx, done := s.obs.Start(ctx, s.scopeLabel(), query, args)
 	res, err := s.tx.ExecContext(opCtx, tagged, args...)
@@ -230,14 +238,16 @@ func (s *Session[S]) Scan(ctx context.Context, query string, args []any, dest ..
 	if err := s.check(query); err != nil {
 		return err
 	}
-	unlock, err := s.beginStmt(ctx)
-	if err != nil {
+	if err := s.tryLock(); err != nil {
 		return err
 	}
-	defer unlock()
+	defer s.mu.Unlock()
+	if err := s.applyScope(ctx); err != nil {
+		return err
+	}
 	tagged := s.obs.TagSQL(ctx, query)
 	opCtx, done := s.obs.Start(ctx, s.scopeLabel(), query, args)
-	err = wrapReadOnlyErr(s.tx.QueryRowContext(opCtx, tagged, args...).Scan(dest...))
+	err := wrapReadOnlyErr(s.tx.QueryRowContext(opCtx, tagged, args...).Scan(dest...))
 	done(-1, err)
 	return err
 }
@@ -252,11 +262,13 @@ func (s *Session[S]) Each(ctx context.Context, query string, args []any, decode 
 	if err := s.check(query); err != nil {
 		return err
 	}
-	unlock, err := s.beginStmt(ctx)
-	if err != nil {
+	if err := s.tryLock(); err != nil {
 		return err
 	}
-	defer unlock()
+	defer s.mu.Unlock()
+	if err := s.applyScope(ctx); err != nil {
+		return err
+	}
 	tagged := s.obs.TagSQL(ctx, query)
 	opCtx, done := s.obs.Start(ctx, s.scopeLabel(), query, args)
 	rows, err := s.tx.QueryContext(opCtx, tagged, args...)
@@ -313,31 +325,26 @@ func (s *Session[S]) Savepoint(ctx context.Context, name string, fn func(context
 		return errors.New("stdsql.Savepoint: name is required")
 	}
 	quoted := quoteIdent(name)
-	execSP := func(spCtx context.Context, stmt string) error {
-		if s.shared != nil {
-			s.shared.mu.Lock()
-			defer s.shared.mu.Unlock()
-			if !s.shared.active {
-				return tabula.ErrSessionClosed
-			}
-			if s.denied != nil {
-				return s.denied
-			}
-			_, err := s.tx.ExecContext(spCtx, stmt)
+	start := func() error {
+		if err := s.tryLock(); err != nil {
 			return err
 		}
-		s.mu.Lock()
 		defer s.mu.Unlock()
-		if !s.active {
-			return tabula.ErrSessionClosed
-		}
-		if s.denied != nil {
-			return s.denied
-		}
-		_, err := s.tx.ExecContext(spCtx, stmt)
+		_, err := s.tx.ExecContext(ctx, "SAVEPOINT "+quoted)
 		return err
 	}
-	if err := execSP(ctx, "SAVEPOINT "+quoted); err != nil {
+	if err := start(); err != nil {
+		return err
+	}
+	// Once the savepoint exists, finish it even if another statement is
+	// completing on the transaction.
+	execSP := func(spCtx context.Context, stmt string) error {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if err := s.checkState(); err != nil {
+			return err
+		}
+		_, err := s.tx.ExecContext(spCtx, stmt)
 		return err
 	}
 	committed := false

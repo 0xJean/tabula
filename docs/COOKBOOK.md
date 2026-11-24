@@ -200,7 +200,7 @@ for job, err := range jobs.Bind(sess).Iter(ctx, nil, tabula.Listing{
 // The cursor is closed. Process the claimed IDs in the same transaction.
 ```
 
-Starting a range executes one query in the bound session. Each yielded row comes from that cursor. A break releases it. Finish the range or break before issuing another statement on the same transaction. PostgreSQL retains row locks until the transaction ends. Streaming a locked table with `once` columns retains a snapshot per locked row. Unlocked exports decode one row at a time. For hand-written SQL over the table columns use `rows.SelectIter(ctx, query, args...)`. For a projection, use `view.Bind(sess).Iter(ctx, query, args...)`.
+Starting a range executes one query in the bound session. Each yielded row comes from that cursor. A break releases it. Finish the range or break before issuing another statement on the same transaction. Both drivers return `tabula.ErrSessionBusy` while the cursor is open, including when another handle from `WithinShared` issues the statement. PostgreSQL retains row locks until the transaction ends. Streaming a locked table with `once` columns retains a snapshot per locked row. Unlocked exports decode one row at a time. For hand-written SQL over the table columns use `rows.SelectIter(ctx, query, args...)`. For a projection, use `view.Bind(sess).Iter(ctx, query, args...)`.
 
 ## 11. Batch upserts and atomic updates
 
@@ -274,6 +274,8 @@ if search != "" {
 page, err := listNotes.Bind(sess).ListKeyset(ctx, &params, tabula.QueryKeyset{Limit: 20, After: cursor})
 // page.Next is automatically populated when page.HasMore is true.
 ```
+
+With a fixed keyset order, set the same `Direction` on the primary sort and each tie-breaker. Both `ORDER BY` and the `After` comparison use that direction even if the request asks for the opposite order. Leave every term at `SortDefault` to let the caller choose.
 
 ## Audit handwritten SQL and login roles before narrowing grants
 

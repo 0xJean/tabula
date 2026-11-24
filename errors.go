@@ -26,6 +26,10 @@ const (
 	ErrSessionClosed      staticError = "session is closed"
 	ErrCapabilityDenied   staticError = "operation denied by registry capability policy"
 
+	// ErrSessionBusy reports an overlapping operation on a transaction.
+	// Finish the active statement or row iteration before using the transaction again.
+	ErrSessionBusy staticError = "another operation is using the transaction"
+
 	// PostgreSQL error-class sentinels returned by default error classification.
 	ErrUnique                staticError = "unique constraint violation"
 	ErrForeignKey            staticError = "foreign key constraint violation"

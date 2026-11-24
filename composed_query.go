@@ -82,6 +82,8 @@ type QueryPage struct {
 }
 
 // QueryKeyset requests a cursor-paginated result from QueryRows.ListKeyset.
+// A fixed sort direction governs both the row order and the After comparison.
+// Direction selects the order for sorts declared with SortDefault.
 type QueryKeyset struct {
 	Sort      string
 	Direction SortDirection

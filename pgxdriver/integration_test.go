@@ -80,12 +80,22 @@ func TestPgxRunnerAndTabulaIntegration(t *testing.T) {
 		require.Nil(t, missing)
 
 		// Savepoint rollback keeps outer row intact.
+		var finishedChild *pgxdriver.Session[tenant]
 		spErr := s.Savepoint(ctx, func(ctx context.Context, child *pgxdriver.Session[tenant]) error {
+			finishedChild = child
 			tmp := item{Tenant: "t1", Code: "rollback_me", Version: 1}
 			require.NoError(t, tbl.Bind(child).Insert(ctx, &tmp))
 			return errors.New("abort savepoint")
 		})
 		require.ErrorContains(t, spErr, "abort savepoint")
+
+		for item, err := range r.Iter(ctx, nil, tabula.Listing{}) {
+			require.NoError(t, err)
+			_, err = r.Get(ctx, item.ID)
+			require.ErrorIs(t, err, tabula.ErrSessionBusy)
+			_, err = finishedChild.Exec(ctx, "SELECT 1")
+			require.ErrorIs(t, err, tabula.ErrSessionClosed)
+		}
 
 		many, err := r.GetMany(ctx, []int64{row.ID})
 		require.NoError(t, err)

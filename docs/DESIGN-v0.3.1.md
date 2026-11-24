@@ -103,7 +103,8 @@ err := runner.WithinShared(ctx, func(ctx context.Context, tx *stdsql.Shared[Scop
   to their declared inactive value (e.g. the empty string agreed with the policy).
   This also clears values left by a previous scope. A failed setup stops the statement.
 - Serialize setup **and** execution on the shared transaction, through cursor close
-  for `Each` and `Iter`. Callers finish a cursor before issuing another statement.
+  for `Each` and `Iter`. An overlapping statement or savepoint request returns
+  `ErrSessionBusy`. Callers finish a cursor before issuing another statement.
   A savepoint rollback can restore older database settings even when the Go handle
   stays the same. Reapplying every time avoids a cache invalidation protocol. Verify
   scoped → unscoped → scoped, nested savepoint rollback followed by the same handle,
@@ -400,7 +401,9 @@ request values are returned to the caller.
 | `Count` | Exact number of matching result rows before pagination. |
 | `ListKeyset` | Fetch limit + 1, return at most limit items and whether another page exists. The next tuple comes from the **last returned** item when there is another page. |
 
-The empty direction uses the declared default. Unknown sort keys, invalid directions,
+A fixed keyset order governs both sorting and cursor comparison for every valid
+request direction. For a caller-selectable order, the empty direction uses the
+declared default. Unknown sort keys, invalid directions,
 sizes, counts, unsupported locks and malformed cursors return errors before I/O.
 Paged queries must declare a valid `MaxLimit` at definition time (`0 < MaxLimit < math.MaxInt`)
 so requests fail closed against unbounded limits and `limit + 1` never overflows;

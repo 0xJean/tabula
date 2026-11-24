@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/0xJean/tabula"
 )
@@ -130,7 +131,7 @@ func (r *Runner[S]) checkMode(readOnly, unscoped bool) error {
 
 func (r *Runner[S]) newBoundSession(tx *sql.Tx, scope S, unscoped, readOnly bool) *Session[S] {
 	s := &Session[S]{
-		active:      true,
+		mu:          new(sync.Mutex),
 		tx:          tx,
 		scope:       scope,
 		unscoped:    unscoped,
@@ -243,20 +244,16 @@ type Shared[S any] struct {
 
 type sharedState[S any] struct {
 	mu       sync.Mutex
-	active   bool
+	closed   atomic.Bool
 	tx       *sql.Tx
 	runner   *Runner[S]
 	readOnly bool
-	children []*Session[S]
 }
 
 func (st *sharedState[S]) closeAll() {
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	st.active = false
-	for _, c := range st.children {
-		c.active = false
-	}
+	st.closed.Store(true)
 }
 
 func (st *sharedState[S]) applyFor(ctx context.Context, scope S, unscoped bool) error {
@@ -268,10 +265,8 @@ func (st *sharedState[S]) applyFor(ctx context.Context, scope S, unscoped bool) 
 }
 
 func (st *sharedState[S]) mint(scope S, unscoped bool, denied error) *Session[S] {
-	st.mu.Lock()
-	defer st.mu.Unlock()
 	s := &Session[S]{
-		active:      st.active,
+		mu:          &st.mu,
 		tx:          st.tx,
 		scope:       scope,
 		unscoped:    unscoped,
@@ -283,7 +278,6 @@ func (st *sharedState[S]) mint(scope S, unscoped bool, denied error) *Session[S]
 		readQueries: readQueries{db: st.tx, guard: st.runner.compiled.guard},
 	}
 	s.proof = st.runner.opts.SessionKey.Sign(s)
-	st.children = append(st.children, s)
 	return s
 }
 
@@ -348,7 +342,6 @@ func (r *Runner[S]) WithinSharedOptions(ctx context.Context, opts *sql.TxOptions
 		return err
 	}
 	state := &sharedState[S]{
-		active:   true,
 		tx:       tx,
 		runner:   r,
 		readOnly: readOnly,

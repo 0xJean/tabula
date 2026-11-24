@@ -28,9 +28,10 @@ func CopyFrom[T, K, S any](ctx context.Context, sess *Session[S], tbl *tabula.Ta
 	if err := bound.CheckCopy(); err != nil {
 		return 0, err
 	}
-	if err := sess.checkClosed(); err != nil {
+	if err := sess.tryLock(); err != nil {
 		return 0, err
 	}
+	defer sess.mu.Unlock()
 	if len(rows) == 0 {
 		return 0, nil
 	}
@@ -47,11 +48,9 @@ func CopyFrom[T, K, S any](ctx context.Context, sess *Session[S], tbl *tabula.Ta
 	if err := sess.check(copySQL); err != nil {
 		return 0, err
 	}
-	unlock, err := sess.beginStmt(ctx)
-	if err != nil {
+	if err := sess.applyScope(ctx); err != nil {
 		return 0, err
 	}
-	defer unlock()
 
 	opCtx := ctx
 	if sess.obs.Signals() != 0 {
