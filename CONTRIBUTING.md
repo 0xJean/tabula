@@ -60,9 +60,9 @@ Edit documentation in the same change as the behavior it describes. A release ta
 
 ## Releasing the modules
 
-Release tooling requires Git, Go and jq. The benchmark module is a development harness. Only the core and pgxdriver receive version tags.
+Release tooling requires Git, Go and jq. The benchmark module is a development harness. The core, pgxdriver and oteltabula receive matching version tags.
 
 1. Run `scripts/release.sh plan vX.Y.Z` to print the intended operations. Finalize and commit the core sources, integration guide, reference and changelog before preparing the child manifests. The guide title identifies the release series (for example `v0.3`).
-2. Run `scripts/release.sh prepare vX.Y.Z`. In a temporary Git clone and module cache, Go builds the candidate core archive from HEAD. With `GOWORK=off`, the script removes core replacements, pins the candidate and runs `go mod tidy` for each child. Review and commit both manifests and their checksums.
+2. Run `scripts/release.sh prepare vX.Y.Z`. In a temporary Git clone and module cache, Go builds the candidate core archive from HEAD. With `GOWORK=off`, the script removes core replacements, pins the candidate and runs `go mod tidy` for each child. Review and commit the prepared child manifests and checksums.
 3. Run `scripts/release.sh verify vX.Y.Z` to check the guide series, generated reference, pins, checksums and standalone builds against the candidate. If the core changes, rerun preparation. Go excludes nested modules from the core archive, so committing the prepared child manifests preserves its checksum.
-4. When ready to publish, `scripts/release.sh publish vX.Y.Z` repeats verification on clean `main`. It rejects replacement directives in all three manifests and sends the verified commit to `main`, `vX.Y.Z` and `pgxdriver/vX.Y.Z` in one atomic push. CI only exercises preparation and verification.
+4. After the release PR merges, run `scripts/release.sh publish vX.Y.Z` on clean `main` at the merged commit. It repeats verification and sends that commit to `main`, `vX.Y.Z`, `pgxdriver/vX.Y.Z` and `oteltabula/vX.Y.Z` in one atomic push. CI only exercises preparation and verification.

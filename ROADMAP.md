@@ -74,7 +74,7 @@ Design record: [docs/DESIGN-v0.3.1.md](docs/DESIGN-v0.3.1.md).
   `FuzzCompileQueryFragment`), embedded `.sql` files (`MustSQLFiles`), and extended
   `sqlcheck` / `tabula inventory` support. Applications write the joins.
 
-## v0.3.2 — implemented, pending release
+## v0.3.2 — released
 
 - Transactions and savepoints close unfinished database cursors on callback exit.
 - Shared transactions can use a dedicated unscoped reader role alongside scoped writes.

@@ -3,7 +3,7 @@
 All notable changes are listed here. The project follows semantic versioning; before
 v1.0 a minor version may contain breaking changes.
 
-## v0.3.2 — unreleased
+## v0.3.2 — 2026-11-24
 
 v0.3.2 includes the work from the untagged v0.3.1 candidate. Applications can upgrade directly from v0.3.0. [Migration guide](docs/MIGRATION.md#from-v030-to-v032)
 

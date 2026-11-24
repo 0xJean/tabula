@@ -22,7 +22,7 @@ Read the README at the Git tag or commit your application builds. The [migration
 
 ## Install v0.3.2
 
-Once the release tags are available, run `go get github.com/0xJean/tabula@v0.3.2` in your application module with Go 1.26 or later. If you use the native pgx/v5 adapter or the OpenTelemetry bridge, also run `go get github.com/0xJean/tabula/pgxdriver@v0.3.2` and/or `go get github.com/0xJean/tabula/oteltabula@v0.3.2`.
+Run `go get github.com/0xJean/tabula@v0.3.2` in your application module with Go 1.26 or later. If you use the native pgx/v5 adapter or the OpenTelemetry bridge, also run `go get github.com/0xJean/tabula/pgxdriver@v0.3.2` and/or `go get github.com/0xJean/tabula/oteltabula@v0.3.2`.
 
 ## Read a row by primary key
 
