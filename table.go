@@ -43,6 +43,9 @@ type TableSpec[T, K any] struct {
 	// AllowDelete opts this table into physical DELETE statements (Delete / DeleteWhere)
 	// and derives the table-level DELETE privilege for sqlcheck. Cannot combine with ReadOnly.
 	AllowDelete bool
+	// GroupBy whitelists declared columns for CountBy aggregates and records
+	// per-column count_by_<col> statements in Definition for sqlcheck verification.
+	GroupBy []string
 }
 
 // Table is the compiled handle for a TableSpec. Its column bindings, SQL and
@@ -51,6 +54,8 @@ type Table[T, K, S any] struct {
 	descriptor[T, S]
 	order                   string
 	readOnly, allowDelete   bool
+	groupBy                 map[string]bool
+	groupByOrder            []string
 	keys                    []int
 	keyBinders              []func(*K) any
 	keyBuilder              func(*T) K
@@ -140,6 +145,9 @@ func Define[T, K, S any](r *Registry[S], spec TableSpec[T, K]) *Table[T, K, S] {
 			stmts["unscoped_delete"] = d.stmt.unscopedDelete
 		}
 	}
+	for _, col := range d.groupByOrder {
+		stmts["count_by_"+col] = "SELECT " + col + ", count(*) FROM " + d.name + " WHERE true GROUP BY " + col
+	}
 	d.entry = r.record(Definition{
 		Name: d.name, Columns: cols, Statements: stmts,
 		Privileges: derivePrivileges(d.name, cols, d.stmt, d.readOnly, d.allowDelete),
@@ -161,6 +169,9 @@ func TryDefine[T, K, S any](r *Registry[S], spec TableSpec[T, K]) (*Table[T, K, 
 	if spec.ReadOnly && spec.AllowDelete {
 		return nil, fail("ReadOnly cannot combine with AllowDelete")
 	}
+	if spec.AllowDelete && r.deny&DenyDelete != 0 {
+		return nil, fmt.Errorf("%w: %s", ErrCapabilityDenied, fail("AllowDelete is denied by registry policy"))
+	}
 	rt := reflect.TypeFor[T]()
 	if rt.Kind() != reflect.Struct {
 		return nil, fail("row type %s is not a struct", rt)
@@ -176,6 +187,19 @@ func TryDefine[T, K, S any](r *Registry[S], spec TableSpec[T, K]) (*Table[T, K, 
 	for _, c := range spec.Columns {
 		if err := t.escape(c, fail); err != nil {
 			return nil, err
+		}
+	}
+	if len(spec.GroupBy) > 0 {
+		t.groupBy = make(map[string]bool, len(spec.GroupBy))
+		for _, col := range spec.GroupBy {
+			if _, ok := t.byName[col]; !ok {
+				return nil, fail("GroupBy column %s is not declared", col)
+			}
+			if t.groupBy[col] {
+				return nil, fail("GroupBy column %s declared twice", col)
+			}
+			t.groupBy[col] = true
+			t.groupByOrder = append(t.groupByOrder, col)
 		}
 	}
 	if err := t.bindKeys(fail); err != nil {

@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"slices"
 
+	"github.com/0xJean/tabula"
 	"github.com/0xJean/tabula/sqlcheck"
 )
 
@@ -31,7 +32,7 @@ func decodeConfig[T any](raw []byte) (T, error) {
 	return c, nil
 }
 
-type auditOptions struct{ section, against, bindings string }
+type auditOptions struct{ section, against, bindings, snapshot string }
 
 func runAudit(ctx context.Context, name string, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
@@ -43,6 +44,7 @@ func runAudit(ctx context.Context, name string, args []string, stdout, stderr io
 		fs.StringVar(&dsn, "dsn", "", "disposable PostgreSQL connection string (or TABULA_DSN)")
 	} else {
 		fs.StringVar(&opts.bindings, "bindings", "", "emit role workload using site assignments in this JSON file")
+		fs.StringVar(&opts.snapshot, "snapshot", "", "optional sqlcheck snapshot file to expand composed-query variants automatically")
 	}
 	if name == "catalog" {
 		fs.StringVar(&opts.section, "section", "", "emit one named snapshot file")
@@ -113,7 +115,18 @@ func audit(ctx context.Context, name string, db *sql.DB, raw []byte, opts auditO
 			if err != nil {
 				return nil, nil, err
 			}
-			work, err := report.BindRoles(bindings)
+			var defs []tabula.Definition
+			if opts.snapshot != "" {
+				snapRaw, err := os.ReadFile(opts.snapshot)
+				if err != nil {
+					return nil, nil, err
+				}
+				defs, err = sqlcheck.ParseSnapshot(string(snapRaw))
+				if err != nil {
+					return nil, nil, err
+				}
+			}
+			work, err := report.BindRolesWithDefinitions(bindings, defs, nil)
 			if err != nil {
 				return nil, []string{err.Error()}, nil
 			}

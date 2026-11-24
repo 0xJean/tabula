@@ -13,63 +13,82 @@ type TraceInfo struct {
 	Table  string
 	Action string
 	Scope  string
+	Role   string
 }
 
 // Tracer starts and ends a span around each statement execution. Passed
-// explicitly via RegistryConfig.Tracer; nil disables tracing.
+// explicitly via RegistryConfig.Tracer or RunnerOptions.Tracer; nil disables tracing.
 type Tracer interface {
 	Start(ctx context.Context, info TraceInfo) (context.Context, func(rows int64, err error))
 }
 
 // Metrics observes latency, row count, and error class for each statement
-// execution. Passed explicitly via RegistryConfig.Metrics; nil disables metrics.
+// execution. Passed explicitly via RegistryConfig.Metrics or RunnerOptions.Metrics; nil disables metrics.
 type Metrics interface {
 	Observe(ctx context.Context, info TraceInfo, duration time.Duration, rows int64, errClass ErrorClass)
 }
 
 type opSpan[S any] struct {
-	reg      *Registry[S]
-	logger   *slog.Logger
-	scope    S
-	info     TraceInfo
-	start    time.Time
-	endTrace func(rows int64, err error)
+	reg         *Registry[S]
+	logger      *slog.Logger
+	scope       S
+	info        TraceInfo
+	start       time.Time
+	endTrace    func(rows int64, err error)
+	emitMetrics bool
+	emitLog     bool
 }
 
 func (r *Registry[S]) startOp(
 	ctx context.Context, override *slog.Logger, scope S,
-	table, action, key string,
+	table, action string, meta stmtMeta, secretArgs []bool, sessionObserved ObserveMask,
 ) (context.Context, opSpan[S]) {
-	logger := r.effectiveLogger(override)
-	logActive := logger != nil && r.log.level.Level() != LogOff
-	if !logActive && r.tracer == nil && r.metrics == nil {
-		return ctx, opSpan[S]{}
-	}
 	var scopeStr string
 	if r.scopeLog != nil {
 		scopeStr = r.scopeLog(scope)
 	}
+	if sessionObserved != 0 {
+		ctx = WithStatementMeta(ctx, StatementMeta{
+			Key:        meta.key,
+			Table:      table,
+			Action:     action,
+			Scope:      scopeStr,
+			SecretArgs: secretArgs,
+			AllSecret:  meta.secret,
+			Quiet:      meta.quiet,
+			Logger:     override,
+		})
+	}
+	logger := r.effectiveLogger(override)
+	logActive := sessionObserved&ObserveLog == 0 && logger != nil && r.log.level.Level() != LogOff
+	traceActive := sessionObserved&ObserveTrace == 0 && r.tracer != nil
+	metricsActive := sessionObserved&ObserveMetrics == 0 && r.metrics != nil
+	if !logActive && !traceActive && !metricsActive {
+		return ctx, opSpan[S]{}
+	}
 	info := TraceInfo{
-		Key:    key,
+		Key:    meta.key,
 		Table:  table,
 		Action: action,
 		Scope:  scopeStr,
 	}
 	var start time.Time
-	if logActive || r.metrics != nil {
+	if logActive || metricsActive {
 		start = r.log.now()
 	}
 	var endTrace func(int64, error)
-	if r.tracer != nil {
+	if traceActive {
 		ctx, endTrace = r.tracer.Start(ctx, info)
 	}
 	return ctx, opSpan[S]{
-		reg:      r,
-		logger:   override,
-		scope:    scope,
-		info:     info,
-		start:    start,
-		endTrace: endTrace,
+		reg:         r,
+		logger:      override,
+		scope:       scope,
+		info:        info,
+		start:       start,
+		endTrace:    endTrace,
+		emitMetrics: metricsActive,
+		emitLog:     logActive,
 	}
 }
 
@@ -87,24 +106,26 @@ func (s opSpan[S]) finish(
 	if s.endTrace != nil {
 		s.endTrace(rows, err)
 	}
-	if s.reg.metrics != nil {
+	if s.emitMetrics {
 		var class ErrorClass
 		if err != nil {
 			class, _ = ClassifyError(ctx, err)
 		}
 		s.reg.metrics.Observe(ctx, s.info, dur, rows, class)
 	}
-	s.reg.logEmit(ctx, s.logger, s.info.Scope, logEvent{
-		key:       s.info.Key,
-		table:     s.info.Table,
-		action:    s.info.Action,
-		sql:       query,
-		duration:  dur,
-		rows:      rows,
-		err:       err,
-		args:      args,
-		secretArg: secretArg,
-		allSecret: allSecret,
-		quiet:     quiet,
-	})
+	if s.emitLog {
+		s.reg.logEmit(ctx, s.logger, s.info.Scope, logEvent{
+			key:       s.info.Key,
+			table:     s.info.Table,
+			action:    s.info.Action,
+			sql:       query,
+			duration:  dur,
+			rows:      rows,
+			err:       err,
+			args:      args,
+			secretArg: secretArg,
+			allSecret: allSecret,
+			quiet:     quiet,
+		})
+	}
 }

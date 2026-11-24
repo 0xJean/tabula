@@ -4,6 +4,7 @@
 This reference belongs to the same revision as the code. Start with the [integration guide](INTEGRATION.md) to find the operation you need.
 
 - [tabula](#tabula)
+- [oteltabula](#oteltabula)
 - [pgxdriver](#pgxdriver)
 - [postgresfixture](#postgresfixture)
 - [pqdriver](#pqdriver)
@@ -38,6 +39,10 @@ const (
 	ErrReadOnly           staticError = "operation requires a writable session and table"
 	ErrScopeMismatch      staticError = "row scope differs from the bound session"
 	ErrForbiddenStatement staticError = "statement attempts to modify session role or configuration"
+	ErrForeignSession     staticError = "session was not issued for this registry"
+	ErrNested             staticError = "nested transaction is not allowed"
+	ErrSessionClosed      staticError = "session is closed"
+	ErrCapabilityDenied   staticError = "operation denied by registry capability policy"
 
 	// PostgreSQL error-class sentinels returned by default error classification.
 	ErrUnique                staticError = "unique constraint violation"
@@ -53,6 +58,16 @@ const (
 
 FUNCTIONS
 
+func Avg[V, T, K, S any](ctx context.Context, rows *Rows[T, K, S], col string, where func(*Filter)) (V, bool, error)
+    Avg evaluates SELECT AVG(col) over live rows matching the session scope and
+    where filter. See Max for NULL semantics and result-type selection.
+
+func CountBy[V comparable, T, K, S any](ctx context.Context, rows *Rows[T, K, S], col string, where func(*Filter)) (map[V]int64, error)
+    CountBy evaluates SELECT col, count(*) ... GROUP BY col over live rows
+    matching the session scope and where filter. col must be declared on the
+    table and whitelisted in TableSpec.GroupBy. An empty result returns a
+    non-nil empty map. Grouping keys must be non-null.
+
 func GuardNoSessionEscape(query string) error
     GuardNoSessionEscape rejects role and session-authorization changes, RESET
     ALL, DISCARD ALL, and calls to set_config. It checks each statement and
@@ -66,6 +81,10 @@ func GuardReadOnly(query string) error
     GuardReadOnly admits a single SELECT or WITH statement and applies
     GuardNoSessionEscape. Adapters must also use a read-only PostgreSQL
     connection to enforce write restrictions inside CTEs and functions.
+
+func InTransaction(ctx context.Context) bool
+    InTransaction reports whether ctx carries an active transaction marker from
+    MarkTransaction (and has not been detached with WithoutTransaction).
 
 func IsCheckViolation(err error) bool
     IsCheckViolation reports PostgreSQL check_violation (SQLSTATE 23514).
@@ -108,6 +127,21 @@ func JSON(p any) any
     JSON addresses a json/jsonb column held as any Go value (text in and out).
     NULL reads as the zero value; a nil pointer value writes NULL.
 
+func MarkTransaction(ctx context.Context) context.Context
+    MarkTransaction marks ctx as running inside an active runner transaction so
+    nested runner entries (across both stdsql and pgxdriver) fail closed with
+    ErrNested before BEGIN.
+
+func Max[V, T, K, S any](ctx context.Context, rows *Rows[T, K, S], col string, where func(*Filter)) (V, bool, error)
+    Max evaluates SELECT MAX(col) over live rows matching the session scope and
+    where filter. Choose V for PostgreSQL's result type; registered registry
+    codecs are reused automatically. SQL NULL (empty set or all NULL values)
+    returns (zero, false, nil); a genuine zero returns (zero, true, nil).
+
+func Min[V, T, K, S any](ctx context.Context, rows *Rows[T, K, S], col string, where func(*Filter)) (V, bool, error)
+    Min evaluates SELECT MIN(col) over live rows matching the session scope and
+    where filter. See Max for NULL semantics and result-type selection.
+
 func NewSessionGuard(cfg SessionGuardConfig) (func(string) error, error)
     NewSessionGuard compiles an application GuardQuery for trusted adapter SQL.
     RESET ALL and DISCARD ALL are rejected if they could reset protected state.
@@ -126,10 +160,41 @@ func Retry(ctx context.Context, cfg RetryConfig, fn func(context.Context) error)
     Retry invokes fn up to cfg.MaxAttempts times while fn returns a retryable
     error and ctx has not been canceled.
 
+func SQLAction(query string) string
+    SQLAction infers a low-cardinality verb label from query for inline SQL
+    telemetry ("select", "insert", "update", "delete", "merge", "with",
+    or "sql").
+
+func SQLFingerprint(query string) string
+    SQLFingerprint returns a stable 12-character hex fingerprint of normalized
+    PostgreSQL text. Literal values, numeric constants and numbered parameters
+    are replaced by "?" so argument values never enter the fingerprint.
+
 func SQLState(err error) string
     SQLState returns the five-character PostgreSQL SQLSTATE carried by err
     (compatible with both lib/pq and pgx errors implementing SQLState() string),
     or "" when err carries none.
+
+func Sum[V, T, K, S any](ctx context.Context, rows *Rows[T, K, S], col string, where func(*Filter)) (V, bool, error)
+    Sum evaluates SELECT SUM(col) over live rows matching the session scope and
+    where filter. See Max for NULL semantics and result-type selection.
+
+func TagSQL(query, key string) string
+    TagSQL prefixes query with a sanitized `/* tabula:<key> */ ` comment.
+
+func WithStatementMeta(ctx context.Context, meta StatementMeta) context.Context
+    WithStatementMeta attaches descriptor statement metadata to ctx for a
+    session-level Observer to consume.
+
+func WithoutTransaction(ctx context.Context) context.Context
+    WithoutTransaction clears only the nested-transaction marker on ctx while
+    preserving deadlines, cancellation, tracing spans and request metadata.
+
+    Use this only when intentionally opening an independent transaction
+    inside a runner callback (for example, an out-of-band audit record that
+    must commit even if the outer transaction rolls back). Warning: opening a
+    detached transaction checks out a second pooled connection while the outer
+    transaction still holds one, which can deadlock a saturated connection pool.
 
 func Zero[V any](p *V) any
     Zero addresses a nullable scalar column as a plain value of type V.
@@ -148,6 +213,21 @@ func Add[N number](column string, delta N) Assignment
 func SetNow(column string) Assignment
     SetNow assigns PostgreSQL's transaction timestamp, now(), to a column.
 
+type Capability uint32
+    Capability is a bitmask of operations that RegistryConfig.Deny forbids on
+    tables and bindings belonging to a Registry.
+
+const (
+	// DenyDelete rejects TableSpec.AllowDelete at Define/TryDefine time.
+	DenyDelete Capability = 1 << iota
+	// DenyUpsert rejects Table.DefineUpsert / TryDefineUpsert.
+	DenyUpsert
+	// DenyUnscopedWrites rejects derived writes, hand-written Rows.Exec and
+	// binary COPY on unscoped sessions at runtime.
+	DenyUnscopedWrites
+	// DenyCopy rejects binary COPY operations checked via Rows.CheckCopy.
+	DenyCopy
+)
 type Column[T any] struct {
 	Name string
 	Addr func(*T) any
@@ -321,8 +401,11 @@ type KeysetListing struct {
 type KeysetPage[T any] struct {
 	Items   []T
 	HasMore bool
+	Next    []any
 }
     KeysetPage is one cursor-paginated slice plus whether another page exists.
+    When HasMore is true, Next carries the cursor values extracted from the last
+    returned item in tuple order for the subsequent After call.
 
 type Listing struct {
 	Order        string
@@ -406,9 +489,54 @@ const (
 type Metrics interface {
 	Observe(ctx context.Context, info TraceInfo, duration time.Duration, rows int64, errClass ErrorClass)
 }
-    Metrics observes latency, row count, and error class for each statement
-    execution. Passed explicitly via RegistryConfig.Metrics; nil disables
-    metrics.
+    Metrics observes latency, row count, and error class for each
+    statement execution. Passed explicitly via RegistryConfig.Metrics or
+    RunnerOptions.Metrics; nil disables metrics.
+
+type ObserveMask uint8
+    ObserveMask identifies which observability signals a runner session handles
+    itself so that a Registry skips duplicate emissions for those signals.
+
+const (
+	ObserveTrace ObserveMask = 1 << iota
+	ObserveMetrics
+	ObserveLog
+	// ObserveTag indicates the session tags statements with SQL comments and
+	// needs StatementMeta propagated on the context even without other hooks.
+	ObserveTag
+)
+type Observer struct {
+	// Has unexported fields.
+}
+    Observer implements session-level tracing, metrics, structured logging and
+    optional SQL comment tagging for both descriptor statements and hand-written
+    inline SQL.
+
+func NewObserver(cfg ObserverConfig) *Observer
+    NewObserver constructs a session-level Observer from cfg. Returns nil when
+    no observability signal or statement tagging is configured.
+
+func (o *Observer) Signals() ObserveMask
+    Signals reports which observability signals this Observer owns.
+
+func (o *Observer) Start(ctx context.Context, scopeLabel, query string, args []any) (context.Context, func(rows int64, err error))
+    Start begins observing one session-level statement execution and returns the
+    updated context plus a finish callback that records row count and error.
+
+func (o *Observer) TagSQL(ctx context.Context, query string) string
+    TagSQL returns query prefixed with `/* tabula:<key> */ ` when TagStatements
+    is enabled. Key comes from descriptor metadata when present or from the
+    normalized inline SQL fingerprint otherwise.
+
+type ObserverConfig struct {
+	Role          string
+	Tracer        Tracer
+	Metrics       Metrics
+	Log           LogConfig
+	Sanitize      func(error) string
+	TagStatements bool
+}
+    ObserverConfig configures a session-level Observer shared by driver runners.
 
 type OrderSpec struct {
 	Columns          map[string]string
@@ -426,6 +554,181 @@ func MustOrderSpec(spec OrderSpec) OrderSpec
 func (s OrderSpec) Resolve(by, dir string) string
     Resolve maps caller-provided sort key and direction to a safe SQL ORDER BY
     expression (without leading "ORDER BY").
+
+type Query[T, S any] struct {
+	// Has unexported fields.
+}
+    Query is a validated, compiled composed query owned by a View.
+
+func (q *Query[T, S]) Bind(s Session[S]) *QueryRows[T, S]
+    Bind binds q to session s, applying the owning Registry's A4 SessionKey
+    check.
+
+type QueryFilter struct {
+	Name   string
+	SQL    string
+	Secret bool
+}
+    QueryFilter declares one named, optional WHERE fragment of a composed query.
+    Fragment parameters are numbered locally starting at $1 (independent of
+    Select/Where base parameters) and may be reused across multiple predicates
+    (for example "(o.code ILIKE $1 OR c.name ILIKE $1)").
+
+type QueryKeyset struct {
+	Sort      string
+	Direction SortDirection
+	Limit     int
+	After     []any
+}
+    QueryKeyset requests a cursor-paginated result from QueryRows.ListKeyset.
+
+type QueryOrder struct {
+	Sort      string
+	Direction SortDirection
+}
+    QueryOrder selects sorting for unpaged QueryRows.Find and QueryRows.Iter.
+
+type QueryOrderSpec struct {
+	Default          string
+	DefaultDirection SortDirection
+	Sorts            []QuerySort
+	TieBreaker       []QuerySortTerm
+}
+    QueryOrderSpec declares the whitelisted sort choices and optional
+    tie-breaker terms of a composed query.
+
+type QueryPage struct {
+	Sort      string
+	Direction SortDirection
+	Size      int
+	Offset    int
+	Count     CountMode
+}
+    QueryPage requests an offset-paginated result from QueryRows.List.
+
+type QueryParams struct {
+	// Has unexported fields.
+}
+    QueryParams holds base arguments and named filter arguments for a composed
+    Query. The zero value is directly usable (like strings.Builder and Filter)
+    for queries without base arguments:
+
+        var p tabula.QueryParams
+        if since != nil {
+            p.With("since", *since)
+        }
+        rows, total, err := q.Bind(sess).List(ctx, &p, page)
+
+    NewQueryParams and With/WithIf defensively copy their argument slices.
+    Errors such as unknown or duplicate filter names and arity mismatches
+    are reported by the bound query operation before any I/O. Once built,
+    a *QueryParams is read-only during execution and safe to reuse across
+    operations (such as Count followed by List), though it is not safe for
+    concurrent mutation.
+
+func NewQueryParams(baseArgs ...any) *QueryParams
+    NewQueryParams creates a *QueryParams seeded with baseArgs ($1..$k).
+
+func (p *QueryParams) With(name string, args ...any) *QueryParams
+    With enables the named filter with args (0, 1 or more values matching the
+    filter's fragment-local $1..$m placeholders) and returns p for chaining.
+    Calling With on a nil *QueryParams panics so conditional code never silently
+    drops a filter. A supplied nil (including a typed nil) binds SQL NULL.
+
+func (p *QueryParams) WithIf(cond bool, name string, args ...any) *QueryParams
+    WithIf calls With(name, args...) when cond is true and returns p unchanged
+    otherwise. Calling WithIf on a nil *QueryParams panics.
+
+    Caution: Go evaluates function arguments before entering WithIf. Never write
+    `p.WithIf(since != nil, "since", *since)` — dereferencing `*since` panics
+    when `since` is nil. Guard pointer dereferences with an ordinary `if` block:
+
+        if since != nil {
+            p.With("since", *since)
+        }
+
+type QueryRows[T, S any] struct {
+	readBinding[T, S]
+	// Has unexported fields.
+}
+    QueryRows is a compiled Query bound to one Session.
+
+func (r *QueryRows[T, S]) Count(ctx context.Context, params *QueryParams) (int64, error)
+    Count returns the exact number of matching rows before pagination.
+
+func (r *QueryRows[T, S]) Find(ctx context.Context, params *QueryParams, order QueryOrder) ([]T, error)
+    Find reads all matching rows in the selected order without running COUNT(*).
+
+func (r *QueryRows[T, S]) Iter(ctx context.Context, params *QueryParams, order QueryOrder) iter.Seq2[T, error]
+    Iter streams all matching rows in the selected order. Breaking the range
+    closes the cursor.
+
+func (r *QueryRows[T, S]) List(ctx context.Context, params *QueryParams, page QueryPage) ([]T, int64, error)
+    List reads one offset-paginated page plus optional exact total count.
+    CountMode must be CountExact (default) or CountNone (total = -1).
+
+func (r *QueryRows[T, S]) ListKeyset(ctx context.Context, params *QueryParams, page QueryKeyset) (KeysetPage[T], error)
+    ListKeyset reads one cursor-paginated page without OFFSET, fetching Limit+1
+    rows to set HasMore and populating Next from the last returned item.
+
+func (r *QueryRows[T, S]) WithLogger(logger *slog.Logger) *QueryRows[T, S]
+    WithLogger returns a handle with a per-binding logger override, retaining
+    any A4 rejection error.
+
+type QueryScope struct {
+	// Has unexported fields.
+}
+    QueryScope declares how a composed query applies row scope on a scoped
+    Registry. On a scoped Registry (S != struct{}), leaving Scope unset fails
+    closed at DefineQuery time; choose ScopeColumns, ScopeByRLS or ScopeGlobal.
+
+func ScopeByRLS() QueryScope
+    ScopeByRLS declares that row scope is enforced by PostgreSQL RLS policies
+    (or CTE/base predicates) rather than an outer scope column predicate.
+
+func ScopeColumns(cols ...string) QueryScope
+    ScopeColumns injects outer WHERE predicates (<col> = $n) using the bound
+    session's scope value on scoped sessions, omitting them on validated
+    unscoped sessions. All listed columns share one parameter slot. Applies to
+    driving and inner-joined tables; outer-joined tables must correlate in ON,
+    use a composite foreign key or rely on PostgreSQL RLS.
+
+func ScopeGlobal() QueryScope
+    ScopeGlobal declares a view over global lookup tables that have no row
+    scope.
+
+type QuerySort struct {
+	Key       string
+	Expr      string
+	Column    string
+	Direction SortDirection
+}
+    QuerySort declares one whitelisted caller sort key on QueryOrderSpec.
+
+type QuerySortTerm struct {
+	Expr      string
+	Column    string
+	Direction SortDirection
+}
+    QuerySortTerm pairs a SQL ordering expression with its matching View column.
+
+type QuerySpec struct {
+	Select    string
+	Where     string
+	Tail      string
+	CountBase string
+	Scope     QueryScope
+	Filters   []QueryFilter
+	Order     QueryOrderSpec
+	MaxLimit  int
+	Keyset    bool
+}
+    QuerySpec declares a view-owned composed query using explicit Select, Where,
+    optional Tail (GROUP BY / HAVING) and optional optimized CountBase segments.
+
+    Base parameters ($1..$k) share one namespace across Select, Where, Tail and
+    CountBase. Filter fragments use fragment-local $1..$m numbering rebased at
+    compile time.
 
 type Registry[S any] struct {
 	// Has unexported fields.
@@ -458,6 +761,11 @@ func (r *Registry[S]) Resolve(ft reflect.Type, jsonOption, zeroOption bool) (fun
      5. database/sql native primitives (bool, ints, floats, string, []byte,
         time.Time).
 
+func (r *Registry[S]) Seal(key SessionKey) error
+    Seal atomically attaches key to a Registry created with RequireSealed:
+    true and a zero SessionKey. It fails on an open registry, a zero key, or any
+    registry that already has a key (including a repeat call with the same key).
+
 func (r *Registry[S]) SetLogLevel(level LogLevel)
     SetLogLevel atomically updates this Registry's statement logging level.
 
@@ -488,6 +796,16 @@ type RegistryConfig[S any] struct {
 	Tracer Tracer
 	// Metrics optionally records latency, row count, and error class per statement.
 	Metrics Metrics
+	// SessionKey binds the registry at construction so Bind accepts only sessions
+	// carrying a matching SessionProof signed for that exact session instance.
+	SessionKey SessionKey
+	// RequireSealed creates a fail-closed registry that rejects every Bind until
+	// startup code seals it once with Registry.Seal(key). Ignored when SessionKey
+	// is already non-zero.
+	RequireSealed bool
+	// Deny forbids selected table capabilities (such as DenyDelete, DenyUpsert,
+	// DenyUnscopedWrites, DenyCopy) across all descriptors in this registry.
+	Deny Capability
 }
     RegistryConfig configures one isolated Registry for scope type S.
 
@@ -519,9 +837,15 @@ type Rows[T, K, S any] struct {
 func (r *Rows[T, K, S]) Args(row T) []any
     Args returns bound values matching Table.Insert().
 
+func (r *Rows[T, K, S]) CheckCopy() error
+    CheckCopy validates session provenance, write mode, DenyCopy and
+    DenyUnscopedWrites before bulk COPY protocols (such as pgxdriver.CopyFrom)
+    take any empty-input shortcut or touch the driver.
+
 func (r *Rows[T, K, S]) CheckWrite(row *T) error
-    CheckWrite validates the table mode and row scope for a write. Driver
-    adapters use it when sending rows through a bulk protocol such as COPY.
+    CheckWrite validates session provenance, table mode, unscoped-write policy
+    and row scope for a write. Driver adapters use it when sending rows through
+    a bulk protocol such as COPY.
 
 func (r *Rows[T, K, S]) Delete(ctx context.Context, key K) error
     Delete physically deletes the row identified by key within the session
@@ -536,6 +860,10 @@ func (r *Rows[T, K, S]) DeleteWhere(ctx context.Context, where string, values ..
 
 func (r *Rows[T, K, S]) Exec(ctx context.Context, want int64, query string, args ...any) error
     Exec runs a hand-written write and confirms its row count (when want >= 0).
+
+func (r *Rows[T, K, S]) Exists(ctx context.Context, where func(*Filter)) (bool, error)
+    Exists reports whether any undeleted row in the session's row scope matches
+    where (a Filter builder callback; nil checks whether any live row exists).
 
 func (r *Rows[T, K, S]) ExistsBy(ctx context.Context, where string, values ...any) (bool, error)
     ExistsBy reports whether any undeleted row in the session's row scope
@@ -610,7 +938,8 @@ func (r *Rows[T, K, S]) Scan(ctx context.Context, query string, args []any, dest
 
 func (r *Rows[T, K, S]) Scope() *Filter
     Scope starts a Filter seeded with the session scope predicate (none on an
-    unscoped session) and soft-delete predicate.
+    unscoped session) and soft-delete predicate. A rejected binding yields a
+    FALSE predicate without consulting the session.
 
 func (r *Rows[T, K, S]) Select(ctx context.Context, query string, args ...any) ([]T, error)
     Select scans every row of a hand-written SELECT over Table.Cols().
@@ -656,6 +985,30 @@ func (r *Rows[T, K, S]) WithLogger(logger *slog.Logger) *Rows[T, K, S]
     WithLogger returns a Rows handle sharing the same Table and Session with a
     per-binding logger override.
 
+type SQLFiles struct {
+	// Has unexported fields.
+}
+    SQLFiles holds preloaded `.sql` files from an fs.FS (typically embed.FS) so
+    long joins can live in dedicated files and fail at start-up when missing.
+
+func LoadSQLFiles(fsys fs.FS, dir string) (*SQLFiles, error)
+    LoadSQLFiles reads every `.sql` file under dir in fsys (recursively, keyed
+    by slash-separated paths relative to dir). Empty or missing directories
+    return an error.
+
+func MustSQLFiles(fsys fs.FS, dir string) *SQLFiles
+    MustSQLFiles calls LoadSQLFiles and panics on error at package
+    initialization.
+
+func (f *SQLFiles) Get(name string) string
+    Get returns the SQL text for name (relative to dir) and panics if missing.
+
+func (f *SQLFiles) Lookup(name string) (string, bool)
+    Lookup returns the SQL text for name (relative to dir) if present.
+
+func (f *SQLFiles) Names() []string
+    Names returns all loaded relative file names in sorted order.
+
 type Session[S any] interface {
 	Scope() S
 	Unscoped() bool
@@ -682,6 +1035,33 @@ type SessionGuardConfig struct {
     matches them case-insensitively. Dynamic set_config keys are rejected
     whenever a namespace is protected.
 
+type SessionKey struct {
+	// Has unexported fields.
+}
+    SessionKey is an opaque, unforgeable signing authority created by trusted
+    application startup code (NewSessionKey). Registries configured with
+    SessionKey or RequireSealed accept only sessions carrying a matching
+    SessionProof signed for that exact session pointer instance.
+
+func NewSessionKey() SessionKey
+    NewSessionKey allocates a fresh, distinct SessionKey.
+
+func (k SessionKey) IsZero() bool
+    IsZero reports whether k is the unset zero SessionKey.
+
+func (k SessionKey) Sign(owner any) SessionProof
+    Sign issues a SessionProof binding k to owner. owner must be a non-nil
+    pointer to a nonzero-size value; otherwise (or when k is zero) Sign returns
+    the zero SessionProof.
+
+type SessionProof struct {
+	// Has unexported fields.
+}
+    SessionProof records that a specific concrete session pointer was issued by
+    the holder of a SessionKey. Its fields are unexported and bound to both the
+    key token and the concrete owner pointer, so copying a proof onto another
+    struct or wrapping a session fails verification.
+
 type SoftDelete struct {
 	// DeletedValue is the sentinel value written to mark a row deleted
 	// (must be string/~string or an integer matching the ",deleted" field type).
@@ -693,6 +1073,33 @@ type SoftDelete struct {
     SoftDelete configures status-value soft deletion on a ",deleted" column.
     Leave TableSpec.SoftDelete nil for *time.Time (deleted_at IS NULL) or bool
     (is_deleted = FALSE).
+
+type SortDirection uint8
+    SortDirection selects the sort order of a composed query. SortDefault uses
+    the QueryOrderSpec's declared DefaultDirection.
+
+const (
+	SortDefault SortDirection = iota
+	SortAsc
+	SortDesc
+)
+type StatementMeta struct {
+	Key        string
+	Table      string
+	Action     string
+	Scope      string
+	SecretArgs []bool
+	AllSecret  bool
+	Quiet      bool
+	Logger     *slog.Logger
+	NoRowsOK   bool
+}
+    StatementMeta carries descriptor statement metadata from a Table, View or
+    Query binding down to a session-level Observer via context.
+
+func StatementMetaFrom(ctx context.Context) (StatementMeta, bool)
+    StatementMetaFrom extracts descriptor statement metadata previously attached
+    with WithStatementMeta.
 
 type StatementOption func(*stmtMeta)
     StatementOption configures per-statement logging behavior at registration
@@ -779,6 +1186,9 @@ type TableSpec[T, K any] struct {
 	// AllowDelete opts this table into physical DELETE statements (Delete / DeleteWhere)
 	// and derives the table-level DELETE privilege for sqlcheck. Cannot combine with ReadOnly.
 	AllowDelete bool
+	// GroupBy whitelists declared columns for CountBy aggregates and records
+	// per-column count_by_<col> statements in Definition for sqlcheck verification.
+	GroupBy []string
 }
     TableSpec declares one table of rows T keyed by K: the qualified name,
     the default order of List, optional SoftDelete config, and the row type's
@@ -790,6 +1200,7 @@ type TraceInfo struct {
 	Table  string
 	Action string
 	Scope  string
+	Role   string
 }
     TraceInfo identifies one statement execution for Tracer and Metrics hooks.
     Statement keys double as span names and metric labels.
@@ -798,7 +1209,8 @@ type Tracer interface {
 	Start(ctx context.Context, info TraceInfo) (context.Context, func(rows int64, err error))
 }
     Tracer starts and ends a span around each statement execution. Passed
-    explicitly via RegistryConfig.Tracer; nil disables tracing.
+    explicitly via RegistryConfig.Tracer or RunnerOptions.Tracer; nil disables
+    tracing.
 
 type UpsertPlan[T, K, S any] struct {
 	// Has unexported fields.
@@ -845,6 +1257,11 @@ func (v *View[T, S]) ColsAs(alias string) string
     ColsAs returns the select column list qualified with table alias (e.g.
     "c.id, c.name").
 
+func (v *View[T, S]) DefineQuery(key string, spec QuerySpec, opts ...StatementOption) *Query[T, S]
+    DefineQuery validates spec against v, registers C3 verification variants
+    in v's ViewDefinition.Statements, and returns a compiled Query handle.
+    Panics on declaration mistakes at package initialization.
+
 func (v *View[T, S]) Definition() ViewDefinition
     Definition returns a deep copy of the registered view metadata.
 
@@ -867,6 +1284,10 @@ func (v *View[T, S]) SelectAs(aliases map[string]string) string
 func (d *View) Statement(key, query string, opts ...StatementOption) string
     Statement registers hand-written SQL for verification and observation.
     Keys are unique within a table or view.
+
+func (v *View[T, S]) TryDefineQuery(key string, spec QuerySpec, opts ...StatementOption) (*Query[T, S], error)
+    TryDefineQuery validates and compiles spec against v without registering C3
+    variants in the registry.
 
 type ViewDefinition Definition
     ViewDefinition describes a registered query projection.
@@ -911,14 +1332,59 @@ func (v *ZeroValue[V]) Value() (driver.Value, error)
 
 ```
 
+## oteltabula
+
+```text
+package oteltabula // import "github.com/0xJean/tabula/oteltabula"
+
+Package oteltabula bridges tabula.Tracer and tabula.Metrics to the OpenTelemetry
+Go API (go.opentelemetry.io/otel). It lives in its own Go module so core tabula
+packages keep their zero-third-party-dependency boundary.
+
+CONSTANTS
+
+const InstrumentationName = "github.com/0xJean/tabula/oteltabula"
+    InstrumentationName is the default OpenTelemetry instrumentation scope name.
+
+
+FUNCTIONS
+
+func NewMetrics(mp metric.MeterProvider, opts ...Option) (tabula.Metrics, error)
+    NewMetrics returns a tabula.Metrics backed by mp (defaulting to
+    otel.GetMeterProvider when mp is nil). It records tabula.statement.duration
+    (seconds) and tabula.statement.count ({statement}).
+
+func NewTracer(tp trace.TracerProvider, opts ...Option) tabula.Tracer
+    NewTracer returns a tabula.Tracer backed by tp (defaulting to
+    otel.GetTracerProvider when tp is nil). Attach it to RunnerOptions.Tracer or
+    RegistryConfig.Tracer.
+
+
+TYPES
+
+type Option func(*config)
+    Option customizes a Tracer or Metrics adapter created by this package.
+
+func WithAttributes(attrs ...attribute.KeyValue) Option
+    WithAttributes appends static attributes (for example db.namespace or
+    server.address) to every emitted span and metric observation.
+
+func WithInstrumentationName(name string) Option
+    WithInstrumentationName overrides the OpenTelemetry scope name.
+
+func WithInstrumentationVersion(version string) Option
+    WithInstrumentationVersion attaches an instrumentation scope version.
+
+```
+
 ## pgxdriver
 
 ```text
 package pgxdriver // import "github.com/0xJean/tabula/pgxdriver"
 
 Package pgxdriver integrates github.com/jackc/pgx/v5 with tabula: PostgreSQL
-array column converters, transaction-bound Sessions, and pgxpool Runners with
-pluggable scope/RLS policies and savepoints.
+array column converters, role-bound transaction Runners, guarded Sessions,
+savepoints, binary COPY, and read-only Direct pools.
 
 FUNCTIONS
 
@@ -928,11 +1394,13 @@ func ArrayColumn(ft reflect.Type) (func(any) any, error)
 
 func CopyFrom[T, K, S any](ctx context.Context, sess *Session[S], tbl *tabula.Table[T, K, S], rows []T) (int64, error)
     CopyFrom bulk-inserts rows into tbl using PostgreSQL's binary COPY protocol
-    via pgx.Tx.CopyFrom. It uses the table's derived INSERT column list and
-    value codecs (JSON, Zero, Array, custom Scanner/Valuer) and skips serial key
-    and timestamp soft-delete columns automatically, matching Rows.Insert.
+    via pgx.Tx.CopyFrom. It checks session provenance (A4), read-only mode,
+    DenyCopy and DenyUnscopedWrites (A6), and closed-session state before any
+    empty-input shortcut or driver access, then checks each row's scope via
+    CheckWrite.
 
-    An empty rows slice returns 0, nil without touching the database.
+    An empty rows slice returns 0, nil after passing capability and session
+    checks without touching the database.
 
 func SetLocalConfig(ctx context.Context, tx pgx.Tx, key, value string) error
     SetLocalConfig sets a PostgreSQL transaction-local GUC via set_config(...,
@@ -944,10 +1412,17 @@ func SetLocalRole(ctx context.Context, tx pgx.Tx, role string) error
 
 TYPES
 
+type DirectConfig struct {
+	SessionKey tabula.SessionKey
+	Observer   *tabula.Observer
+}
+    DirectConfig configures A4 session signing and B1/B3 observability on a
+    read-only DirectPool created by DirectWithConfig.
+
 type DirectOption func(*pgxpool.Config)
-    DirectOption customizes the pgxpool.Config used by Direct before the pool
-    is created. Direct always enforces default_transaction_read_only=on after
-    applying options.
+    DirectOption customizes the pgxpool.Config used by Direct or
+    DirectWithConfig before the pool is created. Direct always enforces
+    default_transaction_read_only=on after applying options.
 
 type DirectPool[S any] struct {
 	// Has unexported fields.
@@ -957,7 +1432,13 @@ type DirectPool[S any] struct {
 func Direct[S any](ctx context.Context, dsn string, policy ScopePolicy[S], opts ...DirectOption) (*DirectPool[S], error)
     Direct opens a dedicated pool with read-only mode in the startup parameters
     of every physical connection. Session binds each request without SQL.
-    Transaction-local setup requires a Runner. Call Close at shutdown.
+    Managed transaction-local variables require a Runner. Call Close at
+    shutdown.
+
+func DirectWithConfig[S any](ctx context.Context, dsn string, policy ScopePolicy[S], dcfg DirectConfig, opts ...DirectOption) (*DirectPool[S], error)
+    DirectWithConfig is Direct with A4 SessionKey signing and optional B1/B3
+    session observability while preserving native DirectOption hooks and
+    default_transaction_read_only=on.
 
 func (p *DirectPool[S]) Close() error
     Close releases the underlying connection pool.
@@ -969,30 +1450,134 @@ func (p *DirectPool[S]) Session(scope S) tabula.Session[S]
 func (p *DirectPool[S]) Stat() *pgxpool.Stat
     Stat returns the current pgxpool statistics.
 
+type RawSession[S any] struct {
+	// Has unexported fields.
+}
+    RawSession wraps a *Session[S] with explicit raw pgx.Tx escape access. It is
+    constructed only when RunnerOptions.ExposeTx is true via Runner.WithinRaw.
+
+func (s *RawSession[S]) Each(ctx context.Context, query string, args []any, decode func(func(...any) error) error) error
+    Each streams all rows of query through decode.
+
+func (s *RawSession[S]) Exec(ctx context.Context, query string, args ...any) (int64, error)
+    Exec executes query and returns the affected row count.
+
+func (s *RawSession[S]) ReadOnly() bool
+    ReadOnly reports whether this session was opened as a READ ONLY transaction.
+
+func (s *RawSession[S]) Returning(ctx context.Context, query string, args []any, dest ...any) error
+    Returning executes a write with RETURNING and maps pgx.ErrNoRows to
+    sql.ErrNoRows.
+
+func (s *RawSession[S]) Savepoint(ctx context.Context, fn func(context.Context, *Session[S]) error) error
+    Savepoint runs fn inside a nested pgx transaction (PostgreSQL SAVEPOINT).
+
+func (s *RawSession[S]) Scan(ctx context.Context, query string, args []any, dest ...any) error
+    Scan executes a single-row query and maps pgx.ErrNoRows to sql.ErrNoRows.
+
+func (s *RawSession[S]) Scope() S
+    Scope returns the session's bound scope value.
+
+func (s *RawSession[S]) Session() *Session[S]
+    Session returns the underlying guarded *Session[S].
+
+func (s *RawSession[S]) SessionProof() tabula.SessionProof
+    SessionProof returns the instance-bound proof for this *RawSession[S].
+
+func (s *RawSession[S]) TabulaObserved() tabula.ObserveMask
+    TabulaObserved reports which observability signals this session owns.
+
+func (s *RawSession[S]) Tx() pgx.Tx
+    Tx returns the underlying pgx.Tx. Only available on *RawSession[S].
+
+func (s *RawSession[S]) Unscoped() bool
+    Unscoped reports whether this session bypasses row-level scope predicates.
+
+type RunOptions[S any] struct {
+	TxOptions    pgx.TxOptions
+	BeforeCommit func(context.Context, *Session[S]) error
+}
+    RunOptions customizes a single runner transaction invocation, including an
+    optional BeforeCommit step executed on a fresh handle after the body handle
+    closes.
+
 type Runner[S any] struct {
 	// Has unexported fields.
 }
-    Runner opens scoped PostgreSQL transactions on a *pgxpool.Pool.
+    Runner opens role-bound, guarded PostgreSQL transactions on a *pgxpool.Pool.
 
-func NewRunner[S any](pool *pgxpool.Pool, policy ScopePolicy[S]) *Runner[S]
-    NewRunner creates a Runner backed by pool and policy.
+func NewRunner[S any](pool *pgxpool.Pool, policy ScopePolicy[S], opts RunnerOptions) (*Runner[S], error)
+    NewRunner validates policy and opts and creates a guarded Runner backed by
+    pool.
 
 func (r *Runner[S]) Within(ctx context.Context, scope S, fn func(context.Context, *Session[S]) error) error
-    Within runs fn in a read-write transaction.
+    Within runs fn in a read-write transaction. On a ReadOnly runner, Within
+    fails closed with tabula.ErrReadOnly before BEGIN.
+
+func (r *Runner[S]) WithinRaw(ctx context.Context, scope S, fn func(context.Context, *RawSession[S]) error) error
+    WithinRaw runs fn with a *RawSession[S] exposing Tx() pgx.Tx. Requires
+    RunnerOptions.ExposeTx == true; otherwise returns tabula.ErrCapabilityDenied
+    before BEGIN.
+
+func (r *Runner[S]) WithinRawTxOptions(ctx context.Context, scope S, opts pgx.TxOptions, fn func(context.Context, *RawSession[S]) error) error
+    WithinRawTxOptions runs fn with a *RawSession[S] under explicit
+    pgx.TxOptions.
 
 func (r *Runner[S]) WithinReadOnly(ctx context.Context, scope S, fn func(context.Context, *Session[S]) error) error
     WithinReadOnly runs fn in a READ ONLY transaction.
 
+func (r *Runner[S]) WithinRetry(ctx context.Context, scope S, cfg tabula.RetryConfig, fn func(context.Context, *Session[S]) error) error
+    WithinRetry runs the full transaction attempt up to cfg.MaxAttempts times
+    via tabula.Retry whenever the attempt fails with a retryable error.
+    The callback must be idempotent apart from database writes.
+
+func (r *Runner[S]) WithinRetryWith(ctx context.Context, scope S, cfg tabula.RetryConfig, runOpts RunOptions[S], fn func(context.Context, *Session[S]) error) error
+    WithinRetryWith is WithinRetry with explicit RunOptions (isolation,
+    read-only, BeforeCommit). Each retry that completes fn runs BeforeCommit
+    once.
+
+func (r *Runner[S]) WithinShared(ctx context.Context, fn func(context.Context, *Shared[S]) error) error
+    WithinShared opens one transaction that can switch between scoped and
+    unscoped handles via Shared.Scoped and Shared.Unscoped.
+
+func (r *Runner[S]) WithinSharedOptions(ctx context.Context, opts pgx.TxOptions, fn func(context.Context, *Shared[S]) error) error
+    WithinSharedOptions is WithinShared with explicit pgx.TxOptions.
+
 func (r *Runner[S]) WithinTxOptions(ctx context.Context, scope S, opts pgx.TxOptions, fn func(context.Context, *Session[S]) error) error
     WithinTxOptions runs fn inside a transaction opened with opts.
 
-type ScopePolicy[S any] struct {
-	SetupTx    func(ctx context.Context, tx pgx.Tx, scope S) error
-	GuardQuery func(query string) error
-	IsUnscoped func(scope S) bool
+func (r *Runner[S]) WithinWith(ctx context.Context, scope S, runOpts RunOptions[S], fn func(context.Context, *Session[S]) error) error
+    WithinWith runs fn inside a transaction configured with runOpts, including
+    an optional BeforeCommit step executed on a fresh handle before COMMIT.
+
+type RunnerOptions struct {
+	Role          string
+	RequireRole   bool
+	ReadOnly      bool
+	Unscoped      UnscopedMode
+	Timeouts      Timeouts
+	SessionKey    tabula.SessionKey
+	ExposeTx      bool
+	Tracer        tabula.Tracer
+	Metrics       tabula.Metrics
+	Log           tabula.LogConfig
+	Sanitize      func(error) string
+	TagStatements bool
 }
-    ScopePolicy plugs application-specific isolation rules (scope GUC variables,
-    SET LOCAL ROLE, or SQL guards) into a pgx Runner and its Sessions.
+    RunnerOptions configures a role-bound, guarded pgxdriver.Runner.
+
+type ScopePolicy[S any] struct {
+	ManagedVars  []string
+	ScopeVars    func(S) map[string]string
+	ContextVars  func(context.Context) map[string]string
+	IsUnscoped   func(S) bool
+	UnscopedVars map[string]string
+	InactiveVars map[string]string
+	GuardQuery   func(query string) error
+	ScopeLog     func(S) string
+}
+    ScopePolicy configures transaction-local scope variables, context-derived
+    variables, unscoped mode detection and SQL guards for a pgx Runner.
 
 func NoScopePolicy() ScopePolicy[struct{}]
     NoScopePolicy returns an empty ScopePolicy for applications without
@@ -1001,12 +1586,14 @@ func NoScopePolicy() ScopePolicy[struct{}]
 type Session[S any] struct {
 	// Has unexported fields.
 }
-    Session implements tabula.Session[S] over one pgx.Tx.
+    Session implements tabula.Session[S] over one pgx.Tx without exposing the
+    raw transaction.
 
 func NewSession[S any](tx pgx.Tx, scope S, policy ScopePolicy[S]) *Session[S]
-    NewSession wraps an existing pgx.Tx with scope and policy.
+    NewSession wraps an existing pgx.Tx with scope and policy as an unsealed
+    migration handle. Keyed registries require a Runner or keyed DirectPool.
 
-func (s Session) Each(ctx context.Context, query string, args []any, decode func(func(...any) error) error) error
+func (s *Session[S]) Each(ctx context.Context, query string, args []any, decode func(func(...any) error) error) error
     Each streams all rows of query through decode.
 
 func (s *Session[S]) Exec(ctx context.Context, query string, args ...any) (int64, error)
@@ -1021,19 +1608,57 @@ func (s *Session[S]) Returning(ctx context.Context, query string, args []any, de
 
 func (s *Session[S]) Savepoint(ctx context.Context, fn func(context.Context, *Session[S]) error) error
     Savepoint runs fn inside a nested pgx transaction (PostgreSQL SAVEPOINT).
+    The child *Session[S] receives a fresh instance-bound SessionProof and is
+    closed when Savepoint returns.
 
-func (s Session) Scan(ctx context.Context, query string, args []any, dest ...any) error
+func (s *Session[S]) Scan(ctx context.Context, query string, args []any, dest ...any) error
     Scan executes a single-row query and maps pgx.ErrNoRows to sql.ErrNoRows.
 
 func (s *Session[S]) Scope() S
     Scope returns the session's bound scope value.
 
-func (s *Session[S]) Tx() pgx.Tx
-    Tx returns the underlying pgx.Tx for low-level escape hatches.
+func (s *Session[S]) SessionProof() tabula.SessionProof
+    SessionProof returns the instance-bound proof for A4 sealed registries.
+
+func (s *Session[S]) TabulaObserved() tabula.ObserveMask
+    TabulaObserved reports which observability signals this session owns.
 
 func (s *Session[S]) Unscoped() bool
     Unscoped reports whether this session bypasses row-level scope predicates.
 
+type Shared[S any] struct {
+	// Has unexported fields.
+}
+    Shared exposes scoped and unscoped Session handles sharing a single pgx
+    transaction and role. Before every user statement on a child handle,
+    the complete managed GUC state is reapplied in one batch.
+
+func (s *Shared[S]) Scoped(scope S) *Session[S]
+    Scoped returns a scoped Session handle sharing this transaction.
+
+func (s *Shared[S]) Unscoped() *Session[S]
+    Unscoped returns an unscoped Session handle sharing this transaction.
+
+type Timeouts struct {
+	Lock              time.Duration
+	Statement         time.Duration
+	IdleInTransaction time.Duration
+	Transaction       time.Duration
+}
+    Timeouts configures per-runner PostgreSQL transaction-local timeouts and an
+    optional Go context deadline covering the entire attempt.
+
+type UnscopedMode uint8
+    UnscopedMode controls whether a Runner permits unscoped sessions.
+
+const (
+	// UnscopedDenied rejects every unscoped transaction before BEGIN (default).
+	UnscopedDenied UnscopedMode = iota
+	// UnscopedReadOnly permits unscoped sessions only in READ ONLY transactions.
+	UnscopedReadOnly
+	// UnscopedReadWrite permits unscoped sessions in read-only and read-write transactions.
+	UnscopedReadWrite
+)
 ```
 
 ## postgresfixture
@@ -1136,6 +1761,10 @@ workloads. It checks schema alignment, snapshots database catalogs, compares
 direct grants, trials revocations, classifies policies and tests RLS behavior.
 
 FUNCTIONS
+
+func CheckLoginRole(ctx context.Context, db *sql.DB, exp LoginRoleExpectation) ([]string, error)
+    CheckLoginRole audits exp.Role on db and returns sorted human-readable
+    violation lines. An empty slice indicates a compliant login role.
 
 func CheckPolicyCoverage(ctx context.Context, db *sql.DB, work RoleStatements) ([]string, error)
     CheckPolicyCoverage reads pg_policy for each required command. It checks
@@ -1242,6 +1871,35 @@ type BehaviorStatement struct {
 }
     BehaviorStatement executes once per role and scope, with bound arguments.
 
+type CallSite struct {
+	Package  string
+	File     string
+	Line     int
+	Symbol   string
+	Category string `json:",omitempty"`
+	Escaped  bool   `json:",omitempty"`
+}
+    CallSite records one resolved reference or invocation of a CallTarget.
+    Escaped is true when a function or method is referenced as a value rather
+    than called directly.
+
+type CallTarget struct {
+	Package  string
+	Receiver string `json:",omitempty"`
+	Name     string
+	Field    bool   `json:",omitempty"`
+	Category string `json:",omitempty"`
+}
+    CallTarget matches a Go package-level function (Receiver == ""), method
+    (Receiver != ""), or struct field (Field != "") by canonical package path
+    and symbol name, independent of import aliases or generic instantiations.
+
+func DefaultSecurityCallTargets() []CallTarget
+    DefaultSecurityCallTargets returns the v0.3.1 security-review call targets:
+    session keys, registry sealing, proof signing, keyed runner/Direct
+    factories, nested-transaction marker helpers, and both drivers' raw
+    transaction access.
+
 type Catalog struct {
 	Policies []Policy
 	ForceRLS []Relation
@@ -1316,9 +1974,31 @@ type InventoryConfig struct {
 	Tests      bool
 	Methods    []SQLMethod
 	Exceptions map[string]string
+	// CallTargets collects typed references to package-level functions, methods,
+	// and struct fields for review (reported in SQLInventory.CallSites).
+	CallTargets []CallTarget
+	// AuditSecurityCalls adds DefaultSecurityCallTargets() to CallTargets.
+	AuditSecurityCalls bool
 }
-    InventoryConfig selects buildable Go packages and reviewed site exceptions.
-    Patterns default to ./... in Dir. Tags use the Go build tag syntax.
+    InventoryConfig selects buildable Go packages, SQL methods, call targets,
+    and reviewed site exceptions. Patterns default to ./... in Dir. Tags use the
+    Go build tag syntax.
+
+type LoginRoleExpectation struct {
+	// Role is the PostgreSQL login role name to audit (required).
+	Role string
+	// MemberOf is the exact set of roles that Role is allowed to be a direct
+	// member of.
+	MemberOf []string
+	// Schemas lists the schemas where Role must not have CREATE privilege.
+	// Defaults to ["public"] when empty.
+	Schemas []string
+}
+    LoginRoleExpectation configures PostgreSQL login-role hygiene verification
+    (A8). A compliant application login role has LOGIN NOINHERIT, no privileged
+    attributes, exact expected role memberships (the NOLOGIN roles it switches
+    into via SET LOCAL ROLE), no direct table or column grants, owns no database
+    objects, and cannot CREATE in the selected schemas.
 
 type MinimizeConfig struct {
 	Role       string
@@ -1436,6 +2116,14 @@ type Relation struct{ Schema, Table string }
 type RoleStatements map[string][]Statement
     RoleStatements maps each execution role to its own named probes.
 
+func (r RoleStatements) AddDefinitions(role string, defs ...tabula.Definition)
+    AddDefinitions appends every statement from defs (in deterministic sorted
+    order, including C1 count_by_<col> statements) to role's workload.
+
+func (r RoleStatements) AddViews(role string, views ...tabula.ViewDefinition)
+    AddViews appends every registered statement from views (including all C3
+    composed-query variants) to role's workload without manual listing.
+
 type RuntimeProbe struct {
 	BehaviorStatement
 	Vars   map[string]string
@@ -1450,28 +2138,45 @@ type SQLBinding struct {
 	Roles    []string
 	Access   []PolicyAccess
 	Variants []Statement
+	Prefix   string `json:",omitempty"`
 	Skip     bool
 }
     SQLBinding assigns one inventoried site to its execution roles. Dynamic
     builders require reviewed named variants. Skip requires a registered
-    exception.
+    exception. Composed-query sites (Kind == "composed_query") expand
+    automatically from registered ViewDefinitions or snapshot definitions passed
+    to BindRolesWithDefinitions without manual variant listing.
 
 type SQLInventory struct {
-	Sites    []SQLSite
-	Findings []string
+	Sites     []SQLSite
+	CallSites []CallSite `json:",omitempty"`
+	Findings  []string
 }
-    SQLInventory retains reviewed sites and reports unreviewed dynamic SQL and
-    stale exceptions.
+    SQLInventory retains reviewed sites, typed security/factory call sites,
+    and reports unreviewed dynamic SQL and stale exceptions.
 
 func CollectSQL(ctx context.Context, cfg InventoryConfig) (SQLInventory, error)
     CollectSQL resolves Go types and constants using the installed Go toolchain,
-    including aliases and imported constants. Escaping method values are
-    dynamic sites. Run it once per build configuration whose SQL belongs in the
-    inventory.
+    including aliases and imported constants. It recognizes View.DefineQuery,
+    View.TryDefineQuery, and single-table aggregate calls (Max, Min, Sum,
+    Avg, CountBy, Exists) as static sites when their key or column is
+    compile-time constant, and collects typed call sites for CallTargets
+    / AuditSecurityCalls. Escaping function or method values are flagged
+    accordingly.
 
 func (inv SQLInventory) BindRoles(bindings map[string]SQLBinding) (RoleStatements, error)
     BindRoles produces a workload from the collected SQL. Missing and stale
     assignments, unreviewed dynamic sites and empty workloads fail validation.
+
+func (inv SQLInventory) BindRolesWithDefinitions(
+	bindings map[string]SQLBinding,
+	defs []tabula.Definition,
+	views []tabula.ViewDefinition,
+) (RoleStatements, error)
+    BindRolesWithDefinitions is BindRoles with table Definitions and
+    ViewDefinitions (including C3 composed-query variants and C1 aggregates)
+    so composed-query and aggregate sites expand automatically without manual
+    listing.
 
 type SQLMethod struct {
 	Receiver, Method string
@@ -1486,11 +2191,13 @@ type SQLSite struct {
 	Line             int
 	Receiver, Method string
 	SQL              string `json:",omitempty"`
+	QueryKey         string `json:",omitempty"`
+	Kind             string `json:",omitempty"`
 	Dynamic          bool   `json:",omitempty"`
 	Exception        string `json:",omitempty"`
 }
-    SQLSite describes a static or dynamic call. ID is independent of line
-    numbers.
+    SQLSite describes a static or dynamic SQL call, composed query definition,
+    or single-table aggregate call. ID is independent of line numbers.
 
 type Statement struct {
 	Name   string
@@ -1508,8 +2215,8 @@ type Statement struct {
 ```text
 package stdsql // import "github.com/0xJean/tabula/stdsql"
 
-Package stdsql provides ready-to-use database/sql transaction sessions,
-scope/RLS plug-ins, savepoints, and read-only Direct pools for tabula.
+Package stdsql provides role-bound database/sql transaction runners, guarded
+sessions, scope/RLS policies, savepoints, and read-only Direct pools for tabula.
 It depends only on the Go standard library and github.com/0xJean/tabula.
 
 FUNCTIONS
@@ -1524,15 +2231,27 @@ func SetLocalRole(ctx context.Context, tx *sql.Tx, role string) error
 
 TYPES
 
+type DirectOption func(*directConfig)
+    DirectOption customizes a read-only DirectPool created by Direct.
+
+func DirectObserver(obs *tabula.Observer) DirectOption
+    DirectObserver attaches a session-level Observer to a DirectPool.
+
+func DirectSessionKey(key tabula.SessionKey) DirectOption
+    DirectSessionKey binds a SessionKey to a DirectPool so every pointer
+    returned by DirectPool.Session carries a valid SessionProof for A4 sealed
+    registries.
+
 type DirectPool[S any] struct {
 	// Has unexported fields.
 }
     DirectPool owns a database/sql pool of read-only PostgreSQL connections.
 
-func Direct[S any](driverName, postgresURL string, policy ScopePolicy[S]) (*DirectPool[S], error)
+func Direct[S any](driverName, postgresURL string, policy ScopePolicy[S], opts ...DirectOption) (*DirectPool[S], error)
     Direct opens a dedicated read-only pool from a PostgreSQL URL and a
     registered database/sql driver (for example "postgres"). Call Session to
-    bind each request and Close at shutdown. SetupTx requires a Runner.
+    bind each request and Close at shutdown. Managed transaction-local variables
+    require a Runner.
 
 func (p *DirectPool[S]) Close() error
     Close releases the underlying connection pool.
@@ -1557,56 +2276,186 @@ func (p *DirectPool[S]) SetMaxOpenConns(n int)
 func (p *DirectPool[S]) Stats() sql.DBStats
     Stats returns database/sql pool statistics.
 
+type RawSession[S any] struct {
+	// Has unexported fields.
+}
+    RawSession wraps a *Session[S] with explicit raw *sql.Tx escape access.
+    It is constructed only when RunnerOptions.ExposeTx is true via
+    Runner.WithinRaw.
+
+func (s *RawSession[S]) Each(ctx context.Context, query string, args []any, decode func(func(...any) error) error) error
+    Each streams all rows of query through decode.
+
+func (s *RawSession[S]) Exec(ctx context.Context, query string, args ...any) (int64, error)
+    Exec executes a statement and returns its affected row count.
+
+func (s *RawSession[S]) ReadOnly() bool
+    ReadOnly reports whether this session was opened as a READ ONLY transaction.
+
+func (s *RawSession[S]) Returning(ctx context.Context, query string, args []any, dest ...any) error
+    Returning executes a write with RETURNING and scans the returned row into
+    dest.
+
+func (s *RawSession[S]) Savepoint(ctx context.Context, name string, fn func(context.Context) error) error
+    Savepoint runs fn inside a PostgreSQL SAVEPOINT on the underlying
+    transaction.
+
+func (s *RawSession[S]) Scan(ctx context.Context, query string, args []any, dest ...any) error
+    Scan executes a single-row query and scans into dest.
+
+func (s *RawSession[S]) Scope() S
+    Scope returns the session's bound scope value.
+
+func (s *RawSession[S]) Session() *Session[S]
+    Session returns the underlying guarded *Session[S].
+
+func (s *RawSession[S]) SessionProof() tabula.SessionProof
+    SessionProof returns the instance-bound proof for this *RawSession[S].
+
+func (s *RawSession[S]) TabulaObserved() tabula.ObserveMask
+    TabulaObserved reports which observability signals this session owns.
+
+func (s *RawSession[S]) Tx() *sql.Tx
+    Tx returns the underlying *sql.Tx. Only available on *RawSession[S].
+
+func (s *RawSession[S]) Unscoped() bool
+    Unscoped reports whether this session bypasses row-level scope predicates.
+
+type RunOptions[S any] struct {
+	TxOptions    *sql.TxOptions
+	BeforeCommit func(context.Context, *Session[S]) error
+}
+    RunOptions customizes a single runner transaction invocation, including an
+    optional BeforeCommit step that receives a fresh session handle after the
+    body handle is closed.
+
 type Runner[S any] struct {
 	// Has unexported fields.
 }
-    Runner opens scoped PostgreSQL transactions on a *sql.DB and binds them to
-    Session[S] handles.
+    Runner opens role-bound, guarded PostgreSQL transactions on a *sql.DB and
+    binds them to Session[S] handles.
 
-func NewRunner[S any](db *sql.DB, policy ScopePolicy[S]) *Runner[S]
-    NewRunner creates a Runner backed by db and policy.
+func NewRunner[S any](db *sql.DB, policy ScopePolicy[S], opts RunnerOptions) (*Runner[S], error)
+    NewRunner validates policy and opts and creates a guarded Runner backed by
+    db.
 
 func (r *Runner[S]) Within(ctx context.Context, scope S, fn func(context.Context, *Session[S]) error) error
     Within runs fn in a read-write transaction with the database default
-    isolation.
+    isolation. On a ReadOnly runner, Within returns tabula.ErrReadOnly before
+    BEGIN.
 
 func (r *Runner[S]) WithinIsolation(ctx context.Context, scope S, level sql.IsolationLevel, fn func(context.Context, *Session[S]) error) error
-    WithinIsolation runs fn in a transaction with the requested isolation level.
+    WithinIsolation runs fn in a read-write transaction with the requested
+    isolation level.
 
-func (r *Runner[S]) WithinOptions(ctx context.Context, scope S, opts *sql.TxOptions, fn func(context.Context, *Session[S]) error) (err error)
-    WithinOptions runs fn inside a transaction started with opts. SetupTx runs
-    immediately after BeginTx. Errors and panics roll back automatically.
+func (r *Runner[S]) WithinOptions(ctx context.Context, scope S, opts *sql.TxOptions, fn func(context.Context, *Session[S]) error) error
+    WithinOptions runs fn inside a transaction started with opts.
+
+func (r *Runner[S]) WithinRaw(ctx context.Context, scope S, fn func(context.Context, *RawSession[S]) error) error
+    WithinRaw runs fn with a *RawSession[S] exposing Tx() *sql.Tx. Requires
+    RunnerOptions.ExposeTx == true; otherwise returns tabula.ErrCapabilityDenied
+    before BEGIN.
+
+func (r *Runner[S]) WithinRawOptions(ctx context.Context, scope S, opts *sql.TxOptions, fn func(context.Context, *RawSession[S]) error) error
+    WithinRawOptions runs fn with a *RawSession[S] under explicit sql.TxOptions.
 
 func (r *Runner[S]) WithinReadOnly(ctx context.Context, scope S, fn func(context.Context, *Session[S]) error) error
     WithinReadOnly runs fn in a READ ONLY transaction.
 
-type ScopePolicy[S any] struct {
-	// SetupTx runs once right after BeginTx inside the transaction (for example
-	// calling SetLocalRole and SetLocalConfig for PostgreSQL RLS).
-	SetupTx func(ctx context.Context, tx *sql.Tx, scope S) error
-	// GuardQuery optionally inspects every SQL string before execution and
-	// rejects forbidden statements (e.g. SET ROLE or set_config from adapters).
-	GuardQuery func(query string) error
-	// IsUnscoped reports whether scope represents an unscoped (cross-partition) call.
-	IsUnscoped func(scope S) bool
+func (r *Runner[S]) WithinRetry(ctx context.Context, scope S, cfg tabula.RetryConfig, fn func(context.Context, *Session[S]) error) error
+    WithinRetry runs the full transaction attempt up to cfg.MaxAttempts times
+    via tabula.Retry whenever the attempt fails with a retryable error.
+    The callback must be idempotent apart from database writes.
+
+func (r *Runner[S]) WithinRetryWith(ctx context.Context, scope S, cfg tabula.RetryConfig, runOpts RunOptions[S], fn func(context.Context, *Session[S]) error) error
+    WithinRetryWith is WithinRetry with explicit RunOptions (isolation,
+    read-only, BeforeCommit). Each retry that completes fn runs BeforeCommit
+    once.
+
+func (r *Runner[S]) WithinShared(ctx context.Context, fn func(context.Context, *Shared[S]) error) error
+    WithinShared opens one transaction (read-write unless the runner is ReadOnly
+    or opts specifies ReadOnly) that can switch between scoped and unscoped
+    sessions via Shared.Scoped and Shared.Unscoped.
+
+func (r *Runner[S]) WithinSharedOptions(ctx context.Context, opts *sql.TxOptions, fn func(context.Context, *Shared[S]) error) error
+    WithinSharedOptions is WithinShared with explicit sql.TxOptions.
+
+func (r *Runner[S]) WithinWith(ctx context.Context, scope S, runOpts RunOptions[S], fn func(context.Context, *Session[S]) error) error
+    WithinWith runs fn inside a transaction configured with runOpts, including
+    an optional BeforeCommit step executed on a fresh handle before COMMIT.
+
+type RunnerOptions struct {
+	// Role sets SET LOCAL ROLE "<Role>" immediately after BEGIN when non-empty.
+	Role string
+	// RequireRole fails NewRunner when Role is empty.
+	RequireRole bool
+	// ReadOnly restricts this runner to READ ONLY transactions; read-write
+	// requests fail closed with tabula.ErrReadOnly before BEGIN.
+	ReadOnly bool
+	// Unscoped controls whether unscoped sessions are denied, read-only, or
+	// read-write.
+	Unscoped UnscopedMode
+	// Timeouts bounds lock waits, statement duration, idle-in-transaction duration
+	// and whole-attempt Go context duration.
+	Timeouts Timeouts
+	// SessionKey signs every Session created by this runner for A4 sealed
+	// registries.
+	SessionKey tabula.SessionKey
+	// ExposeTx enables WithinRaw / WithinRawOptions returning *RawSession[S]
+	// with Tx() *sql.Tx access. Default false removes raw transaction escape.
+	ExposeTx bool
+	// Tracer, Metrics, Log, Sanitize and TagStatements configure session-level
+	// observability (B1/B3) for both descriptor and hand-written SQL.
+	Tracer        tabula.Tracer
+	Metrics       tabula.Metrics
+	Log           tabula.LogConfig
+	Sanitize      func(error) string
+	TagStatements bool
 }
-    ScopePolicy plugs application-specific isolation rules (scope GUC variables,
-    SET LOCAL ROLE, statement timeouts, or SQL guards) into a Runner and its
-    Sessions without coupling tabula to any particular domain model.
+    RunnerOptions configures a role-bound, guarded stdsql.Runner.
+
+type ScopePolicy[S any] struct {
+	// ManagedVars declares the complete set of custom dotted GUC names managed by
+	// this policy (for example "example.scope", "example.scope_mode",
+	// "example.request_id"). All names are validated at construction and
+	// protected automatically by the built-in session guard.
+	ManagedVars []string
+	// ScopeVars produces managed GUC key/value pairs for a scoped transaction.
+	ScopeVars func(S) map[string]string
+	// ContextVars produces managed GUC key/value pairs derived from ctx.
+	ContextVars func(context.Context) map[string]string
+	// IsUnscoped reports whether scope represents an unscoped call.
+	IsUnscoped func(S) bool
+	// UnscopedVars holds managed GUC key/value pairs applied in unscoped mode.
+	UnscopedVars map[string]string
+	// InactiveVars optionally specifies the inactive value written for managed
+	// variables belonging to the opposite mode when switching inside WithinShared.
+	// Unspecified managed variables default to "".
+	InactiveVars map[string]string
+	// GuardQuery optionally inspects every user SQL string before execution; it
+	// composes with the runner's built-in session guard.
+	GuardQuery func(query string) error
+	// ScopeLog optionally formats scope values for session-level telemetry.
+	ScopeLog func(S) string
+}
+    ScopePolicy configures transaction-local scope variables, context-derived
+    variables, unscoped mode detection and SQL guards for a Runner.
 
 func NoScopePolicy() ScopePolicy[struct{}]
     NoScopePolicy returns an empty ScopePolicy for applications that do not use
-    row-level tenant scoping.
+    row-level scoping.
 
 type Session[S any] struct {
 	// Has unexported fields.
 }
-    Session implements tabula.Session[S] over one database/sql *sql.Tx.
+    Session implements tabula.Session[S] over one database/sql *sql.Tx without
+    exposing the raw transaction.
 
 func NewSession[S any](tx *sql.Tx, scope S, policy ScopePolicy[S]) *Session[S]
-    NewSession wraps an existing *sql.Tx with scope and policy.
+    NewSession wraps an existing *sql.Tx with scope and policy as an unsealed
+    migration handle. Keyed registries require a Runner or keyed DirectPool.
 
-func (s Session) Each(ctx context.Context, query string, args []any, decode func(func(...any) error) error) error
+func (s *Session[S]) Each(ctx context.Context, query string, args []any, decode func(func(...any) error) error) error
     Each streams all rows of query through decode.
 
 func (s *Session[S]) Exec(ctx context.Context, query string, args ...any) (int64, error)
@@ -1624,18 +2473,64 @@ func (s *Session[S]) Savepoint(ctx context.Context, name string, fn func(context
     made inside fn are rolled back to the savepoint while keeping the enclosing
     transaction usable; on success the savepoint is released.
 
-func (s Session) Scan(ctx context.Context, query string, args []any, dest ...any) error
+func (s *Session[S]) Scan(ctx context.Context, query string, args []any, dest ...any) error
     Scan executes a single-row query and scans into dest.
 
 func (s *Session[S]) Scope() S
     Scope returns the session's bound scope value.
 
-func (s *Session[S]) Tx() *sql.Tx
-    Tx returns the underlying *sql.Tx for low-level escape hatches.
+func (s *Session[S]) SessionProof() tabula.SessionProof
+    SessionProof returns the instance-bound proof for A4 sealed registries.
+
+func (s *Session[S]) TabulaObserved() tabula.ObserveMask
+    TabulaObserved reports which observability signals this session owns.
 
 func (s *Session[S]) Unscoped() bool
     Unscoped reports whether this session bypasses row-level scope predicates.
 
+type Shared[S any] struct {
+	// Has unexported fields.
+}
+    Shared exposes scoped and unscoped Session handles sharing a single
+    transaction and role. Before every user statement on a child handle,
+    the complete managed GUC state is reapplied in one batch (resetting the
+    opposite mode's variables to their declared inactive value). This adds one
+    round trip per statement and is intended for background or batch work rather
+    than latency-sensitive request hot paths.
+
+func (s *Shared[S]) Scoped(scope S) *Session[S]
+    Scoped returns a scoped Session handle sharing this transaction.
+
+func (s *Shared[S]) Unscoped() *Session[S]
+    Unscoped returns an unscoped Session handle sharing this transaction. It
+    obeys the runner's UnscopedMode; when disallowed, operations on the returned
+    handle fail closed with tabula.ErrReadOnly or tabula.ErrCapabilityDenied.
+
+type Timeouts struct {
+	// Lock maps to PostgreSQL lock_timeout via set_config(..., true).
+	Lock time.Duration
+	// Statement maps to PostgreSQL statement_timeout via set_config(..., true).
+	Statement time.Duration
+	// IdleInTransaction maps to PostgreSQL idle_in_transaction_session_timeout.
+	IdleInTransaction time.Duration
+	// Transaction sets a Go context deadline before BEGIN for the whole attempt.
+	// Zero inherits the caller's context; an earlier caller deadline wins.
+	Transaction time.Duration
+}
+    Timeouts configures per-runner PostgreSQL transaction-local timeouts and an
+    optional Go context deadline covering the entire attempt.
+
+type UnscopedMode uint8
+    UnscopedMode controls whether a Runner permits unscoped sessions.
+
+const (
+	// UnscopedDenied rejects every unscoped transaction before BEGIN (default).
+	UnscopedDenied UnscopedMode = iota
+	// UnscopedReadOnly permits unscoped sessions only in READ ONLY transactions.
+	UnscopedReadOnly
+	// UnscopedReadWrite permits unscoped sessions in read-only and read-write transactions.
+	UnscopedReadWrite
+)
 ```
 
 ## CLI
@@ -1644,6 +2539,7 @@ func (s *Session[S]) Unscoped() bool
 Usage: tabula <command> [flags]
   tabula check           Prepare and explain statements from a SQL snapshot.
   tabula check-rls       Check row-level security settings on tables.
+  tabula check-login-role Verify login role hygiene (NOINHERIT, memberships, grants, ownership, CREATE).
   tabula inventory       Collect SQL call sites and their role assignments from Go source.
   tabula verify-roles    Prepare and explain each role's workload.
   tabula grants          Compare direct grants with a manifest and report reconciliation SQL.
@@ -1685,6 +2581,20 @@ Usage of check-rls:
         comma-separated table names that must have RLS enabled (default: all RLS tables in schema)
 ```
 
+### tabula check-login-role
+
+```text
+Usage of check-login-role:
+  -dsn string
+        PostgreSQL DSN (defaults to TABULA_DSN)
+  -member-of string
+        comma-separated exact role memberships allowed for the login role
+  -role string
+        PostgreSQL login role name to audit (required)
+  -schemas string
+        comma-separated schemas where CREATE must be denied (default "public")
+```
+
 ### tabula inventory
 
 ```text
@@ -1693,6 +2603,8 @@ Usage of inventory:
         emit role workload using site assignments in this JSON file
   -config string
         path to command-specific JSON configuration
+  -snapshot string
+        optional sqlcheck snapshot file to expand composed-query variants automatically
 ```
 
 ### tabula verify-roles

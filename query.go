@@ -3,6 +3,7 @@ package tabula
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 )
@@ -40,14 +41,20 @@ type KeysetListing struct {
 }
 
 // KeysetPage is one cursor-paginated slice plus whether another page exists.
+// When HasMore is true, Next carries the cursor values extracted from the last
+// returned item in tuple order for the subsequent After call.
 type KeysetPage[T any] struct {
 	Items   []T
 	HasMore bool
+	Next    []any
 }
 
 // ListKeyset reads one cursor-paginated page of undeleted rows matching where
 // in deterministic (SortColumn, key...) order without OFFSET.
 func (r *Rows[T, K, S]) ListKeyset(ctx context.Context, where func(*Filter), l KeysetListing) (KeysetPage[T], error) {
+	if r.bindErr != nil {
+		return KeysetPage[T]{}, r.bindErr
+	}
 	if l.Limit <= 0 {
 		panic(r.t.prefix() + ".ListKeyset " + r.t.name + ": Limit must be positive")
 	}
@@ -112,16 +119,22 @@ func (r *Rows[T, K, S]) ListKeyset(ctx context.Context, where func(*Filter), l K
 		return KeysetPage[T]{}, err
 	}
 	hasMore := false
+	var nextCursor []any
 	if len(rows) > l.Limit {
 		hasMore = true
 		rows = rows[:l.Limit]
+		last := rows[len(rows)-1]
+		nextCursor = make([]any, len(tupleIdx))
+		for i, idx := range tupleIdx {
+			nextCursor[i] = reflect.ValueOf(r.t.cols[idx].field(&last)).Elem().Interface()
+		}
 	}
 	if l.Lock != LockNone {
 		for _, row := range rows {
 			r.remember(row)
 		}
 	}
-	return KeysetPage[T]{Items: rows, HasMore: hasMore}, nil
+	return KeysetPage[T]{Items: rows, HasMore: hasMore, Next: nextCursor}, nil
 }
 
 // LockMode selects the PostgreSQL row-lock clause of a listing.

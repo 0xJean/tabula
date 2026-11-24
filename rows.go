@@ -75,12 +75,18 @@ func (r *Rows[T, K, S]) byKey(key K, lock bool) (string, []any) {
 
 // Get reads the undeleted row key without a lock; nil when missing.
 func (r *Rows[T, K, S]) Get(ctx context.Context, key K) (*T, error) {
+	if r.bindErr != nil {
+		return nil, r.bindErr
+	}
 	query, args := r.byKey(key, false)
 	return r.one(ctx, "get", stmtMeta{key: r.t.name + ".get"}, query, args)
 }
 
 // Lock reads the undeleted row key FOR UPDATE; nil when missing.
 func (r *Rows[T, K, S]) Lock(ctx context.Context, key K) (*T, error) {
+	if r.bindErr != nil {
+		return nil, r.bindErr
+	}
 	if r.readOnly() {
 		return nil, ErrReadOnly
 	}
@@ -95,6 +101,9 @@ func (r *Rows[T, K, S]) Lock(ctx context.Context, key K) (*T, error) {
 // GetBy reads the first undeleted row (in Order) matching where; nil when
 // missing. where is a static predicate over bound "?" markers.
 func (r *Rows[T, K, S]) GetBy(ctx context.Context, where string, values ...any) (*T, error) {
+	if r.bindErr != nil {
+		return nil, r.bindErr
+	}
 	f := r.Scope()
 	f.And(where, values...)
 	query := r.t.stmt.list + f.Where() + r.orderBy("") + " LIMIT 1"
@@ -104,6 +113,9 @@ func (r *Rows[T, K, S]) GetBy(ctx context.Context, where string, values ...any) 
 // LockBy reads and locks (FOR UPDATE) the first undeleted row (in Order)
 // matching where; nil when missing. The row's once columns are remembered.
 func (r *Rows[T, K, S]) LockBy(ctx context.Context, where string, values ...any) (*T, error) {
+	if r.bindErr != nil {
+		return nil, r.bindErr
+	}
 	if r.readOnly() {
 		return nil, ErrReadOnly
 	}
@@ -120,6 +132,9 @@ func (r *Rows[T, K, S]) LockBy(ctx context.Context, where string, values ...any)
 // GetMany reads all undeleted rows whose key is in keys within the session
 // scope. An empty keys slice returns nil, nil without issuing SQL.
 func (r *Rows[T, K, S]) GetMany(ctx context.Context, keys []K) ([]T, error) {
+	if r.bindErr != nil {
+		return nil, r.bindErr
+	}
 	if len(keys) == 0 {
 		return nil, nil
 	}
@@ -135,6 +150,9 @@ func (r *Rows[T, K, S]) GetMany(ctx context.Context, keys []K) ([]T, error) {
 // keys in deterministic ascending key order to avoid deadlocks across
 // concurrent transactions. Once columns of every locked row are remembered.
 func (r *Rows[T, K, S]) LockMany(ctx context.Context, keys []K) ([]T, error) {
+	if r.bindErr != nil {
+		return nil, r.bindErr
+	}
 	if r.readOnly() {
 		return nil, ErrReadOnly
 	}
@@ -226,9 +244,14 @@ func (r *Rows[T, K, S]) bindSingleKeys(keys []K) (any, error) {
 }
 
 // Scope starts a Filter seeded with the session scope predicate (none on an
-// unscoped session) and soft-delete predicate.
+// unscoped session) and soft-delete predicate. A rejected binding yields a
+// FALSE predicate without consulting the session.
 func (r *Rows[T, K, S]) Scope() *Filter {
 	f := NewFilter()
+	if r.bindErr != nil {
+		f.And("FALSE")
+		return f
+	}
 	if r.t.scope >= 0 && !r.s.Unscoped() {
 		f.And(r.name(r.t.scope)+" = ?", r.t.reg.scopeValue(r.s.Scope()))
 	}
@@ -248,14 +271,34 @@ func (r *Rows[T, K, S]) orderBy(order string) string {
 	return " ORDER BY " + order
 }
 
+// Exists reports whether any undeleted row in the session's row scope matches
+// where (a Filter builder callback; nil checks whether any live row exists).
+func (r *Rows[T, K, S]) Exists(ctx context.Context, where func(*Filter)) (bool, error) {
+	if r.bindErr != nil {
+		return false, r.bindErr
+	}
+	f := r.Scope()
+	if where != nil {
+		where(f)
+	}
+	return r.execExists(ctx, f)
+}
+
 // ExistsBy reports whether any undeleted row in the session's row scope
 // matches where (a static predicate over bound "?" markers).
 func (r *Rows[T, K, S]) ExistsBy(ctx context.Context, where string, values ...any) (bool, error) {
-	ctx, span := r.start(ctx, "exists", r.t.name+".exists")
+	if r.bindErr != nil {
+		return false, r.bindErr
+	}
 	f := r.Scope()
 	if where != "" {
 		f.And(where, values...)
 	}
+	return r.execExists(ctx, f)
+}
+
+func (r *Rows[T, K, S]) execExists(ctx context.Context, f *Filter) (bool, error) {
+	ctx, span := r.start(ctx, "exists", stmtMeta{key: r.t.name + ".exists"}, nil)
 	var found bool
 	query := "SELECT EXISTS (SELECT 1 FROM " + r.t.name + " WHERE true" + f.Where() + ")"
 	args := f.Args()
@@ -275,6 +318,9 @@ func (r *Rows[T, K, S]) ExistsBy(ctx context.Context, where string, values ...an
 // according to l.Count (CountExact default, CountNone returns -1, CountEstimate
 // reads PostgreSQL pg_class.reltuples).
 func (r *Rows[T, K, S]) List(ctx context.Context, where func(*Filter), l Listing) ([]T, int64, error) {
+	if r.bindErr != nil {
+		return nil, 0, r.bindErr
+	}
 	if l.Lock != LockNone && r.readOnly() {
 		return nil, 0, ErrReadOnly
 	}
@@ -304,6 +350,9 @@ func (r *Rows[T, K, S]) List(ctx context.Context, where func(*Filter), l Listing
 
 // Find reads undeleted rows matching where without running COUNT(*).
 func (r *Rows[T, K, S]) Find(ctx context.Context, where func(*Filter), l Listing) ([]T, error) {
+	if r.bindErr != nil {
+		return nil, r.bindErr
+	}
 	f := r.Scope()
 	if where != nil {
 		where(f)
@@ -314,6 +363,9 @@ func (r *Rows[T, K, S]) Find(ctx context.Context, where func(*Filter), l Listing
 // Iter streams a Find query, applying the same scope, ordering, paging and lock
 // mode. Breaking the range closes the cursor. Locked rows retain once-column snapshots.
 func (r *Rows[T, K, S]) Iter(ctx context.Context, where func(*Filter), l Listing) iter.Seq2[T, error] {
+	if r.bindErr != nil {
+		return failedIter[T](r.bindErr)
+	}
 	return func(yield func(T, error) bool) {
 		f := r.Scope()
 		if where != nil {
@@ -378,8 +430,8 @@ func (r *Rows[T, K, S]) Args(row T) []any {
 
 // Exec runs a hand-written write and confirms its row count (when want >= 0).
 func (r *Rows[T, K, S]) Exec(ctx context.Context, want int64, query string, args ...any) error {
-	if r.readOnly() {
-		return ErrReadOnly
+	if err := r.checkWriteAccess(); err != nil {
+		return err
 	}
 	_, err := r.execWrite(ctx, "exec", r.t.lookupMeta(query, "exec"), query, args, nil, want, want, r.t.reg.rowCountErr())
 	return err
@@ -389,11 +441,44 @@ func (r *Rows[T, K, S]) readOnly() bool {
 	return r.t.readOnly || r.directReadOnly
 }
 
-// CheckWrite validates the table mode and row scope for a write. Driver
-// adapters use it when sending rows through a bulk protocol such as COPY.
-func (r *Rows[T, K, S]) CheckWrite(row *T) error {
+func (r *Rows[T, K, S]) checkWriteAccess() error {
+	if r.bindErr != nil {
+		return r.bindErr
+	}
 	if r.readOnly() {
 		return ErrReadOnly
+	}
+	if r.t.reg != nil && r.t.reg.deny&DenyUnscopedWrites != 0 && r.s.Unscoped() {
+		return ErrCapabilityDenied
+	}
+	return nil
+}
+
+// CheckCopy validates session provenance, write mode, DenyCopy and
+// DenyUnscopedWrites before bulk COPY protocols (such as pgxdriver.CopyFrom)
+// take any empty-input shortcut or touch the driver.
+func (r *Rows[T, K, S]) CheckCopy() error {
+	if r.bindErr != nil {
+		return r.bindErr
+	}
+	if r.readOnly() {
+		return ErrReadOnly
+	}
+	if r.t.reg != nil && r.t.reg.deny&DenyCopy != 0 {
+		return ErrCapabilityDenied
+	}
+	if r.t.reg != nil && r.t.reg.deny&DenyUnscopedWrites != 0 && r.s.Unscoped() {
+		return ErrCapabilityDenied
+	}
+	return nil
+}
+
+// CheckWrite validates session provenance, table mode, unscoped-write policy
+// and row scope for a write. Driver adapters use it when sending rows through
+// a bulk protocol such as COPY.
+func (r *Rows[T, K, S]) CheckWrite(row *T) error {
+	if err := r.checkWriteAccess(); err != nil {
+		return err
 	}
 	if r.t.scope < 0 || r.s.Unscoped() {
 		return nil

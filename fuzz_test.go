@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/0xJean/tabula/internal/pgstmt"
 )
 
 func FuzzParseColumnTag(f *testing.F) {
@@ -144,6 +146,50 @@ func FuzzGuardNoSessionEscape(f *testing.F) {
 		protectedHead := strings.HasPrefix(query, "DO ") || strings.HasPrefix(query, "SET session.") || strings.HasPrefix(query, "SET local.")
 		if err := configured(query); protectedHead && !errors.Is(err, ErrForbiddenStatement) {
 			t.Fatalf("configured guard returned %v for %q, want ErrForbiddenStatement", err, query)
+		}
+	})
+}
+
+func FuzzCompileQueryFragment(f *testing.F) {
+	seeds := []string{
+		"n.title ILIKE $1 OR n.code ILIKE $1",
+		"n.created_at >= $1 AND n.created_at < $2",
+		"n.meta ? $1 OR n.meta ?| $2",
+		"n.tag = '$99' AND n.body = $q$keep $1$q$ AND n.x = $1",
+		"-- comment\nn.active = true",
+		"n.active = true -- no newline",
+		"(n.a = $1",
+		"n.a = $1)",
+		"n.a = $1; DROP TABLE notes",
+		"SET ROLE postgres",
+		"SELECT set_config('app.x', '1', true)",
+		"n.a = $0",
+		"n.a = $2",
+		`n.a = E'it\'s $1' AND n.b = $1`,
+		`/* nested /* $1 */ comment */ n.a = $1`,
+		`/* unterminated`,
+	}
+	for _, s := range seeds {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, fragment string) {
+		cf, err := compileSQLFragment(fragment, true)
+		if err != nil {
+			return
+		}
+		// Any compiled fragment must satisfy GuardNoSessionEscape and survive
+		// arbitrary positive slot rebasing without error or panic.
+		if guardErr := GuardNoSessionEscape(cf.raw); guardErr != nil {
+			t.Fatalf("compiled fragment %q failed session guard: %v", cf.raw, guardErr)
+		}
+		rebased, err := pgstmt.RewriteParams(cf.raw, cf.spans, func(slot int) (int, error) {
+			return slot + 5, nil
+		})
+		if err != nil {
+			t.Fatalf("RewriteParams failed for compiled fragment %q: %v", cf.raw, err)
+		}
+		if _, err := pgstmt.ScanFragment(rebased); err != nil {
+			t.Fatalf("rebased fragment %q failed ScanFragment: %v", rebased, err)
 		}
 	})
 }

@@ -49,8 +49,8 @@ func (r *Rows[T, K, S]) InsertMany(ctx context.Context, rows []T) error {
 // writeMany checks every row before sending any chunk. conflict is the
 // precompiled ON CONFLICT clause, without a single-row RETURNING list.
 func (r *Rows[T, K, S]) writeMany(ctx context.Context, action string, meta stmtMeta, conflict string, rows []T) (int64, error) {
-	if r.readOnly() {
-		return 0, ErrReadOnly
+	if err := r.checkWriteAccess(); err != nil {
+		return 0, err
 	}
 	for i := range rows {
 		if err := r.CheckWrite(&rows[i]); err != nil {
@@ -141,8 +141,8 @@ func (r *Rows[T, K, S]) SaveReturning(ctx context.Context, row *T, columns ...st
 // SoftDelete is a Save of a row whose deleted column is marked deleted
 // (non-nil *time.Time, true bool, or configured DeletedValue).
 func (r *Rows[T, K, S]) SoftDelete(ctx context.Context, row T) error {
-	if r.readOnly() {
-		return ErrReadOnly
+	if err := r.checkWriteAccess(); err != nil {
+		return err
 	}
 	if !r.t.isRowDeleted(&row) {
 		return r.t.reg.notDeletedErr()
@@ -201,8 +201,8 @@ func (r *Rows[T, K, S]) SetWhere(ctx context.Context, row T, columns []string, w
 // Requires TableSpec.AllowDelete = true. Returns the conflict error when zero rows
 // matched (missing or already deleted).
 func (r *Rows[T, K, S]) Delete(ctx context.Context, key K) error {
-	if r.readOnly() {
-		return ErrReadOnly
+	if err := r.checkWriteAccess(); err != nil {
+		return err
 	}
 	if !r.t.allowDelete {
 		panic(r.t.prefix() + ".Delete " + r.t.name + ": table does not enable AllowDelete")
@@ -220,8 +220,8 @@ func (r *Rows[T, K, S]) Delete(ctx context.Context, key K) error {
 // non-empty static predicate over "?" placeholders. Requires TableSpec.AllowDelete = true.
 // Returns the affected row count; zero rows matched is not an error.
 func (r *Rows[T, K, S]) DeleteWhere(ctx context.Context, where string, values ...any) (int64, error) {
-	if r.readOnly() {
-		return 0, ErrReadOnly
+	if err := r.checkWriteAccess(); err != nil {
+		return 0, err
 	}
 	if !r.t.allowDelete {
 		panic(r.t.prefix() + ".DeleteWhere " + r.t.name + ": table does not enable AllowDelete")

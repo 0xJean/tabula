@@ -13,8 +13,20 @@ Send the following details to the maintainers. [Report a vulnerability](https://
 ## Security Design Guarantees
 
 - **Identifiers never come from untrusted input**: table, column, and sort identifiers are
-  validated at definition time (`Define` / `MustOrderSpec`). Dynamic values always bind
-  via numbered PostgreSQL placeholders (`$1..$n`).
+  validated at definition time (`Define` / `MustOrderSpec` / `View.DefineQuery`). Dynamic
+  values always bind via numbered PostgreSQL placeholders (`$1..$n`). Composed query
+  fragments are lexically checked and fuzzed (`FuzzCompileQueryFragment`), and C3 registers
+  all deterministic variants for PostgreSQL `PREPARE`/`EXPLAIN` verification.
+- **Session provenance and capability limits**: registries configured with `SessionKey` or
+  `RequireSealed` + `Registry.Seal(key)` reject foreign, copied, wrapped or unsealed sessions
+  with `ErrForeignSession` before I/O. `RegistryConfig.Deny` enforces `DenyDelete`,
+  `DenyUpsert`, `DenyUnscopedWrites` and `DenyCopy` across derived writes and `CopyFrom`.
+- **Role-bound runners and no default raw `Tx()` escape**: `stdsql.Runner` and
+  `pgxdriver.Runner` bind one PostgreSQL role and timeout policy at construction, validate
+  declared `ManagedVars` and auto-guard them, reject nested runner calls (`ErrNested`), close
+  handles on callback return (`ErrSessionClosed`), and require explicit `ExposeTx: true` for
+  `WithinRaw` / `RawSession.Tx()`. `sqlcheck.CheckLoginRole` and `tabula check-login-role`
+  audit login-role hygiene (`LOGIN NOINHERIT`, memberships, direct grants, ownership, `CREATE`).
 - **Sensitive data is never logged by default**: `LogConfig.Values` defaults to
   `ValuesNever`. Columns tagged `db:"...,secret"` and statements registered with
   `tabula.Secret()` are redacted as `"[redacted]"` even when `ValuesAllowed` is enabled.

@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
@@ -57,11 +56,13 @@ func TestPgxRunnerAndTabulaIntegration(t *testing.T) {
 	tbl := tabula.Define(reg, tabula.TableSpec[item, int64]{Name: schema + ".items", Order: "id ASC"})
 	roTbl := tabula.Define(reg, tabula.TableSpec[item, int64]{Name: schema + ".items", ReadOnly: true})
 
-	runner := pgxdriver.NewRunner(pool, pgxdriver.ScopePolicy[tenant]{
-		SetupTx: func(ctx context.Context, tx pgx.Tx, scope tenant) error {
-			return pgxdriver.SetLocalConfig(ctx, tx, "app.current_tenant", string(scope))
+	runner, err := pgxdriver.NewRunner(pool, pgxdriver.ScopePolicy[tenant]{
+		ManagedVars: []string{"app.current_tenant"},
+		ScopeVars: func(scope tenant) map[string]string {
+			return map[string]string{"app.current_tenant": string(scope)}
 		},
-	})
+	}, pgxdriver.RunnerOptions{})
+	require.NoError(t, err)
 
 	require.NoError(t, runner.Within(ctx, "t1", func(ctx context.Context, s *pgxdriver.Session[tenant]) error {
 		r := tbl.Bind(s)
@@ -207,7 +208,9 @@ func TestDirectAndCopyTypes(t *testing.T) {
 	tbl := tabula.Define(reg, tabula.TableSpec[row, int64]{Name: name})
 	input := row{ID: 1, Tenant: "one", Counts: []int32{}, Weights: []float64{0.125}, Enabled: []enabled{true, false}, Address: netip.MustParseAddr("2001:db8::5"), Prefix: netip.MustParsePrefix("10.0.0.0/8")}
 	policy := pgxdriver.ScopePolicy[scope]{}
-	require.NoError(t, pgxdriver.NewRunner(db, policy).Within(ctx, "one", func(ctx context.Context, s *pgxdriver.Session[scope]) error {
+	runner, err := pgxdriver.NewRunner(db, policy, pgxdriver.RunnerOptions{})
+	require.NoError(t, err)
+	require.NoError(t, runner.Within(ctx, "one", func(ctx context.Context, s *pgxdriver.Session[scope]) error {
 		wrong := input
 		wrong.ID = 2
 		wrong.Tenant = "two"
@@ -257,6 +260,6 @@ func TestDirectAndCopyTypes(t *testing.T) {
 	err = s.Each(ctx, lock, nil, func(scan func(...any) error) error { return scan(new(int64)) })
 	require.ErrorIs(t, err, tabula.ErrReadOnly)
 	require.Equal(t, "25006", tabula.SQLState(err))
-	_, err = pgxdriver.Direct(ctx, dsn, pgxdriver.ScopePolicy[scope]{SetupTx: func(context.Context, pgx.Tx, scope) error { return nil }})
+	_, err = pgxdriver.Direct(ctx, dsn, pgxdriver.ScopePolicy[scope]{ManagedVars: []string{"app.scope"}})
 	require.Error(t, err)
 }

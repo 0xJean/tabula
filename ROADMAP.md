@@ -54,27 +54,30 @@ Items keep the red lines in [docs/DESIGN.md](docs/DESIGN.md).
 - Snapshot policies, FORCE RLS tables, grants and SECURITY DEFINER routines. Classify policies with application rules, check command coverage and exercise a role/scope/statement matrix.
 - Distinguish RLS and privilege denials, configure session guards and clone content-addressed PostgreSQL test templates through a chosen migration. [Design and configuration](docs/AUTHORIZATION.md)
 
-## v0.4 — planned
+## v0.3.1 — shipped
 
-Design: [docs/DESIGN-v0.4.md](docs/DESIGN-v0.4.md).
+Design record: [docs/DESIGN-v0.3.1.md](docs/DESIGN-v0.3.1.md).
 
 - **Role-bound runners and guarded sessions**: runners pinned to one PostgreSQL role with
   per-role timeouts, context-derived session variables, scoped and unscoped sessions in
-  one transaction, sealed sessions (`SessionKey`), no raw `Tx()` escape by default,
-  registry capability policy (`Deny`), transaction-level retry, login role hygiene check.
-- **Session-level observability**: tracer, metrics and logger on runners so hand-written
-  SQL is observed too; separate `oteltabula` OpenTelemetry module; server-side slow log guidance.
-- **Query composition and aggregates**: typed single-table aggregates and filtered
-  existence checks, view-owned queries with scoped filters, verified counts, streaming
-  and offset/keyset pages, and embedded `.sql` files. Applications write the joins.
-  See [interface decisions](docs/DESIGN-v0.4.md#interface-decisions) for the decided
-  session proof / module contracts and the agreed C2 direction pending v2 compiler
-  prototype validation.
+  one transaction (`WithinShared`), sealed sessions (`SessionKey` / `Registry.Seal`),
+  opt-in raw `Tx()` escape (`ExposeTx` / `WithinRaw`), registry capability policy (`Deny`),
+  transaction-level retry (`WithinRetry`), and login role hygiene check (`CheckLoginRole` /
+  `tabula check-login-role`).
+- **Session-level observability**: tracer, metrics, structured logger and `TagStatements` on
+  runners so hand-written SQL is observed too; separate `oteltabula` OpenTelemetry module;
+  server-side slow log guidance in [docs/LOGGING.md](docs/LOGGING.md).
+- **Query composition, aggregates and embedded SQL**: typed single-table aggregates
+  (`Max`/`Min`/`Sum`/`Avg`/`CountBy`) and filtered `Rows.Exists`, view-owned composed
+  queries (`View.DefineQuery` with `Select`/`Where`/`Tail`/`CountBase`, local `$1…$m`
+  filters, three-state scope, verified C3 variants, keyset `Next` cursors and
+  `FuzzCompileQueryFragment`), embedded `.sql` files (`MustSQLFiles`), and extended
+  `sqlcheck` / `tabula inventory` support. Applications write the joins.
 
 ## v1.0 — stability and ecosystem adapters
 
 - API freeze and semver compatibility promise.
-- Optional Prometheus adapter module over `Metrics` (OpenTelemetry moves to v0.4).
+- Optional Prometheus adapter module over `Metrics` (OpenTelemetry shipped in v0.3.1).
 - Optional prepared-statement cache.
 
 ## Out of scope

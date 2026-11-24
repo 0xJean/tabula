@@ -1,6 +1,6 @@
 // Package pgxdriver integrates github.com/jackc/pgx/v5 with tabula:
-// PostgreSQL array column converters, transaction-bound
-// Sessions, and pgxpool Runners with pluggable scope/RLS policies and savepoints.
+// PostgreSQL array column converters, role-bound transaction Runners, guarded
+// Sessions, savepoints, binary COPY, and read-only Direct pools.
 package pgxdriver
 
 import (
@@ -10,15 +10,18 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/0xJean/tabula"
 )
 
-// Compile-time check that *Session[S] implements tabula.Session[S].
-var _ tabula.Session[struct{}] = (*Session[struct{}])(nil)
+// Compile-time check that *Session[S] and *RawSession[S] implement tabula.Session[S].
+var (
+	_ tabula.Session[struct{}] = (*Session[struct{}])(nil)
+	_ tabula.Session[struct{}] = (*RawSession[struct{}])(nil)
+)
 
 // ArrayColumn selects pgx's native one-dimensional array codec. Its type map
 // handles both built-in and named Go slices and element types.
@@ -34,23 +37,12 @@ func ArrayColumn(ft reflect.Type) (func(any) any, error) {
 	}
 }
 
-// ScopePolicy plugs application-specific isolation rules (scope GUC variables,
-// SET LOCAL ROLE, or SQL guards) into a pgx Runner and its Sessions.
-type ScopePolicy[S any] struct {
-	SetupTx    func(ctx context.Context, tx pgx.Tx, scope S) error
-	GuardQuery func(query string) error
-	IsUnscoped func(scope S) bool
-}
-
-// NoScopePolicy returns an empty ScopePolicy for applications without row-level scoping.
-func NoScopePolicy() ScopePolicy[struct{}] { return ScopePolicy[struct{}]{} }
-
 // SetLocalConfig sets a PostgreSQL transaction-local GUC via set_config(..., true).
 func SetLocalConfig(ctx context.Context, tx pgx.Tx, key, value string) error {
 	if key == "" {
 		return errors.New("pgxdriver.SetLocalConfig: key is required")
 	}
-	_, err := tx.Exec(ctx, `SELECT set_config($1, $2, true)`, key, value)
+	_, err := tx.Exec(ctx, `SELECT pg_catalog.set_config($1, $2, true)`, key, value)
 	return err
 }
 
@@ -67,16 +59,79 @@ func quoteIdent(ident string) string {
 	return `"` + strings.ReplaceAll(ident, `"`, `""`) + `"`
 }
 
-// Session implements tabula.Session[S] over one pgx.Tx.
+// Session implements tabula.Session[S] over one pgx.Tx without exposing the raw
+// transaction.
 type Session[S any] struct {
+	mu     sync.Mutex
+	active bool
 	readQueries
 	tx       pgx.Tx
 	scope    S
 	unscoped bool
 	readOnly bool
+	denied   error
+	key      tabula.SessionKey
+	proof    tabula.SessionProof
+	obs      *tabula.Observer
+	scopeLog func(S) string
+	shared   *sharedState[S]
 }
 
-// NewSession wraps an existing pgx.Tx with scope and policy.
+// RawSession wraps a *Session[S] with explicit raw pgx.Tx escape access. It is
+// constructed only when RunnerOptions.ExposeTx is true via Runner.WithinRaw.
+type RawSession[S any] struct {
+	sess  *Session[S]
+	proof tabula.SessionProof
+}
+
+// Tx returns the underlying pgx.Tx. Only available on *RawSession[S].
+func (s *RawSession[S]) Tx() pgx.Tx { return s.sess.tx }
+
+// Session returns the underlying guarded *Session[S].
+func (s *RawSession[S]) Session() *Session[S] { return s.sess }
+
+// SessionProof returns the instance-bound proof for this *RawSession[S].
+func (s *RawSession[S]) SessionProof() tabula.SessionProof { return s.proof }
+
+// TabulaObserved reports which observability signals this session owns.
+func (s *RawSession[S]) TabulaObserved() tabula.ObserveMask { return s.sess.TabulaObserved() }
+
+// Scope returns the session's bound scope value.
+func (s *RawSession[S]) Scope() S { return s.sess.Scope() }
+
+// Unscoped reports whether this session bypasses row-level scope predicates.
+func (s *RawSession[S]) Unscoped() bool { return s.sess.Unscoped() }
+
+// ReadOnly reports whether this session was opened as a READ ONLY transaction.
+func (s *RawSession[S]) ReadOnly() bool { return s.sess.ReadOnly() }
+
+// Exec executes query and returns the affected row count.
+func (s *RawSession[S]) Exec(ctx context.Context, query string, args ...any) (int64, error) {
+	return s.sess.Exec(ctx, query, args...)
+}
+
+// Scan executes a single-row query and maps pgx.ErrNoRows to sql.ErrNoRows.
+func (s *RawSession[S]) Scan(ctx context.Context, query string, args []any, dest ...any) error {
+	return s.sess.Scan(ctx, query, args, dest...)
+}
+
+// Returning executes a write with RETURNING and maps pgx.ErrNoRows to sql.ErrNoRows.
+func (s *RawSession[S]) Returning(ctx context.Context, query string, args []any, dest ...any) error {
+	return s.sess.Returning(ctx, query, args, dest...)
+}
+
+// Each streams all rows of query through decode.
+func (s *RawSession[S]) Each(ctx context.Context, query string, args []any, decode func(func(...any) error) error) error {
+	return s.sess.Each(ctx, query, args, decode)
+}
+
+// Savepoint runs fn inside a nested pgx transaction (PostgreSQL SAVEPOINT).
+func (s *RawSession[S]) Savepoint(ctx context.Context, fn func(context.Context, *Session[S]) error) error {
+	return s.sess.Savepoint(ctx, fn)
+}
+
+// NewSession wraps an existing pgx.Tx with scope and policy as an unsealed
+// migration handle. Keyed registries require a Runner or keyed DirectPool.
 func NewSession[S any](tx pgx.Tx, scope S, policy ScopePolicy[S]) *Session[S] {
 	if tx == nil {
 		panic("pgxdriver.NewSession: tx is required")
@@ -86,15 +141,41 @@ func NewSession[S any](tx pgx.Tx, scope S, policy ScopePolicy[S]) *Session[S] {
 		unscoped = policy.IsUnscoped(scope)
 	}
 	return &Session[S]{
+		active:      true,
 		tx:          tx,
 		scope:       scope,
 		unscoped:    unscoped,
+		scopeLog:    policy.ScopeLog,
 		readQueries: readQueries{db: tx, guard: policy.GuardQuery},
 	}
 }
 
-// Tx returns the underlying pgx.Tx for low-level escape hatches.
-func (s *Session[S]) Tx() pgx.Tx { return s.tx }
+func (s *Session[S]) close() {
+	s.mu.Lock()
+	s.active = false
+	s.mu.Unlock()
+}
+
+func (s *Session[S]) checkClosed() error {
+	if s.shared != nil {
+		s.shared.mu.Lock()
+		active := s.shared.active
+		denied := s.denied
+		s.shared.mu.Unlock()
+		if !active {
+			return tabula.ErrSessionClosed
+		}
+		return denied
+	}
+	s.mu.Lock()
+	active := s.active
+	denied := s.denied
+	s.mu.Unlock()
+	if !active {
+		return tabula.ErrSessionClosed
+	}
+	return denied
+}
 
 // Scope returns the session's bound scope value.
 func (s *Session[S]) Scope() S { return s.scope }
@@ -104,6 +185,48 @@ func (s *Session[S]) Unscoped() bool { return s.unscoped }
 
 // ReadOnly reports whether this session was opened as a READ ONLY transaction.
 func (s *Session[S]) ReadOnly() bool { return s.readOnly }
+
+// SessionProof returns the instance-bound proof for A4 sealed registries.
+func (s *Session[S]) SessionProof() tabula.SessionProof { return s.proof }
+
+// TabulaObserved reports which observability signals this session owns.
+func (s *Session[S]) TabulaObserved() tabula.ObserveMask { return s.obs.Signals() }
+
+func (s *Session[S]) scopeLabel() string {
+	if s.scopeLog == nil {
+		return ""
+	}
+	return s.scopeLog(s.scope)
+}
+
+func (s *Session[S]) beginStmt(ctx context.Context) (func(), error) {
+	if s.shared != nil {
+		s.shared.mu.Lock()
+		if !s.shared.active {
+			s.shared.mu.Unlock()
+			return nil, tabula.ErrSessionClosed
+		}
+		if s.denied != nil {
+			s.shared.mu.Unlock()
+			return nil, s.denied
+		}
+		if err := s.shared.applyFor(ctx, s.tx, s.scope, s.unscoped); err != nil {
+			s.shared.mu.Unlock()
+			return nil, err
+		}
+		return s.shared.mu.Unlock, nil
+	}
+	s.mu.Lock()
+	if !s.active {
+		s.mu.Unlock()
+		return nil, tabula.ErrSessionClosed
+	}
+	if s.denied != nil {
+		s.mu.Unlock()
+		return nil, s.denied
+	}
+	return s.mu.Unlock, nil
+}
 
 func (s readQueries) check(query string) error {
 	if s.guard != nil {
@@ -117,14 +240,84 @@ func (s *Session[S]) Exec(ctx context.Context, query string, args ...any) (int64
 	if err := s.check(query); err != nil {
 		return 0, err
 	}
-	tag, err := s.tx.Exec(ctx, query, args...)
+	unlock, err := s.beginStmt(ctx)
 	if err != nil {
-		return 0, directReadError(err)
+		return 0, err
 	}
-	return tag.RowsAffected(), nil
+	defer unlock()
+	tagged := s.obs.TagSQL(ctx, query)
+	opCtx, done := s.obs.Start(ctx, s.scopeLabel(), query, args)
+	tag, err := s.tx.Exec(opCtx, tagged, args...)
+	if err != nil {
+		err = directReadError(err)
+		done(0, err)
+		return 0, err
+	}
+	n := tag.RowsAffected()
+	done(n, nil)
+	return n, nil
 }
 
 // Scan executes a single-row query and maps pgx.ErrNoRows to sql.ErrNoRows.
+func (s *Session[S]) Scan(ctx context.Context, query string, args []any, dest ...any) error {
+	if err := s.check(query); err != nil {
+		return err
+	}
+	unlock, err := s.beginStmt(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	tagged := s.obs.TagSQL(ctx, query)
+	opCtx, done := s.obs.Start(ctx, s.scopeLabel(), query, args)
+	err = s.tx.QueryRow(opCtx, tagged, args...).Scan(dest...)
+	if errors.Is(err, pgx.ErrNoRows) {
+		err = sql.ErrNoRows
+	} else {
+		err = directReadError(err)
+	}
+	done(-1, err)
+	return err
+}
+
+// Returning executes a write with RETURNING and maps pgx.ErrNoRows to sql.ErrNoRows.
+func (s *Session[S]) Returning(ctx context.Context, query string, args []any, dest ...any) error {
+	return s.Scan(ctx, query, args, dest...)
+}
+
+// Each streams all rows of query through decode.
+func (s *Session[S]) Each(ctx context.Context, query string, args []any, decode func(func(...any) error) error) error {
+	if err := s.check(query); err != nil {
+		return err
+	}
+	unlock, err := s.beginStmt(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	tagged := s.obs.TagSQL(ctx, query)
+	opCtx, done := s.obs.Start(ctx, s.scopeLabel(), query, args)
+	rows, err := s.tx.Query(opCtx, tagged, args...)
+	if err != nil {
+		err = directReadError(err)
+		done(0, err)
+		return err
+	}
+	defer rows.Close()
+	var count int64
+	for rows.Next() {
+		if err := decode(rows.Scan); err != nil {
+			done(count, err)
+			return err
+		}
+		count++
+	}
+	err = directReadError(rows.Err())
+	done(count, err)
+	return err
+}
+
+// Scan executes a single-row query on the direct read-only queryer.
 func (s readQueries) Scan(ctx context.Context, query string, args []any, dest ...any) error {
 	if err := s.check(query); err != nil {
 		return err
@@ -136,12 +329,7 @@ func (s readQueries) Scan(ctx context.Context, query string, args []any, dest ..
 	return directReadError(err)
 }
 
-// Returning executes a write with RETURNING and maps pgx.ErrNoRows to sql.ErrNoRows.
-func (s *Session[S]) Returning(ctx context.Context, query string, args []any, dest ...any) error {
-	return s.Scan(ctx, query, args, dest...)
-}
-
-// Each streams all rows of query through decode.
+// Each streams all rows of query on the direct read-only queryer.
 func (s readQueries) Each(ctx context.Context, query string, args []any, decode func(func(...any) error) error) error {
 	if err := s.check(query); err != nil {
 		return err
@@ -159,79 +347,80 @@ func (s readQueries) Each(ctx context.Context, query string, args []any, decode 
 	return directReadError(rows.Err())
 }
 
-// Savepoint runs fn inside a nested pgx transaction (PostgreSQL SAVEPOINT).
+// Savepoint runs fn inside a nested pgx transaction (PostgreSQL SAVEPOINT). The
+// child *Session[S] receives a fresh instance-bound SessionProof and is closed
+// when Savepoint returns.
 func (s *Session[S]) Savepoint(ctx context.Context, fn func(context.Context, *Session[S]) error) error {
-	nested, err := s.tx.Begin(ctx)
+	if fn == nil {
+		return errors.New("pgxdriver.Savepoint: callback is required")
+	}
+	beginNested := func() (pgx.Tx, error) {
+		if s.shared != nil {
+			s.shared.mu.Lock()
+			defer s.shared.mu.Unlock()
+			if !s.shared.active {
+				return nil, tabula.ErrSessionClosed
+			}
+			if s.denied != nil {
+				return nil, s.denied
+			}
+			return s.tx.Begin(ctx)
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if !s.active {
+			return nil, tabula.ErrSessionClosed
+		}
+		if s.denied != nil {
+			return nil, s.denied
+		}
+		return s.tx.Begin(ctx)
+	}
+	nested, err := beginNested()
 	if err != nil {
 		return err
 	}
+	child := &Session[S]{
+		active:      true,
+		tx:          nested,
+		scope:       s.scope,
+		unscoped:    s.unscoped,
+		readOnly:    s.readOnly,
+		denied:      s.denied,
+		key:         s.key,
+		obs:         s.obs,
+		scopeLog:    s.scopeLog,
+		shared:      s.shared,
+		readQueries: readQueries{db: nested, guard: s.guard},
+	}
+	child.proof = s.key.Sign(child)
+	defer child.close()
+
 	committed := false
 	defer func() {
 		if !committed {
+			if s.shared != nil {
+				s.shared.mu.Lock()
+				_ = nested.Rollback(context.WithoutCancel(ctx))
+				s.shared.mu.Unlock()
+				return
+			}
 			_ = nested.Rollback(context.WithoutCancel(ctx))
 		}
 	}()
-	child := &Session[S]{tx: nested, scope: s.scope, unscoped: s.unscoped, readOnly: s.readOnly, readQueries: readQueries{db: nested, guard: s.guard}}
 	if err := fn(ctx, child); err != nil {
 		return err
 	}
-	if err := nested.Commit(ctx); err != nil {
-		return err
+	child.close()
+	if s.shared != nil {
+		s.shared.mu.Lock()
+		err = nested.Commit(ctx)
+		s.shared.mu.Unlock()
+	} else {
+		err = nested.Commit(ctx)
 	}
-	committed = true
-	return nil
-}
-
-// Runner opens scoped PostgreSQL transactions on a *pgxpool.Pool.
-type Runner[S any] struct {
-	pool   *pgxpool.Pool
-	policy ScopePolicy[S]
-}
-
-// NewRunner creates a Runner backed by pool and policy.
-func NewRunner[S any](pool *pgxpool.Pool, policy ScopePolicy[S]) *Runner[S] {
-	if pool == nil {
-		panic("pgxdriver.NewRunner: pool is required")
-	}
-	return &Runner[S]{pool: pool, policy: policy}
-}
-
-// Within runs fn in a read-write transaction.
-func (r *Runner[S]) Within(ctx context.Context, scope S, fn func(context.Context, *Session[S]) error) error {
-	return r.WithinTxOptions(ctx, scope, pgx.TxOptions{}, fn)
-}
-
-// WithinReadOnly runs fn in a READ ONLY transaction.
-func (r *Runner[S]) WithinReadOnly(ctx context.Context, scope S, fn func(context.Context, *Session[S]) error) error {
-	return r.WithinTxOptions(ctx, scope, pgx.TxOptions{AccessMode: pgx.ReadOnly}, fn)
-}
-
-// WithinTxOptions runs fn inside a transaction opened with opts.
-func (r *Runner[S]) WithinTxOptions(ctx context.Context, scope S, opts pgx.TxOptions, fn func(context.Context, *Session[S]) error) error {
-	tx, err := r.pool.BeginTx(ctx, opts)
 	if err != nil {
-		return fmt.Errorf("pgxdriver: begin tx: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(context.WithoutCancel(ctx))
-		}
-	}()
-	if r.policy.SetupTx != nil {
-		if err := r.policy.SetupTx(ctx, tx, scope); err != nil {
-			return err
-		}
-	}
-	sess := NewSession(tx, scope, r.policy)
-	if opts.AccessMode == pgx.ReadOnly {
-		sess.readOnly = true
-	}
-	if err := fn(ctx, sess); err != nil {
 		return err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("pgxdriver: commit tx: %w", err)
 	}
 	committed = true
 	return nil

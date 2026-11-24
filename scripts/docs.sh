@@ -17,8 +17,8 @@ esac
 
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
-# Product libraries live in the core and pgxdriver modules. Examples are commands.
-go list -f '{{if ne .Name "main"}}{{.ImportPath}}{{end}}' ./... ./pgxdriver/... |
+# Product libraries live in the core, pgxdriver and oteltabula modules. Examples are commands.
+go list -f '{{if ne .Name "main"}}{{.ImportPath}}{{end}}' ./... ./pgxdriver/... ./oteltabula/... |
   awk '$0 !~ /\/internal(\/|$)/ && NF' | LC_ALL=C sort > "$scratch/packages"
 go build -o "$scratch/tabula" ./cmd/tabula
 "$scratch/tabula" --help > "$scratch/usage"

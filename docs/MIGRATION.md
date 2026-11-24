@@ -2,6 +2,26 @@
 
 Follow this guide when upgrading an application to v0.3. For the full surface after the upgrade, see the [integration guide](INTEGRATION.md).
 
+## From v0.3.0 to v0.3.1
+
+v0.3.1 moves role pinning, timeouts, managed scope variables, session sealing, raw-tx opt-in, session-level observability, aggregates and composed view queries into Tabula. Four breaking or behavioral changes apply to `stdsql` and `pgxdriver` callers:
+
+| v0.3.0 | v0.3.1 | Notes |
+| --- | --- | --- |
+| `stdsql.NewRunner(db, policy)` | `stdsql.NewRunner(db, policy, stdsql.RunnerOptions{...})` returning `(*Runner[S], error)` | Validates role requirements, timeout bounds, `Unscoped` mode and `ManagedVars` at construction. |
+| `pgxdriver.NewRunner(pool, policy)` | `pgxdriver.NewRunner(pool, policy, pgxdriver.RunnerOptions{...})` returning `(*Runner[S], error)` | Same validation and role/timeout/GUC guarantees as `stdsql`. |
+| `ScopePolicy.SetupTx` | `ScopePolicy.ManagedVars` + `ScopeVars` + `ContextVars` + `UnscopedVars` + `RunnerOptions.Role` + `RunnerOptions.Timeouts` | Runner issues `SET LOCAL ROLE` and one batched `pg_catalog.set_config(..., true)` and auto-guards managed variables and timeout settings. `Direct` rejects policies declaring managed variables. |
+| `sess.Tx()` | `RunnerOptions{ExposeTx: true}` + `runner.WithinRaw` / `WithinRawOptions` / `WithinRawTxOptions` → `rawSess.Tx()` | Default `*Session[S]` no longer exposes `*sql.Tx` / `pgx.Tx`. Raw escape sites are opt-in and reported by `tabula inventory` (`AuditSecurityCalls: true`). |
+| Unscoped sessions permitted by default on `Runner` | `RunnerOptions.Unscoped` defaults to `UnscopedDenied` | Explicitly choose `UnscopedReadOnly` or `UnscopedReadWrite` on runners that serve unscoped operations. |
+| Nested runner calls allowed | Nested `Within*` using a transaction context returns `tabula.ErrNested` before `BEGIN` | Use `Savepoint` for nested work, or `tabula.WithoutTransaction(ctx)` only for deliberate independent transactions (beware connection pool deadlock). |
+| Retained session handles stayed callable | Handles close automatically when the callback returns (including errors/panics), returning `tabula.ErrSessionClosed` | Use `RunOptions.BeforeCommit` for pre-commit work on a fresh handle. |
+| Registry hooks only | `RunnerOptions.Tracer` / `Metrics` / `Log` / `TagStatements` take precedence per signal over `RegistryConfig` | Each enabled signal has one owner so descriptor statements are never double-emitted; hand-written inline SQL is also observed. |
+
+To adopt **sealed sessions (A4)** incrementally:
+1. Construct package-level registries with `RequireSealed: true`.
+2. During startup, allocate `key := tabula.NewSessionKey()`, pass `SessionKey: key` into every `RunnerOptions` (and `stdsql.DirectSessionKey(key)` / `pgxdriver.DirectWithConfig(..., DirectConfig{SessionKey: key})`), and call `reg.Seal(key)` checking the error.
+3. Unsealed handles (including `NewSession` migration wrappers) fail closed with `tabula.ErrForeignSession` on keyed registries.
+
 ## From the v0.2.0 release
 
 | v0.2.0 declaration or call | v0.3 equivalent |

@@ -9,8 +9,14 @@ no hidden behaviour.
 - The library uses the standard library `log/slog`. The core takes no third-party logging
   dependency.
 - A logger is passed explicitly in `RegistryConfig.Log` (applies to every table and view of
-  that registry) and may be overridden per session binding. There is no package-level
-  logger and no `slog.Default()` fallback.
+  that registry) or in `RunnerOptions.Log` (applies to every statement on a runner's session,
+  including hand-written inline SQL), and may be overridden per session binding via
+  `WithLogger`. There is no package-level logger and no `slog.Default()` fallback.
+- When both a runner and a registry configure telemetry, each enabled signal (tracing,
+  metrics, structured logging) has **one owner**: the runner takes precedence for signals it
+  handles and the registry supplies any remaining signals. Per-binding `WithLogger`
+  overrides and `Secret()` / `db:"...,secret"` / `QueryFilter.Secret` redaction are preserved
+  when the runner owns logging.
 - Statement logs require an effective logger and a level other than `LogOff`. Active logging or a metrics hook enables duration measurement using `LogConfig.Now` (default `time.Now`).
 
 ```go
@@ -59,6 +65,7 @@ in every application.
 | `tabula.args` | list of strings | Bound arguments when the value policy includes them. See section 4. |
 | `tabula.sql` | string | SQL text when `Level` is `LogAll` and `LogConfig.SQL` is enabled |
 | `tabula.sqlstate` | string | PostgreSQL SQLSTATE, when the driver exposes it |
+| `tabula.role` | string | Runner PostgreSQL role when configured on `RunnerOptions.Role` |
 | `tabula.scope` | string | Only what the application's `ScopeLog` function returns (for example a tenant ID); omitted when not configured |
 
 - Request IDs, trace IDs and user IDs are not added by the library. Use a `slog.Handler`
@@ -77,11 +84,46 @@ in every application.
 
 ## 5. Tracing and metrics
 
-Logging, tracing and metrics share the same statement key and action, but are separate
-interfaces passed in the same way (`RegistryConfig.Tracer`, `RegistryConfig.Metrics`).
-In v0.3 the application implements these interfaces to send observations to its telemetry backend. The [Go reference](REFERENCE.md#tabula) gives their method signatures. Optional OpenTelemetry and Prometheus adapters are listed in the [roadmap](../ROADMAP.md).
+Logging, tracing and metrics share the same statement key, role and action, and can be
+configured on `RegistryConfig` or on `RunnerOptions` (`Tracer`, `Metrics`, `Log`, `Sanitize`,
+`TagStatements`). When configured on a runner, hand-written inline SQL receives the key
+`tabula.inline.<fingerprint>` derived from normalized SQL text (never bound argument values).
 
-## 6. Tests the library keeps
+The separate OpenTelemetry module `github.com/0xJean/tabula/oteltabula` implements
+`tabula.Tracer` (`oteltabula.NewTracer`) and `tabula.Metrics` (`oteltabula.NewMetrics`)
+over `go.opentelemetry.io/otel` without adding third-party dependencies to core packages.
+See the [Go reference](REFERENCE.md#oteltabula).
+
+## 6. Database-side slow statement logs
+
+Client-side `LogSlow` captures Go-observed latency including connection checkout and network
+round trips, while PostgreSQL's own server logs and statistics capture planner and executor
+behavior directly:
+
+- **`log_min_duration_statement`**: set per role or database (for example `200ms`) so
+  PostgreSQL logs slow server-side executions with bind parameters controlled by
+  `log_parameter_max_length`.
+- **`auto_explain`**: load `auto_explain` with `auto_explain.log_min_duration` (and
+  `auto_explain.log_analyze = off` in production hot paths unless diagnosing cardinality) to
+  capture execution plans alongside slow statements.
+- **`pg_stat_statements`**: tracks normalized execution counts, mean/max time, shared buffer
+  hits/reads and temp spills across restarts and connections.
+
+### Correlating server logs with Tabula statement keys
+
+1. **Per-service `application_name`**: set `application_name` in the connection DSN or
+   `pgxpool.Config` (for example `billing-api:app_reader`) and include `%a` in
+   `log_line_prefix` to separate services and caller roles in PostgreSQL logs.
+2. **Opt-in SQL comment tagging (`RunnerOptions.TagStatements: true`)**: prefixes each
+   executed statement with `/* tabula:<key> */ ` (using the registered statement key for
+   descriptor and composed-query statements, or `tabula.inline.<fingerprint>` for inline SQL;
+   comment delimiters and newlines in keys are sanitized). Comments appear verbatim in
+   `log_min_duration_statement`, `auto_explain` and `pg_stat_activity`, while
+   `pg_stat_statements` preserves or normalizes them per PostgreSQL configuration. Keep
+   `TagStatements` opt-in when `pg_stat_statements` cardinality per query shape is tightly
+   budgeted.
+
+## 7. Tests the library keeps
 
 - Logging off: no call reaches the handler.
 - Each level writes exactly the entries listed in section 2.

@@ -31,6 +31,7 @@ func commands() []command {
 	return []command{
 		{"check", "Prepare and explain statements from a SQL snapshot.", runCheck},
 		{"check-rls", "Check row-level security settings on tables.", runCheckRLS},
+		{"check-login-role", "Verify login role hygiene (NOINHERIT, memberships, grants, ownership, CREATE).", runCheckLoginRole},
 		{"inventory", "Collect SQL call sites and their role assignments from Go source.", runAudit},
 		{"verify-roles", "Prepare and explain each role's workload.", runAudit},
 		{"grants", "Compare direct grants with a manifest and report reconciliation SQL.", runAudit},
@@ -183,6 +184,51 @@ func runCheckRLS(ctx context.Context, name string, args []string, stdout, stderr
 		return 1
 	}
 	_, _ = fmt.Fprintf(stdout, "tabula check-rls: schema %s RLS check passed\n", *schema)
+	return 0
+}
+
+func runCheckLoginRole(ctx context.Context, name string, args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	dsn := fs.String("dsn", "", "PostgreSQL DSN (defaults to TABULA_DSN)")
+	*dsn = os.Getenv("TABULA_DSN")
+	role := fs.String("role", "", "PostgreSQL login role name to audit (required)")
+	memberOfCSV := fs.String("member-of", "", "comma-separated exact role memberships allowed for the login role")
+	schemasCSV := fs.String("schemas", "public", "comma-separated schemas where CREATE must be denied")
+	if err := fs.Parse(args); err != nil {
+		return flagExitCode(err)
+	}
+	if *dsn == "" {
+		_, _ = fmt.Fprintln(stderr, "tabula check-login-role: --dsn (or TABULA_DSN) is required")
+		return 2
+	}
+	if strings.TrimSpace(*role) == "" {
+		_, _ = fmt.Fprintln(stderr, "tabula check-login-role: --role is required")
+		return 2
+	}
+	db, err := openDB(ctx, *dsn, "tabula check-login-role", stderr)
+	if err != nil {
+		return 2
+	}
+	defer func() { _ = db.Close() }()
+
+	failures, err := sqlcheck.CheckLoginRole(ctx, db, sqlcheck.LoginRoleExpectation{
+		Role:     *role,
+		MemberOf: splitCSV(*memberOfCSV),
+		Schemas:  splitCSV(*schemasCSV),
+	})
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "tabula check-login-role: %v\n", err)
+		return 2
+	}
+	if len(failures) > 0 {
+		for _, f := range failures {
+			_, _ = fmt.Fprintln(stderr, f)
+		}
+		_, _ = fmt.Fprintf(stderr, "tabula check-login-role: %d login role violations found\n", len(failures))
+		return 1
+	}
+	_, _ = fmt.Fprintf(stdout, "tabula check-login-role: role %s passed hygiene checks\n", *role)
 	return 0
 }
 

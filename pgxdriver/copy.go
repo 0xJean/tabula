@@ -13,22 +13,27 @@ import (
 )
 
 // CopyFrom bulk-inserts rows into tbl using PostgreSQL's binary COPY protocol
-// via pgx.Tx.CopyFrom. It uses the table's derived INSERT column list and
-// value codecs (JSON, Zero, Array, custom Scanner/Valuer) and skips serial key
-// and timestamp soft-delete columns automatically, matching Rows.Insert.
+// via pgx.Tx.CopyFrom. It checks session provenance (A4), read-only mode,
+// DenyCopy and DenyUnscopedWrites (A6), and closed-session state before any
+// empty-input shortcut or driver access, then checks each row's scope via
+// CheckWrite.
 //
-// An empty rows slice returns 0, nil without touching the database.
+// An empty rows slice returns 0, nil after passing capability and session
+// checks without touching the database.
 func CopyFrom[T, K, S any](ctx context.Context, sess *Session[S], tbl *tabula.Table[T, K, S], rows []T) (int64, error) {
 	if sess == nil || tbl == nil {
 		return 0, errors.New("pgxdriver.CopyFrom: session and table are required")
 	}
-	if tbl.ReadOnly() || sess.ReadOnly() {
-		return 0, tabula.ErrReadOnly
+	bound := tbl.Bind(sess)
+	if err := bound.CheckCopy(); err != nil {
+		return 0, err
+	}
+	if err := sess.checkClosed(); err != nil {
+		return 0, err
 	}
 	if len(rows) == 0 {
 		return 0, nil
 	}
-	bound := tbl.Bind(sess)
 	for i := range rows {
 		if err := bound.CheckWrite(&rows[i]); err != nil {
 			return 0, err
@@ -38,19 +43,39 @@ func CopyFrom[T, K, S any](ctx context.Context, sess *Session[S], tbl *tabula.Ta
 	if len(cols) == 0 {
 		return 0, fmt.Errorf("pgxdriver.CopyFrom %s: table has no insertable columns", tbl.Name())
 	}
-	tableIdent := parseIdentifier(tbl.Name())
-	if err := sess.check("COPY " + tbl.Name()); err != nil {
+	copySQL := "COPY " + tbl.Name()
+	if err := sess.check(copySQL); err != nil {
 		return 0, err
 	}
+	unlock, err := sess.beginStmt(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer unlock()
+
+	opCtx := ctx
+	if sess.obs.Signals() != 0 {
+		opCtx = tabula.WithStatementMeta(opCtx, tabula.StatementMeta{
+			Key:    tbl.Name() + ".copy",
+			Table:  tbl.Name(),
+			Action: "copy",
+		})
+	}
+	opCtx, done := sess.obs.Start(opCtx, sess.scopeLabel(), copySQL, nil)
+
+	tableIdent := parseIdentifier(tbl.Name())
 	src := &copySource[T, K, S]{
 		rows:  rows,
 		bound: bound,
 		idx:   -1,
 	}
-	n, err := sess.tx.CopyFrom(ctx, tableIdent, cols, src)
+	n, err := sess.tx.CopyFrom(opCtx, tableIdent, cols, src)
 	if err != nil {
+		err = directReadError(err)
+		done(n, err)
 		return n, err
 	}
+	done(n, nil)
 	return n, nil
 }
 

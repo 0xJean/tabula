@@ -15,9 +15,9 @@ builds joins, never generates DDL, and never runs hidden callbacks.
 
 Read the README at the Git tag or commit your application builds. The [migration guide](docs/MIGRATION.md) covers upgrading to v0.3. The [changelog](CHANGELOG.md) records release status.
 
-## Install v0.3.0
+## Install v0.3.1
 
-Run `go get github.com/0xJean/tabula@v0.3.0` in your application module with Go 1.26 or later. If you use the native pgx/v5 adapter, also run `go get github.com/0xJean/tabula/pgxdriver@v0.3.0`.
+Run `go get github.com/0xJean/tabula@v0.3.1` in your application module with Go 1.26 or later. If you use the native pgx/v5 adapter or the OpenTelemetry bridge, also run `go get github.com/0xJean/tabula/pgxdriver@v0.3.1` and/or `go get github.com/0xJean/tabula/oteltabula@v0.3.1`.
 
 ## Read a row by primary key
 
@@ -67,19 +67,20 @@ go -C benchmarks test -run='^$' -bench='^BenchmarkSelect100$' -benchmem -count=5
 
 ## Fuzz tests
 
-CI fuzzes `db` tag parsing, `Filter`, `OrderSpec`, `GuardNoSessionEscape`, and `sqlcheck.ParseSnapshot`.
+CI fuzzes `db` tag parsing, `Filter`, `OrderSpec`, `GuardNoSessionEscape`, composed query fragment compilation, and `sqlcheck.ParseSnapshot`.
 
 ```sh
 go test -fuzz=FuzzParseColumnTag -fuzztime=5s .
 go test -fuzz=FuzzFilterAnd -fuzztime=5s .
 go test -fuzz=FuzzOrderSpecResolve -fuzztime=5s .
 go test -fuzz=FuzzGuardNoSessionEscape -fuzztime=5s .
+go test -fuzz=FuzzCompileQueryFragment -fuzztime=5s .
 go test -fuzz=FuzzParseSnapshot -fuzztime=5s ./sqlcheck
 ```
 
 ## Working from the v0.3 checkout
 
-Run `scripts/workspace.sh` from the Tabula repository root to use its three local modules together. In an application repository, check the selected module with `go list -m -json github.com/0xJean/tabula`. [Version selection and adapter setup](docs/INTEGRATION.md)
+Run `scripts/workspace.sh` from the Tabula repository root to use all local modules together. In an application repository, check the selected module with `go list -m -json github.com/0xJean/tabula`. [Version selection and adapter setup](docs/INTEGRATION.md)
 
 ## What it will not do
 
@@ -91,13 +92,14 @@ Run `scripts/workspace.sh` from the Tabula repository root to use its three loca
 
 | Package | Role | Dependencies |
 | --- | --- | --- |
-| `tabula` | Engine: registry, tables, views, rows, writes, upserts, keyset, filter, order, errors, logging, tracing/metrics interfaces | standard library only |
-| `tabula/stdsql` | `*sql.DB` / `*sql.Tx` sessions, `Runner`, `ScopePolicy` (RLS), `Savepoint`, read-only `Direct` pool | standard library only |
-| `tabula/sqlcheck` | Descriptor and catalog snapshots, source SQL inventory, role workloads, grant minimization and RLS checks | standard library only |
+| `tabula` | Engine: registry, tables, views, composed queries, aggregates, embedded SQL files, sealed sessions, capabilities, errors, logging, tracing/metrics interfaces | standard library only |
+| `tabula/stdsql` | Role-bound `*sql.DB` / `*sql.Tx` `Runner`, `Shared`, `RawSession`, `ScopePolicy`, `Savepoint`, read-only `Direct` pool | standard library only |
+| `tabula/sqlcheck` | Descriptor and catalog snapshots, source SQL & security call-site inventory, role workloads, grant minimization, login-role hygiene and RLS checks | standard library only |
 | `tabula/pqdriver` | `lib/pq` array converters | `github.com/lib/pq` |
-| `tabula/pgxdriver` | Separate module: `pgx/v5` pool Runner, `pgx.Tx` Session, Direct, binary COPY and array converters | `github.com/jackc/pgx/v5` |
+| `tabula/pgxdriver` | Separate module: role-bound `pgx/v5` pool `Runner`, `Shared`, `RawSession`, `Session`, `Direct`, binary COPY and array converters | `github.com/jackc/pgx/v5` |
+| `tabula/oteltabula` | Separate module: OpenTelemetry `Tracer` and `Metrics` adapters | `go.opentelemetry.io/otel` |
 | `tabula/postgresfixture` | Content-addressed installation templates, migration prefixes and isolated per-test databases | standard library only |
-| `tabula/cmd/tabula` | SQL verification (`tabula check`), RLS audit (`tabula check-rls`) and role workload tools. [All commands and flags](docs/REFERENCE.md#cli) | `sqlcheck`, `github.com/lib/pq` |
+| `tabula/cmd/tabula` | SQL verification (`tabula check`), RLS audit (`tabula check-rls`), login role audit (`tabula check-login-role`) and role workload tools. [All commands and flags](docs/REFERENCE.md#cli) | `sqlcheck`, `github.com/lib/pq` |
 
 Applications may use `stdsql` or `pgxdriver` directly, or wrap `tabula` in a thin
 binding package of their own to enforce compile-time session/scope invariants.

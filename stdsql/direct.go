@@ -19,6 +19,26 @@ type readQueries struct {
 	guard func(string) error
 }
 
+// DirectOption customizes a read-only DirectPool created by Direct.
+type DirectOption func(*directConfig)
+
+type directConfig struct {
+	key tabula.SessionKey
+	obs *tabula.Observer
+}
+
+// DirectSessionKey binds a SessionKey to a DirectPool so every pointer
+// returned by DirectPool.Session carries a valid SessionProof for A4 sealed
+// registries.
+func DirectSessionKey(key tabula.SessionKey) DirectOption {
+	return func(c *directConfig) { c.key = key }
+}
+
+// DirectObserver attaches a session-level Observer to a DirectPool.
+func DirectObserver(obs *tabula.Observer) DirectOption {
+	return func(c *directConfig) { c.obs = obs }
+}
+
 // DirectPool owns a database/sql pool of read-only PostgreSQL connections.
 type DirectPool[S any] struct {
 	db   *sql.DB
@@ -48,10 +68,11 @@ func (p *DirectPool[S]) Close() error { return p.pool.Close() }
 
 // Direct opens a dedicated read-only pool from a PostgreSQL URL and a
 // registered database/sql driver (for example "postgres"). Call Session to
-// bind each request and Close at shutdown. SetupTx requires a Runner.
-func Direct[S any](driverName, postgresURL string, policy ScopePolicy[S]) (*DirectPool[S], error) {
-	if policy.SetupTx != nil {
-		return nil, errors.New("stdsql.Direct: SetupTx requires a transaction")
+// bind each request and Close at shutdown. Managed transaction-local variables
+// require a Runner.
+func Direct[S any](driverName, postgresURL string, policy ScopePolicy[S], opts ...DirectOption) (*DirectPool[S], error) {
+	if len(policy.ManagedVars) > 0 || policy.ScopeVars != nil || policy.ContextVars != nil || len(policy.UnscopedVars) > 0 {
+		return nil, errors.New("stdsql.Direct: transaction-local scope variables require a Runner")
 	}
 	u, err := url.Parse(postgresURL)
 	if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") {
@@ -67,8 +88,21 @@ func Direct[S any](driverName, postgresURL string, policy ScopePolicy[S]) (*Dire
 	if err != nil {
 		return nil, err
 	}
+	var cfg directConfig
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
+	}
 	return &DirectPool[S]{
-		db:   db,
-		pool: direct.NewPool(readQueries{db: db, guard: direct.Guard(policy.GuardQuery)}, policy.IsUnscoped, db.Close),
+		db: db,
+		pool: direct.NewPoolWithOptions(
+			readQueries{db: db, guard: direct.Guard(policy.GuardQuery)},
+			policy.IsUnscoped,
+			policy.ScopeLog,
+			cfg.key,
+			cfg.obs,
+			db.Close,
+		),
 	}, nil
 }

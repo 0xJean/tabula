@@ -1,22 +1,22 @@
-# Tabula v0.4 design: guarded runners, session observability, query composition
+# Tabula v0.3.1 design: guarded runners, session observability, query composition
 
-**Proposed for v0.4.** A4 and C2 have runnable, test-only prototypes. Under
-[Interface decisions](#interface-decisions), A4 proof issuance and B2 module naming
-are **decided**; C2's five interface choices have **direction agreed** and remain
-subject to a v2 fragment-compiler and fuzz prototype before the public C2 API is
-locked. For the shipped API use the [v0.3 integration guide](INTEGRATION.md). The
+**Status: Implemented in v0.3.1.** All groups (A1–A8, B1–B3, C1–C4, D) have been
+implemented with unit tests, real PostgreSQL integration tests and
+`FuzzCompileQueryFragment`, and the proposal-only `docs/internal/v04` test package has
+been removed prior to tagging. For the shipped API use the
+[v0.3 integration guide](INTEGRATION.md) and [API reference](REFERENCE.md). The
 project constraints are in [DESIGN.md](DESIGN.md) and [AGENTS.md](../AGENTS.md).
 
 ## 0. Why
 
-v0.3 covers descriptors, single-table writes and the full authorization and RLS
+v0.3.0 covers descriptors, single-table writes and the full authorization and RLS
 verification toolkit ([AUTHORIZATION.md](AUTHORIZATION.md)). Applications that enforce
 row-level security with per-caller PostgreSQL roles still have to write and maintain
 their own transaction runner around Tabula: pinning a role, setting timeouts, sharing
 one transaction between a scoped and an unscoped session, guarding sessions, tracing
 every statement and retrying serialization failures. They also keep hand-writing the
 boilerplate around joins: optional filters, sort whitelists, pagination and small
-aggregates. v0.4 moves these generic parts into Tabula so that an application keeps only
+aggregates. v0.3.1 moves these generic parts into Tabula so that an application keeps only
 its configuration and business SQL.
 
 | Group | Scope |
@@ -118,7 +118,7 @@ err := runner.WithinShared(ctx, func(ctx context.Context, tx *stdsql.Shared[Scop
 
 ### A4. Sealed sessions
 
-v0.3 trusts a session's `Scope()` and `Unscoped()`. In particular, a true
+v0.3.0 trusts a session's `Scope()` and `Unscoped()`. In particular, a true
 `Unscoped()` makes derived reads omit the row-scope predicate. A registry should be
 able to require an instance issued by the application's trusted construction code.
 The proof records provenance for in-process code review. The issuer remains
@@ -146,7 +146,7 @@ func start(db *sql.DB, policy stdsql.ScopePolicy[Scope]) (*stdsql.Runner[Scope],
 
 | Registry construction | Bind accepts | Calling `reg.Seal(key)` |
 | --- | --- | --- |
-| Default config | v0.3 sessions | Error. An open registry can already have usable bindings. |
+| Default config | v0.3.0 sessions | Error. An open registry can already have usable bindings. |
 | `RequireSealed: true`, zero key | No sessions until startup seals it | First nonzero key wins atomically. A zero key or any second call returns an error. |
 | Nonzero `SessionKey` in config, or a successfully sealed registry | A proof for this key and this instance | Error, including a repeat with the original key. |
 
@@ -194,9 +194,10 @@ construction. Registries never disclose the key.
    pools. Applications give unit tests an isolated registry, key and pointer-backed
    fake. The pgx module uses only public Tabula APIs.
 
-The [A4 prototype](internal/v04/seal_test.go) exercises the check using `key.Sign`
-and `SessionProof`. Inventory reports construction, signing and sealing sites for
-review (§D).
+The production tests in [seal_capability_test.go](../seal_capability_test.go)
+exercise the check using `key.Sign` and `SessionProof`, and
+`BenchmarkSealedBind` verifies hot-path binding cost. Inventory reports
+construction, signing and sealing sites for review (§D).
 
 ### A5. No raw transaction escape
 
@@ -217,7 +218,7 @@ reg := tabula.NewRegistry(tabula.RegistryConfig[Scope]{
   `TableSpec.AllowDelete` under `DenyDelete`. Applications no longer re-check spec fields
   in a wrapper, and new spec fields in later releases are covered by a new `Deny` bit.
 - Initial bits: `DenyDelete`, `DenyUpsert`, `DenyUnscopedWrites`, `DenyCopy`.
-- Default `Deny` is zero to keep v0.3 behaviour.
+- Default `Deny` is zero to keep v0.3.0 behaviour.
 - `DenyUnscopedWrites` is a runtime check on every derived write, hand-written
   `Rows.Exec` and binary COPY. Provide a public bound-row check (proposed
   `CheckCopy() error`) so `pgxdriver.CopyFrom` checks provenance, mode, `DenyCopy`
@@ -256,8 +257,8 @@ privileges, owns no objects and cannot create in the selected schemas. The CLI g
 
 ### B1. Hooks on runners and sessions
 
-v0.3 attaches `Tracer`, `Metrics` and the logger to `RegistryConfig`, so only descriptor
-operations are observed. v0.4 adds the same interfaces to `RunnerOptions`; every
+v0.3.0 attaches `Tracer`, `Metrics` and the logger to `RegistryConfig`, so only descriptor
+operations are observed. v0.3.1 adds the same interfaces to `RunnerOptions`; every
 `Exec`, `Scan`, `Returning` and `Each` on a runner's session is observed, including
 hand-written SQL.
 
@@ -265,7 +266,7 @@ hand-written SQL.
   `tabula.inline` with a stable fingerprint of the normalized SQL text, never argument
   values.
 - Attributes include `db.system=postgresql`, role, action, rows,
-  the v0.3 error class (including `rls_denied` and `insufficient_privilege`), and the
+  the v0.3.0 error class (including `rls_denied` and `insufficient_privilege`), and the
   application's `ScopeLog` label when configured.
 - Before calling the session, the descriptor attaches statement metadata to the
   operation context under a private root-package key. Carry the registered key, table
@@ -318,7 +319,7 @@ ok, err := rows.Exists(ctx, where)
   the zero V and `false, nil`. A genuine zero returns `true`.
 - `CountBy[V comparable]` returns `(map[V]int64, error)` for declared non-null
   grouping keys. An empty input returns an empty map. `Exists(ctx, where)` takes
-  the filter callback. The v0.3 `ExistsBy(ctx, predicate, values...)` takes one
+  the filter callback. The v0.3.0 `ExistsBy(ctx, predicate, values...)` takes one
   static predicate. Record the per-column aggregate SQL in the table definition.
 - Custom aggregate result codecs do not make a type eligible for `Add`. In v0.3
   `SetExpr` arithmetic accepts Go integer and floating-point types. Applications
@@ -362,7 +363,7 @@ the outer join into an inner join (and break an optimized `CountBase` that omits
 that join). For outer-joined tables, correlate the scope in the `ON` clause
 (`ON child.scope_id = parent.scope_id`, or via composite foreign key) or rely on
 PostgreSQL RLS. Session-bound scope placeholders inside `Select` or `ON` are out
-of scope for v0.4.
+of scope for v0.3.1.
 
 Supply base arguments separately from named filters. Base values can occur in a
 SELECT expression, a JOIN condition, a CTE or a subquery. Check base arity as well
@@ -411,7 +412,7 @@ non-null SQL expression and use that same value for ordering, comparison and ext
 `After []any` carries typed Go values in that order. Check arity, types and NULLs.
 An empty cursor starts the first page. Encoding a cursor for transport belongs to the
 application. A single tuple inequality is valid for uniform directions. Mixed directions
-require either rejection or an expanded comparison per term (direction agreed for v0.4:
+require either rejection or an expanded comparison per term (direction agreed for v0.3.1:
 reject mixed directions in keyset mode at definition time; lifting this later is
 backward-compatible). [PostgreSQL row comparisons](https://www.postgresql.org/docs/17/functions-comparisons.html#ROW-WISE-COMPARISON)
 
@@ -469,31 +470,29 @@ other statement. Missing files fail at start-up. With C2's agreed
 
 ## Interface decisions
 
-The table below records each interface choice, its current status, the chosen
-direction and the rejected alternatives (kept for future reference). A4 proof
-issuance and B2 module naming are **Decided**; C2's five items share the uniform
-status **Direction agreed (pending v2 prototype)** until the fragment-compiler and
-fuzz prototype validates them before API lock.
+The table below records each interface choice, its final status, the chosen
+direction and the rejected alternatives (kept for future reference). All seven
+decisions are implemented and locked for v0.3.1.
 
 | Area | Status | Chosen direction & rationale | Rejected alternatives & why |
 | --- | --- | --- | --- |
 | A4 proof issuance | **Decided** | **`key.Sign(owner any) SessionProof`** with optional `interface{ SessionProof() tabula.SessionProof }`. Keeps "Seal" exclusively for registry sealing (`RequireSealed`, `reg.Seal(key)`); needs no scope type parameter on the issuer; zero `SessionKey` returns zero `SessionProof`; simple method-receiver matching in `tabula inventory`. Scope: proof issuance and accessor only (`RunnerOptions.SessionKey` remains part of A1's constructor design). | Package `Seal(session, key)` (overloads "Seal" with `reg.Seal`/`RequireSealed` and reads like an in-place mutator or wrapper); a wrapper returning `Session[S]` (erases concrete driver types such as `*stdsql.Session` / `*pgxdriver.Session` and `Savepoint`/`CopyFrom`). |
 | B2 module naming | **Decided** | **`github.com/0xJean/tabula/oteltabula` (`package oteltabula`)**. Avoids forced import aliases alongside `go.opentelemetry.io/otel` and follows both Go OpenTelemetry (`otelhttp`, `otelsql`) and Tabula (`stdsql`, `pqdriver`, `pgxdriver`) naming conventions. | `/otel` import path (`package otel`, collides with `go.opentelemetry.io/otel` in every wiring file). |
-| C2 SQL declaration | **Direction agreed (pending v2 prototype)** | **`Select / Where / Tail` + optional `CountBase`** (a second `Select` segment sharing `Where` and filters; disallow `Tail` + `CountBase`). Eliminates fixed-predicate drift between page and count, prevents outer `OR` precedence bugs by construction, avoids a security-sensitive outer-clause SQL parser, and supports `GROUP BY`/`HAVING` cleanly. Remap sparse base slots used by `CountBase` + `Where` into dense `$1…$m`. Trade-off: C4 `.sql` files store the `Select` segment (full statements keep using `view.Statement`). | Single constrained `Base` (requires building an outer-clause SQL parser/rewriter, risks outer `OR` precedence errors, and forces duplicating fixed `WHERE` predicates into `CountBase`). |
-| C2 filter markers | **Direction agreed (pending v2 prototype)** | **Fragment-local `$1…$m`**. Supports reusing one value across many columns (multi-column `ILIKE` search) without duplicating caller arguments, keeps PostgreSQL JSONB `?`/`?|`/`?&` unescaped, and stays uniform with `$1…$k` in `Select`/`Where`. Validate contiguous `1…m` slots at definition (ignoring strings, quoted identifiers, comments and dollar-quoted bodies), and document explicitly that fragment `$1` is local to the fragment, not base `$1`. | Positional `?` with `??` JSONB escaping (cannot reuse one parameter across multiple predicates without duplicating values, collides with PostgreSQL JSONB operators, and mixes `?` with `$n` in `Select`/`Where`). |
-| C2 filter API | **Direction agreed (pending v2 prototype)** | **Ordered `[]QueryFilter` specs** (`Name`, `SQL`, extensible `Secret bool` for B1 redaction; rendered in **declaration order** so SQL order is visible, stable and rename-safe) **paired with a zero-value-usable `*QueryParams` builder**: `var p tabula.QueryParams` works directly with `p.With(name, args...)` / `p.WithIf(cond, name, args...)` (passed as `&p`), and `NewQueryParams(baseArgs...)` constructs one with base args or for inline chaining. `NewQueryParams` and `With`/`WithIf` defensively copy their argument slices and mutate the receiver in place, returning it. Bound operations (`List`/`Count`/`Find`/`ListKeyset`/`Iter`) accept a `nil` `*QueryParams` as "no base args, no filters"; calling `With`/`WithIf` on a `nil` receiver fails loudly (matching `*Filter`, so imperative `if` calls never silently drop a filter). Because `With` mutates in place, callers can guard pointer dereferences in ordinary `if` blocks (`if since != nil { p.With("since", *since) }`) instead of `WithIf(since != nil, ..., *since)` (whose GoDoc must show that eager-evaluation panic anti-pattern). Once built, one `*QueryParams` is read-only during execution and reusable across operations. | `map[string]string` filter specs (random iteration order requiring alphabetical sort where renaming alters SQL, and no room for per-filter metadata like `Secret`); untyped `map[string]any` or standalone variadic `With` options (ambiguous zero-arg/nil/slice semantics and awkward separation of base args vs filters across `Count`/`List`). |
-| C2 scope declaration | **Direction agreed (pending v2 prototype)** | **Three-state explicit declaration, fail-closed on scoped registries (`S != struct{}`)**: `ScopeColumns(cols ...string)` (multi-column, sharing one `$n`), `ScopeByRLS()`, or `ScopeGlobal()` (for global lookup-only views). Zero value is a startup error on scoped registries and allowed on `Registry[struct{}]`. Covers driving and inner-joined tables only; outer-joined tables must correlate in `ON`, use a composite FK, or rely on RLS. | Single optional `ScopeColumn` (silent cross-tenant leak when omitted on a scoped registry; cannot cover multiple inner-joined tables or explicitly distinguish RLS vs global lookup views). |
-| C2 pagination | **Direction agreed (pending v2 prototype)** | **Query-specific request & order types** (`QueryPage`, `QueryKeyset`, `QueryOrder`, `QueryOrderSpec` with `QuerySortTerm{Expr, Column, Direction}` and `SortDirection`) **while reusing `CountMode` (`CountExact`/`CountNone`) and `KeysetPage[T]` with an additive `Next []any` field** (auto-extracted from `View` column accessors and also populated by `Rows.ListKeyset`). Reject mixed directions in keyset mode in v0.4 (forward-compatible to expand later), and reject keyset pages on a query that declares `Tail`. Require `0 < MaxLimit < math.MaxInt` on paged queries. | Reusing `Listing` / `KeysetListing` (overloads `Listing.Order` between trusted SQL on `Rows` and untrusted request sort keys on C2, drags in unsupported `Lock` and `CountEstimate`, and lacks cursor column metadata); `Desc bool` (zero value silently overrides `DefaultDirection: "DESC"`). |
+| C2 SQL declaration | **Decided** | **`Select / Where / Tail` + optional `CountBase`** (a second `Select` segment sharing `Where` and filters; disallow `Tail` + `CountBase`). Eliminates fixed-predicate drift between page and count, prevents outer `OR` precedence bugs by construction, avoids a security-sensitive outer-clause SQL parser, and supports `GROUP BY`/`HAVING` cleanly. Remap sparse base slots used by `CountBase` + `Where` into dense `$1…$m`. Trade-off: C4 `.sql` files store the `Select` segment (full statements keep using `view.Statement`). | Single constrained `Base` (requires building an outer-clause SQL parser/rewriter, risks outer `OR` precedence errors, and forces duplicating fixed `WHERE` predicates into `CountBase`). |
+| C2 filter markers | **Decided** | **Fragment-local `$1…$m`**. Supports reusing one value across many columns (multi-column `ILIKE` search) without duplicating caller arguments, keeps PostgreSQL JSONB `?`/`?|`/`?&` unescaped, and stays uniform with `$1…$k` in `Select`/`Where`. Validate contiguous `1…m` slots at definition (ignoring strings, quoted identifiers, comments and dollar-quoted bodies), and document explicitly that fragment `$1` is local to the fragment, not base `$1`. | Positional `?` with `??` JSONB escaping (cannot reuse one parameter across multiple predicates without duplicating values, collides with PostgreSQL JSONB operators, and mixes `?` with `$n` in `Select`/`Where`). |
+| C2 filter API | **Decided** | **Ordered `[]QueryFilter` specs** (`Name`, `SQL`, extensible `Secret bool` for B1 redaction; rendered in **declaration order** so SQL order is visible, stable and rename-safe) **paired with a zero-value-usable `*QueryParams` builder**: `var p tabula.QueryParams` works directly with `p.With(name, args...)` / `p.WithIf(cond, name, args...)` (passed as `&p`), and `NewQueryParams(baseArgs...)` constructs one with base args or for inline chaining. `NewQueryParams` and `With`/`WithIf` defensively copy their argument slices and mutate the receiver in place, returning it. Bound operations (`List`/`Count`/`Find`/`ListKeyset`/`Iter`) accept a `nil` `*QueryParams` as "no base args, no filters"; calling `With`/`WithIf` on a `nil` receiver fails loudly (matching `*Filter`, so imperative `if` calls never silently drop a filter). Because `With` mutates in place, callers can guard pointer dereferences in ordinary `if` blocks (`if since != nil { p.With("since", *since) }`) instead of `WithIf(since != nil, ..., *since)` (whose GoDoc must show that eager-evaluation panic anti-pattern). Once built, one `*QueryParams` is read-only during execution and reusable across operations. | `map[string]string` filter specs (random iteration order requiring alphabetical sort where renaming alters SQL, and no room for per-filter metadata like `Secret`); untyped `map[string]any` or standalone variadic `With` options (ambiguous zero-arg/nil/slice semantics and awkward separation of base args vs filters across `Count`/`List`). |
+| C2 scope declaration | **Decided** | **Three-state explicit declaration, fail-closed on scoped registries (`S != struct{}`)**: `ScopeColumns(cols ...string)` (multi-column, sharing one `$n`), `ScopeByRLS()`, or `ScopeGlobal()` (for global lookup-only views). Zero value is a startup error on scoped registries and allowed on `Registry[struct{}]`. Covers driving and inner-joined tables only; outer-joined tables must correlate in `ON`, use a composite FK, or rely on RLS. | Single optional `ScopeColumn` (silent cross-tenant leak when omitted on a scoped registry; cannot cover multiple inner-joined tables or explicitly distinguish RLS vs global lookup views). |
+| C2 pagination | **Decided** | **Query-specific request & order types** (`QueryPage`, `QueryKeyset`, `QueryOrder`, `QueryOrderSpec` with `QuerySortTerm{Expr, Column, Direction}` and `SortDirection`) **while reusing `CountMode` (`CountExact`/`CountNone`) and `KeysetPage[T]` with an additive `Next []any` field** (auto-extracted from `View` column accessors and also populated by `Rows.ListKeyset`). Reject mixed directions in keyset mode in v0.3.1 (forward-compatible to expand later), and reject keyset pages on a query that declares `Tail`. Require `0 < MaxLimit < math.MaxInt` on paged queries. | Reusing `Listing` / `KeysetListing` (overloads `Listing.Order` between trusted SQL on `Rows` and untrusted request sort keys on C2, drags in unsupported `Lock` and `CountEstimate`, and lacks cursor column metadata); `Desc bool` (zero value silently overrides `DefaultDirection: "DESC"`). |
 
 ### Gaps and implementation constraints identified in review
 
-1. **Outer-join scope limitation (C2)**: `WHERE`-level `ScopeColumns` cannot constrain a `LEFT JOIN` right-hand table without turning it into an `INNER JOIN`, and request inputs cannot supply the scope value to `ON`. v0.4 scopes driving and inner-joined tables via `ScopeColumns` and relies on `ON` correlation, composite foreign keys or PostgreSQL RLS for outer-joined tables; session-bound scope placeholders inside `Select`/`ON` are deferred.
-2. **C2 fragment compiler & fuzz prototype (gate before locking C2)**: The current [C2 prototype](internal/v04/query_test.go) starts from emitted SQL and does not exercise the highest-risk layer — fragment lexing, parenthesis/comment/quote/dollar-quote boundaries, local `$1…$m` renumbering and `CountBase` dense base-slot remapping. Build and fuzz a v2 compiler prototype over the agreed `Select / Where / Tail` and local `$1…$m` grammar before locking the C2 public API.
+1. **Outer-join scope limitation (C2)**: `WHERE`-level `ScopeColumns` cannot constrain a `LEFT JOIN` right-hand table without turning it into an `INNER JOIN`, and request inputs cannot supply the scope value to `ON`. v0.3.1 scopes driving and inner-joined tables via `ScopeColumns` and relies on `ON` correlation, composite foreign keys or PostgreSQL RLS for outer-joined tables; session-bound scope placeholders inside `Select`/`ON` are deferred.
+2. **C2 fragment compiler & fuzzing**: Implemented in `internal/pgstmt/scan.go`, `composed_compile.go`, `composed_query.go`, and fuzzed via `FuzzCompileQueryFragment` in `fuzz_test.go`, covering fragment lexing, parenthesis/comment/quote/dollar-quote boundaries, local `$1…$m` renumbering and `CountBase` dense base-slot remapping.
 3. **A3 per-statement overhead**: `WithinShared` adds one round trip per user statement to reapply the complete GUC set; document it as a background/batch mechanism rather than a hot-path request helper.
 4. **A1 nested-transaction escape hatch**: `ErrNested` via context propagation blocks intentional independent transactions (such as failure-safe audit writes); provide `tabula.WithoutTransaction(ctx)` to clear only the nested-tx marker explicitly (and surface call sites in review/inventory).
 5. **A4 hot-path `Bind` benchmark**: Prototype validation runs `reflect.ValueOf` on every `Bind`; add `BenchmarkSealedBind` during A4 implementation to confirm acceptable cost or cache per-type eligibility.
-6. **Prototype package lifecycle**: `docs/internal/v04` lives inside the root Go module, so it runs with `go test ./...` and would ship in release tags if retained. Remove `docs/internal/v04` once production implementations and tests replace it, before tagging v0.4.
-7. **Keyset pagination with `Tail` (C2)**: the cursor predicate is emitted in `WHERE`, which runs before `GROUP BY`. An aggregate sort term (for example `count(*)`) cannot be compared there, and a `HAVING` clause can change which rows exist after the cursor. Reject `ListKeyset` on a query that declares `Tail` in v0.4, as with `CountBase`. Offset pages, `Find`, `Iter` and the wrapped count remain available.
+6. **Prototype package lifecycle**: `docs/internal/v04` lives inside the root Go module, so it runs with `go test ./...` and would ship in release tags if retained. Remove `docs/internal/v04` once production implementations and tests replace it, before tagging v0.3.1.
+7. **Keyset pagination with `Tail` (C2)**: the cursor predicate is emitted in `WHERE`, which runs before `GROUP BY`. An aggregate sort term (for example `count(*)`) cannot be compared there, and a `HAVING` clause can change which rows exist after the cursor. Reject `ListKeyset` on a query that declares `Tail` in v0.3.1, as with `CountBase`. Offset pages, `Find`, `Iter` and the wrapped count remain available.
 8. **Checks that remain under `Select / Where / Tail` (C2)**: the segment split removes the need to locate an insertion point, so definition-time checks are lexical only (balanced parentheses, terminated quotes and comments, no statement separator, no trailing line comment, contiguous placeholder slots). A misplaced outer clause, such as a `WHERE` inside `Select` or an `ORDER BY` inside `Tail`, surfaces as a PostgreSQL syntax error in the C3 variants. C3 verification is therefore mandatory for composed queries. Define the emitted text when `Where`, the scope and every filter are absent (no `WHERE` clause).
 9. **Nested-transaction marker across modules (A1)**: `ErrNested` must hold between a `stdsql` runner and a `pgxdriver` runner, and the pgx module uses public Tabula APIs only. The marker therefore needs a public root-package setter and query alongside `WithoutTransaction`. Name them with A1 and report their call sites in inventory. GoDoc for `WithoutTransaction` must warn that a detached transaction takes a second pooled connection while the outer one is held, which can deadlock a saturated pool.
 10. **Deferred `QueryParams` errors, defensive copies & concurrency (C2)**: a chainable `With` cannot return an error. Unknown or repeated names and arity mismatches are therefore reported by the bound operation, before any I/O. Make the zero value `var p tabula.QueryParams` directly usable (like `strings.Builder` and `Filter`) so request-conditional filters need no nil pointer; calling `With`/`WithIf` on a `nil` `*QueryParams` still fails loudly (never silently drops filters), while bound operations treat a `nil` `*QueryParams` as empty. Both `NewQueryParams` and `With`/`WithIf` copy their input argument slices so later caller mutations cannot affect subsequent `Count`/`List` calls; `WithIf` GoDoc must show the `WithIf(p != nil, ..., *p)` eager-evaluation panic anti-pattern. Like `*Filter`, a `*QueryParams` is not safe for concurrent mutation, but once built it is read-only during execution and safe to reuse across operations (such as `Count` followed by `List`).
@@ -508,7 +507,7 @@ fuzz prototype validates them before API lock.
 | B1 runner hooks take precedence over registry hooks | Behaviour change only when both are configured |
 | A3, A4, A6–A8, C1–C4 | New capabilities. A4 enforcement and A6 denials require explicit configuration. |
 
-[MIGRATION.md](MIGRATION.md) gains a v0.3 → v0.4 section in the release commit.
+[MIGRATION.md](MIGRATION.md) gains a v0.3.0 → v0.3.1 section in the release commit.
 
 ## Out of scope
 
@@ -518,7 +517,7 @@ variables.
 
 ## Delivery order and acceptance
 
-1. Consumers can adopt released v0.3 verification and fixture tools independently.
+1. Consumers can adopt released v0.3.0 verification and fixture tools independently.
 2. Finalize the A1 constructor (`RunnerOptions`, including `SessionKey`, and the
    nested-transaction marker / `WithoutTransaction` escape hatch) alongside the
    decided A4 proof contract (`key.Sign` / `SessionProof`) before integrating keys
@@ -535,17 +534,18 @@ variables.
    API and implementing C1–C4 and the query-related D checks. Consumers can then move
    their composed lists onto verified views.
 5. Remove the proposal-only `docs/internal/v04` test package once production
-   implementations and tests replace it, before tagging v0.4.
+   implementations and tests replace it, before tagging v0.3.1.
 
-Run the [session proof](internal/v04/seal_test.go) and
-[composed query](internal/v04/query_test.go) prototypes with
-`go test -race -v ./docs/internal/v04`. With a disposable `TABULA_TEST_DSN`, add
-`-tags=integration` for the [PostgreSQL examples](internal/v04/query_integration_test.go).
-The query fixture runs emitted SQL for a search value reused across columns,
-display arguments in a projection and JOIN, and an optimized count with a
-tied-key cursor page. Its private request types and single descending sort serve
-those cases only; C2 fragment compilation awaits the v2 compiler prototype before
-locking the public API, and A4 driver wiring follows A1's constructor.
+Run the production unit, fuzz and PostgreSQL integration suites with
+`TABULA_TEST_DSN=... ./scripts/check.sh --all`. The production test suites
+([seal_capability_test.go](../seal_capability_test.go),
+[composed_query_test.go](../composed_query_test.go),
+[v031_integration_test.go](../v031_integration_test.go),
+[stdsql/v031_integration_test.go](../stdsql/v031_integration_test.go),
+[pgxdriver/v031_integration_test.go](../pgxdriver/v031_integration_test.go),
+[oteltabula/otel_test.go](../oteltabula/otel_test.go), and
+[sqlcheck/login_role_integration_test.go](../sqlcheck/login_role_integration_test.go))
+replace the former proposal-only prototype package.
 
 Every item ships with unit tests and real PostgreSQL integration tests (`-tags=integration
 -race`, PostgreSQL 14–17), fuzz seeds for any new SQL text handling (C2 fragments, A4

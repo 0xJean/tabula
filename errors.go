@@ -21,6 +21,10 @@ const (
 	ErrReadOnly           staticError = "operation requires a writable session and table"
 	ErrScopeMismatch      staticError = "row scope differs from the bound session"
 	ErrForbiddenStatement staticError = "statement attempts to modify session role or configuration"
+	ErrForeignSession     staticError = "session was not issued for this registry"
+	ErrNested             staticError = "nested transaction is not allowed"
+	ErrSessionClosed      staticError = "session is closed"
+	ErrCapabilityDenied   staticError = "operation denied by registry capability policy"
 
 	// PostgreSQL error-class sentinels returned by default error classification.
 	ErrUnique                staticError = "unique constraint violation"

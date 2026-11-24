@@ -3,6 +3,24 @@
 All notable changes are listed here. The project follows semantic versioning; before
 v1.0 a minor version may contain breaking changes.
 
+## v0.3.1 — 2026-11-24
+
+### Public API changes
+
+- **Role-bound runners & explicit policies (A1–A2)**: `stdsql.NewRunner(db, policy, opts)` and `pgxdriver.NewRunner(pool, policy, opts)` take `RunnerOptions` (`Role`, `RequireRole`, `ReadOnly`, `Unscoped`, `Timeouts`, `SessionKey`, `ExposeTx`, `Tracer`, `Metrics`, `Log`, `Sanitize`, `TagStatements`) and return `(*Runner[S], error)`. `ScopePolicy` replaces `SetupTx` with declarative `ManagedVars`, `ScopeVars`, `ContextVars`, `UnscopedVars`, `InactiveVars`, and `ScopeLog`; runners auto-guard managed variables and timeout settings, reject nested runner calls with `ErrNested` (opt-out via `tabula.WithoutTransaction(ctx)`), close handles on callback return (`ErrSessionClosed`), and support `RunOptions.BeforeCommit`.
+- **Opt-in raw transaction escape (A5)**: removed default `Session.Tx()` on both `stdsql` and `pgxdriver`; raw access now requires `RunnerOptions{ExposeTx: true}` and `WithinRaw` / `WithinRawOptions` / `WithinRawTxOptions` returning `*RawSession[S]`.
+- **Session-level observability precedence (B1)**: when both a runner and a registry configure telemetry, the runner takes precedence per enabled signal (`Tracer`, `Metrics`, `Log`) so descriptor statements are emitted once while hand-written inline SQL is also observed.
+- See [MIGRATION.md](docs/MIGRATION.md#from-v030-to-v031) for upgrade details.
+
+### Additions
+
+- **Scoped and unscoped sessions in one transaction (A3)**: `Runner.WithinShared` / `WithinSharedOptions` and `Shared[S]` (`Scoped`, `Unscoped`) reapply the complete managed GUC batch before every statement and serialize cursor reads.
+- **Sealed sessions & registry capability policy (A4, A6)**: `NewSessionKey`, `(SessionKey).Sign(owner)`, `SessionProof`, `RegistryConfig.SessionKey` / `RequireSealed`, `Registry.Seal(key)`, `ErrForeignSession`, keyed `stdsql.DirectSessionKey(key)` and `pgxdriver.DirectWithConfig`, `RegistryConfig.Deny` (`DenyDelete`, `DenyUpsert`, `DenyUnscopedWrites`, `DenyCopy`), `ErrCapabilityDenied`, and `Rows.CheckCopy()` enforced before empty-input shortcuts in `pgxdriver.CopyFrom`.
+- **Transaction-level retry & login-role hygiene (A7, A8)**: `Runner.WithinRetry` / `WithinRetryWith` on both drivers; `sqlcheck.CheckLoginRole` (`LoginRoleExpectation`) and `tabula check-login-role` CLI auditing `LOGIN NOINHERIT`, role memberships, direct table/column privileges, object ownership, and schema `CREATE` privileges.
+- **OpenTelemetry module & server-side slow log correlation (B1–B3)**: new separate Go module `github.com/0xJean/tabula/oteltabula` (`NewTracer`, `NewMetrics`); `tabula.Observer`, `StatementMeta`, `SQLFingerprint`, `SQLAction`, `RunnerOptions.TagStatements` (`/* tabula:<key> */`), and server-side logging guidance in [docs/LOGGING.md](docs/LOGGING.md).
+- **Single-table aggregates, composed view queries & embedded SQL files (C1–C4)**: `tabula.Max`, `Min`, `Sum`, `Avg`, `CountBy` (`TableSpec.GroupBy`), `Rows.Exists(ctx, where)`; `View.DefineQuery` / `TryDefineQuery` (`QuerySpec` with `Select`/`Where`/`Tail`/`CountBase`, fragment-local `$1…$m`, `ScopeColumns`/`ScopeByRLS`/`ScopeGlobal`, ordered `QueryFilter` with `Secret`, zero-value `QueryParams`, `List`/`Count`/`Find`/`Iter`/`ListKeyset` with `KeysetPage.Next`, C3 deterministic variant registration on `ViewDefinition.Statements`, and `FuzzCompileQueryFragment`); `LoadSQLFiles` / `MustSQLFiles` / `SQLFiles`.
+- **Extended source inventory & workload binding (D)**: `sqlcheck.CollectSQL` recognizes `View.DefineQuery` and single-table aggregates as static sites, collects typed security/factory/raw-tx call sites (`CallTarget`, `CallSite`, `DefaultSecurityCallTargets`, `InventoryConfig.AuditSecurityCalls`), and expands composed-query C3 variants automatically via `RoleStatements.AddViews`, `SQLInventory.BindRolesWithDefinitions`, and `tabula inventory --snapshot`.
+
 ## v0.3.0 — 2026-11-24
 
 ### Public API changes

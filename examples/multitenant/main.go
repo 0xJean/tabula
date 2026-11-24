@@ -40,7 +40,7 @@ func run(ctx context.Context) error {
 		return err
 	}
 	defer func() { _ = db.Close() }()
-	reg := tabula.NewRegistry(tabula.RegistryConfig[tenant]{})
+	reg := tabula.NewRegistry(tabula.RegistryConfig[tenant]{RequireSealed: true})
 	notes := tabula.Define(reg, tabula.TableSpec[note, int64]{Name: "public.notes", Order: "id"})
 	type visibleNote struct {
 		Tenant tenant `db:"tenant_id"`
@@ -64,12 +64,20 @@ func run(ctx context.Context) error {
 		return err
 	}
 	fmt.Println("Schema, statements and RLS verified")
-	runner := stdsql.NewRunner(db, stdsql.ScopePolicy[tenant]{
-		SetupTx: func(ctx context.Context, tx *sql.Tx, s tenant) error {
-			return stdsql.SetLocalConfig(ctx, tx, "demo.tenant", string(s))
+	key := tabula.NewSessionKey()
+	runner, err := stdsql.NewRunner(db, stdsql.ScopePolicy[tenant]{
+		ManagedVars: []string{"demo.tenant"},
+		ScopeVars: func(s tenant) map[string]string {
+			return map[string]string{"demo.tenant": string(s)}
 		},
 		GuardQuery: tabula.GuardNoSessionEscape,
-	})
+	}, stdsql.RunnerOptions{SessionKey: key})
+	if err != nil {
+		return err
+	}
+	if err := reg.Seal(key); err != nil {
+		return err
+	}
 	// Seed both tenants before checking what each can read.
 	for _, scope := range []tenant{"north", "south"} {
 		err := runner.Within(ctx, scope, func(ctx context.Context, s *stdsql.Session[tenant]) error {

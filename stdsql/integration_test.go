@@ -53,17 +53,19 @@ func TestRunnerScopeSavepointAndRetry(t *testing.T) {
 		ForbidRole:       true,
 	})
 	require.NoError(t, err)
-	runner := stdsql.NewRunner(db, stdsql.ScopePolicy[tenant]{
-		SetupTx: func(ctx context.Context, tx *sql.Tx, scope tenant) error {
-			if err := stdsql.SetLocalConfig(ctx, tx, "session.scope", string(scope)); err != nil {
-				return err
+	runner, err := stdsql.NewRunner(db, stdsql.ScopePolicy[tenant]{
+		ManagedVars: []string{"session.scope", "local.scope"},
+		ScopeVars: func(scope tenant) map[string]string {
+			return map[string]string{
+				"session.scope": string(scope),
+				"local.scope":   string(scope),
 			}
-			return stdsql.SetLocalConfig(ctx, tx, "local.scope", string(scope))
 		},
 		GuardQuery: guard,
-	})
+	}, stdsql.RunnerOptions{})
+	require.NoError(t, err)
 
-	// Scope SetupTx + Savepoint rollback keeps outer transaction intact.
+	// Scope vars + Savepoint rollback keeps outer transaction intact.
 	require.NoError(t, runner.Within(ctx, "t-1", func(ctx context.Context, s *stdsql.Session[tenant]) error {
 		for _, q := range []string{
 			"SET ROLE postgres",
@@ -109,13 +111,13 @@ func TestRunnerScopeSavepointAndRetry(t *testing.T) {
 	require.ErrorIs(t, err, tabula.ErrReadOnly)
 	require.Equal(t, "25006", tabula.SQLState(err))
 
-	// WithinIsolation works with Serializable + Retry helper.
-	require.NoError(t, tabula.Retry(ctx, tabula.RetryConfig{MaxAttempts: 3}, func(ctx context.Context) error {
-		return runner.WithinIsolation(ctx, "t-1", sql.LevelSerializable, func(ctx context.Context, s *stdsql.Session[tenant]) error {
-			rows, err := notes.Bind(s).Find(ctx, nil, tabula.Listing{})
-			require.NoError(t, err)
-			require.Len(t, rows, 1)
-			return nil
-		})
+	// WithinIsolation works with Serializable + WithinRetryWith helper.
+	require.NoError(t, runner.WithinRetryWith(ctx, "t-1", tabula.RetryConfig{MaxAttempts: 3}, stdsql.RunOptions[tenant]{
+		TxOptions: &sql.TxOptions{Isolation: sql.LevelSerializable},
+	}, func(ctx context.Context, s *stdsql.Session[tenant]) error {
+		rows, err := notes.Bind(s).Find(ctx, nil, tabula.Listing{})
+		require.NoError(t, err)
+		require.Len(t, rows, 1)
+		return nil
 	}))
 }
