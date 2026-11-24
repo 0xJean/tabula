@@ -80,10 +80,10 @@ func CountBy[V comparable, T, K, S any](ctx context.Context, rows *Rows[T, K, S]
 func GuardNoSessionEscape(query string) error
     GuardNoSessionEscape rejects role and session-authorization changes,
     RESET ALL, DISCARD ALL, transaction-ending commands (COMMIT, END, ABORT,
-    non-savepoint ROLLBACK, PREPARE TRANSACTION), and calls to set_config.
-    It checks each statement and rejects anonymous DO blocks and Unicode-escaped
-    identifiers. Ordinary quoted identifiers, literals and comments follow
-    PostgreSQL token boundaries.
+    non-savepoint ROLLBACK, PREPARE TRANSACTION), updates to pg_settings,
+    and calls to set_config. It checks each statement and rejects anonymous
+    DO blocks and Unicode-escaped identifiers. Ordinary quoted identifiers,
+    literals and comments follow PostgreSQL token boundaries.
 
     Pass it directly to stdsql.ScopePolicy.GuardQuery or
     pgxdriver.ScopePolicy.GuardQuery.
@@ -96,11 +96,11 @@ func GuardReadOnly(query string) error
 func GuardReadOnlyTransaction(query string) error
     GuardReadOnlyTransaction keeps transaction control with the runner.
     It returns an error matching both ErrReadOnly and ErrForbiddenStatement
-    for transaction-ending commands, SET TRANSACTION, and changes to
-    transaction_read_only or default_transaction_read_only. Calls to set_config
-    require a literal unprotected key. Savepoints remain available. Use it with
-    an established PostgreSQL READ ONLY transaction to enforce access inside
-    functions and other indirect SQL.
+    for transaction-ending commands, SET TRANSACTION, updates to pg_settings,
+    and changes to transaction_read_only or default_transaction_read_only.
+    Calls to set_config require a literal unprotected key. Savepoints remain
+    available. Use it with an established PostgreSQL READ ONLY transaction to
+    enforce access inside functions and other indirect SQL.
 
 func InTransaction(ctx context.Context) bool
     InTransaction reports whether ctx carries an active transaction marker from
@@ -164,11 +164,12 @@ func Min[V, T, K, S any](ctx context.Context, rows *Rows[T, K, S], col string, w
 
 func NewSessionGuard(cfg SessionGuardConfig) (func(string) error, error)
     NewSessionGuard compiles an application GuardQuery for trusted adapter SQL.
-    RESET ALL, DISCARD ALL, and transaction-ending commands (COMMIT, END, ABORT,
-    non-savepoint ROLLBACK, PREPARE TRANSACTION) are rejected whenever the
-    guard protects role, session-authorization, or variable state. Any active
-    restriction rejects anonymous DO blocks and Unicode-escaped identifiers.
-    A zero config permits all statements.
+    RESET ALL, DISCARD ALL, and transaction-ending commands (COMMIT, END,
+    ABORT, non-savepoint ROLLBACK, PREPARE TRANSACTION) are rejected whenever
+    the guard protects role, session-authorization, or variable state. Any
+    active restriction rejects anonymous DO blocks, Unicode-escaped identifiers
+    and UPDATE of pg_settings, which PostgreSQL applies as SET. A zero config
+    permits all statements.
 
 func RegisterType[S, V any](r *Registry[S], wrap func(*V) any)
     RegisterType registers a converter wrapping a pointer to a value of type T.
@@ -1074,11 +1075,16 @@ type SessionGuardConfig struct {
 	ForbidRole                 bool
 	ForbidSessionAuthorization bool
 	ForbidSetConfig            bool
+	ForbidVariableReads        bool
 }
     SessionGuardConfig selects prohibited session operations. The constructor
     copies GUC name prefixes such as "scope.", "session." and "local." and
     matches them case-insensitively. Dynamic set_config keys are rejected
-    whenever a namespace is protected.
+    whenever a namespace is protected. ForbidVariableReads additionally
+    rejects reading the protected namespaces: current_setting with a
+    protected or non-literal key, SHOW of a protected name or SHOW ALL,
+    and reads of the pg_settings view. A result column may be named pg_settings.
+    ForbidVariableReads requires at least one VariablePrefixes entry.
 
 type SessionKey struct {
 	// Has unexported fields.

@@ -21,8 +21,9 @@ var checkReadOnlyTransaction = compileSessionGuard(SessionGuardConfig{}, true)
 
 // GuardNoSessionEscape rejects role and session-authorization changes, RESET ALL,
 // DISCARD ALL, transaction-ending commands (COMMIT, END, ABORT, non-savepoint
-// ROLLBACK, PREPARE TRANSACTION), and calls to set_config. It checks each
-// statement and rejects anonymous DO blocks and Unicode-escaped identifiers.
+// ROLLBACK, PREPARE TRANSACTION), updates to pg_settings, and calls to
+// set_config. It checks each statement and rejects anonymous DO blocks and
+// Unicode-escaped identifiers.
 // Ordinary quoted identifiers, literals and comments follow PostgreSQL token
 // boundaries.
 //
@@ -45,8 +46,8 @@ func GuardReadOnly(query string) error {
 
 // GuardReadOnlyTransaction keeps transaction control with the runner. It
 // returns an error matching both ErrReadOnly and ErrForbiddenStatement for
-// transaction-ending commands, SET TRANSACTION, and changes to
-// transaction_read_only or default_transaction_read_only. Calls to set_config
+// transaction-ending commands, SET TRANSACTION, updates to pg_settings, and
+// changes to transaction_read_only or default_transaction_read_only. Calls to set_config
 // require a literal unprotected key. Savepoints remain available. Use it with
 // an established PostgreSQL READ ONLY transaction to enforce access inside
 // functions and other indirect SQL.

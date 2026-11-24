@@ -2,6 +2,12 @@
 
 Follow this guide when upgrading an application to v0.3. For the full surface after the upgrade, see the [integration guide](INTEGRATION.md).
 
+## From v0.3.2 to v0.3.3
+
+Active session guards now reject updates to the PostgreSQL `pg_settings` view. Set runner-owned parameters during transaction setup. Existing configurations keep their previous read policy.
+
+To restrict direct reads of an application's setting namespace, compile `NewSessionGuard` once with `VariablePrefixes` (for example `[]string{"example."}`) and `ForbidVariableReads: true`. Pass the guard to your adapter's SQL entry point or the runner's `ScopePolicy.GuardQuery`. Protected names, dynamic setting names, `SHOW ALL` and reads of the settings view return `ErrForbiddenStatement`. A literal setting outside the protected prefix, such as `TimeZone`, remains readable. A column label such as `SELECT 1 AS pg_settings` is allowed. [Session guard guarantees](../SECURITY.md#security-design-guarantees)
+
 ## From v0.3.0 to v0.3.2
 
 v0.3.2 includes the untagged v0.3.1 candidate. Upgrade directly from v0.3.0. This release moves role pinning, timeouts, managed scope variables, session sealing, raw-tx opt-in, session-level observability, aggregates and composed view queries into Tabula. The following changes apply to `stdsql` and `pgxdriver` callers.
