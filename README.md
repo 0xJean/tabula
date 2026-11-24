@@ -1,4 +1,9 @@
-<p align="center"><img src="docs/brand/lockup-light.png" alt="Tabula" width="420"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/lockup-dark.png">
+    <img src="docs/brand/lockup-light.png" alt="Tabula" width="420">
+  </picture>
+</p>
 
 # Tabula
 
