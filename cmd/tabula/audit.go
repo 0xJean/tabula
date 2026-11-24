@@ -44,7 +44,7 @@ func runAudit(ctx context.Context, name string, args []string, stdout, stderr io
 		fs.StringVar(&dsn, "dsn", "", "disposable PostgreSQL connection string (or TABULA_DSN)")
 	} else {
 		fs.StringVar(&opts.bindings, "bindings", "", "emit role workload using site assignments in this JSON file")
-		fs.StringVar(&opts.snapshot, "snapshot", "", "optional sqlcheck snapshot file to expand composed-query variants automatically")
+		fs.StringVar(&opts.snapshot, "snapshot", "", "sqlcheck snapshot containing the owning definitions for composed queries and aggregates")
 	}
 	if name == "catalog" {
 		fs.StringVar(&opts.section, "section", "", "emit one named snapshot file")

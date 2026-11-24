@@ -287,7 +287,7 @@ Run these commands in the application repository using the application’s inven
 
 ```sh
 tabula check-login-role --role app_login --member-of app_reader,app_writer --schemas public
-tabula inventory --config inventory.json --bindings bindings.json --snapshot views.sql
+tabula inventory --config inventory.json --bindings bindings.json --snapshot statements.sql > workload.json
 tabula verify-roles --config workload.json
 tabula grants --config privileges.json
 tabula minimize --config trials.json
@@ -295,4 +295,4 @@ tabula check-coverage --config workload.json
 tabula test-rls --config behavior.json
 ```
 
-Review each unregistered dynamic site and each extra grant before changing the application's grant declarations. [Full JSON examples and interpretation](AUTHORIZATION.md)
+Generate `statements.sql` from the tables and views used by the assigned roles. A missing descriptor or aggregate makes `inventory` exit with the affected site ID. Review each unregistered dynamic site and each extra grant before changing the application's grant declarations. [Full JSON examples and interpretation](AUTHORIZATION.md)

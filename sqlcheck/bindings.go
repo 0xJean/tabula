@@ -1,6 +1,7 @@
 package sqlcheck
 
 import (
+	"cmp"
 	"fmt"
 	"maps"
 	"slices"
@@ -9,17 +10,17 @@ import (
 	"github.com/0xJean/tabula"
 )
 
-// SQLBinding assigns one inventoried site to its execution roles. Dynamic
-// builders require reviewed named variants. Skip requires a registered exception.
-// Composed-query sites (Kind == "composed_query") expand automatically from
-// registered ViewDefinitions or snapshot definitions passed to
-// BindRolesWithDefinitions without manual variant listing.
+// SQLBinding assigns one inventoried site to its execution roles. Definition
+// names the owning table or view when the collector cannot resolve it. Prefix
+// optionally narrows the variants of that one composed query. Manual Variants
+// carry their own Access requirements. Skip requires a registered exception.
 type SQLBinding struct {
-	Roles    []string
-	Access   []PolicyAccess
-	Variants []Statement
-	Prefix   string `json:",omitempty"`
-	Skip     bool
+	Roles      []string
+	Access     []PolicyAccess
+	Variants   []Statement
+	Definition string `json:",omitempty"`
+	Prefix     string `json:",omitempty"`
+	Skip       bool
 }
 
 // BindRoles produces a workload from the collected SQL. Missing and stale
@@ -28,9 +29,10 @@ func (inv SQLInventory) BindRoles(bindings map[string]SQLBinding) (RoleStatement
 	return inv.BindRolesWithDefinitions(bindings, nil, nil)
 }
 
-// BindRolesWithDefinitions is BindRoles with table Definitions and
-// ViewDefinitions (including C3 composed-query variants and C1 aggregates) so
-// composed-query and aggregate sites expand automatically without manual listing.
+// BindRolesWithDefinitions expands each static composed query or aggregate
+// against its owning definition. A missing owner, ambiguous definition, or
+// site with no matching statements returns an error and no partial workload.
+// Supply named Variants for SQL that is not registered in a definition.
 func (inv SQLInventory) BindRolesWithDefinitions(
 	bindings map[string]SQLBinding,
 	defs []tabula.Definition,
@@ -39,9 +41,13 @@ func (inv SQLInventory) BindRolesWithDefinitions(
 	if len(inv.Findings) > 0 {
 		return nil, fmt.Errorf("inventory has unresolved findings: %v", inv.Findings)
 	}
-	allDefs := make([]tabula.Definition, 0, len(defs)+len(views))
-	allDefs = append(allDefs, defs...)
-	allDefs = append(allDefs, ViewsToDefinitions(views)...)
+	byName := make(map[string][]tabula.Definition, len(defs)+len(views))
+	for _, d := range defs {
+		byName[d.Name] = append(byName[d.Name], d)
+	}
+	for _, v := range views {
+		byName[v.Name] = append(byName[v.Name], tabula.Definition(v))
+	}
 
 	out := RoleStatements{}
 	seen := map[string]bool{}
@@ -52,10 +58,7 @@ func (inv SQLInventory) BindRolesWithDefinitions(
 		}
 		seen[site.ID] = true
 		if b.Skip {
-			if site.Exception == "" && site.Kind != "aggregate" {
-				return nil, fmt.Errorf("%s: skipped site requires a reviewed exception and no workload", site.ID)
-			}
-			if len(b.Roles)+len(b.Access)+len(b.Variants) != 0 {
+			if strings.TrimSpace(site.Exception) == "" || len(b.Roles)+len(b.Access)+len(b.Variants) != 0 || b.Definition != "" || b.Prefix != "" {
 				return nil, fmt.Errorf("%s: skipped site requires a reviewed exception and no workload", site.ID)
 			}
 			continue
@@ -63,58 +66,12 @@ func (inv SQLInventory) BindRolesWithDefinitions(
 		if _, err := scopeArray(b.Roles); err != nil {
 			return nil, fmt.Errorf("%s roles: %w", site.ID, err)
 		}
-		var stmts []Statement
-		switch {
-		case site.Dynamic:
-			if site.Exception == "" || len(b.Variants) == 0 || len(b.Access) > 0 {
-				return nil, fmt.Errorf("%s: dynamic site needs reviewed variants with their own access requirements", site.ID)
-			}
-			stmts = slices.Clone(b.Variants)
-			for i := range stmts {
-				if stmts[i].Name == "" {
-					return nil, fmt.Errorf("%s: unnamed variant", site.ID)
-				}
-				stmts[i].Name = site.ID + "/" + stmts[i].Name
-			}
-		case site.Kind == "composed_query":
-			if len(b.Variants) > 0 {
-				stmts = slices.Clone(b.Variants)
-				for i := range stmts {
-					stmts[i].Name = site.ID + "/" + stmts[i].Name
-				}
-			} else {
-				prefix := b.Prefix
-				if prefix == "" {
-					prefix = site.QueryKey + "."
-				}
-				stmts = expandPrefixStatements(site.ID, prefix, allDefs, b.Access)
-				if len(stmts) == 0 {
-					return nil, fmt.Errorf("%s: no registered composed-query variants match prefix %q", site.ID, prefix)
-				}
-			}
-		case site.Kind == "aggregate":
-			if len(b.Variants) > 0 {
-				stmts = slices.Clone(b.Variants)
-				for i := range stmts {
-					stmts[i].Name = site.ID + "/" + stmts[i].Name
-				}
-			} else if len(allDefs) > 0 {
-				stmts = expandAggregateStatements(site.ID, site.QueryKey, allDefs, b.Access)
-			}
-			if len(stmts) == 0 {
-				// Aggregate queries over declared columns have no raw SQL text unless
-				// matched against table Definitions; allow explicit role binding without
-				// blocking static verification when no extra SQL is required.
-				continue
-			}
-		default:
-			if len(b.Variants) > 0 {
-				return nil, fmt.Errorf("%s: static site uses its collected SQL", site.ID)
-			}
-			stmts = []Statement{{Name: site.ID, SQL: site.SQL, Access: b.Access}}
+		stmts, err := site.bindStatements(b, byName)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", site.ID, err)
 		}
-		for _, r := range b.Roles {
-			out[r] = append(out[r], stmts...)
+		for _, role := range b.Roles {
+			out[role] = append(out[role], stmts...)
 		}
 	}
 	for _, id := range slices.Sorted(maps.Keys(bindings)) {
@@ -128,42 +85,91 @@ func (inv SQLInventory) BindRolesWithDefinitions(
 	return out, nil
 }
 
-func expandPrefixStatements(siteID, prefix string, defs []tabula.Definition, access []PolicyAccess) []Statement {
-	var out []Statement
-	for _, d := range defs {
-		keys := slices.Sorted(maps.Keys(d.Statements))
-		for _, k := range keys {
-			if strings.HasPrefix(k, prefix) || k == strings.TrimSuffix(prefix, ".") {
-				out = append(out, Statement{
-					Name:   siteID + "/" + d.Name + "/" + k,
-					SQL:    d.Statements[k],
-					Access: access,
-				})
-			}
-		}
+func (site SQLSite) bindStatements(b SQLBinding, byName map[string][]tabula.Definition) ([]Statement, error) {
+	registered := site.Kind == "composed_query" || site.Kind == "aggregate"
+	if site.Dynamic && (strings.TrimSpace(site.Exception) == "" || len(b.Variants) == 0) {
+		return nil, fmt.Errorf("dynamic site needs reviewed variants")
 	}
-	return out
+	if len(b.Variants) > 0 {
+		if !site.Dynamic && !registered {
+			return nil, fmt.Errorf("static site uses its collected SQL")
+		}
+		if len(b.Access) > 0 {
+			return nil, fmt.Errorf("supply Access on each variant when using Variants")
+		}
+		if b.Definition != "" || b.Prefix != "" {
+			return nil, fmt.Errorf("manual variants cannot also select a definition or prefix")
+		}
+		stmts := slices.Clone(b.Variants)
+		for i := range stmts {
+			if strings.TrimSpace(stmts[i].Name) == "" {
+				return nil, fmt.Errorf("unnamed variant")
+			}
+			stmts[i].Name = site.ID + "/" + stmts[i].Name
+		}
+		return stmts, nil
+	}
+	if b.Prefix != "" && site.Kind != "composed_query" {
+		return nil, fmt.Errorf("binding Prefix requires a composed query")
+	}
+	if !registered {
+		if b.Definition != "" {
+			return nil, fmt.Errorf("binding Definition requires a composed query or aggregate")
+		}
+		return []Statement{{Name: site.ID, SQL: site.SQL, Access: b.Access}}, nil
+	}
+	if site.Method == "TryDefineQuery" {
+		return nil, fmt.Errorf("supply named Variants for %q compiled with TryDefineQuery", site.QueryKey)
+	}
+
+	if site.Definition != "" && b.Definition != "" && site.Definition != b.Definition {
+		return nil, fmt.Errorf("binding definition %q conflicts with source definition %q", b.Definition, site.Definition)
+	}
+	name := cmp.Or(site.Definition, b.Definition)
+	if name == "" {
+		return nil, fmt.Errorf("unknown owner of %q: specify Definition or supply named Variants", site.QueryKey)
+	}
+	matches := byName[name]
+	switch len(matches) {
+	case 0:
+		return nil, fmt.Errorf("missing definition %q for %q", name, site.QueryKey)
+	case 1:
+		return site.expand(matches[0], b)
+	default:
+		return nil, fmt.Errorf("ambiguous definition %q for %q", name, site.QueryKey)
+	}
 }
 
-func expandAggregateStatements(siteID, queryKey string, defs []tabula.Definition, access []PolicyAccess) []Statement {
-	var targetSuffix string
+func (site SQLSite) expand(d tabula.Definition, b SQLBinding) ([]Statement, error) {
+	var keys []string
 	switch {
-	case queryKey == "exists":
-		targetSuffix = "exists"
-	case strings.HasPrefix(queryKey, "countby:"):
-		targetSuffix = "count_by_" + strings.TrimPrefix(queryKey, "countby:")
-	default:
-		return nil
-	}
-	var out []Statement
-	for _, d := range defs {
-		if query, ok := d.Statements[targetSuffix]; ok {
-			out = append(out, Statement{
-				Name:   siteID + "/" + d.Name + "/" + targetSuffix,
-				SQL:    query,
-				Access: access,
-			})
+	case site.Kind == "composed_query":
+		exact := strings.TrimSuffix(b.Prefix, ".")
+		for key, query := range d.StatementQueries {
+			if query == site.QueryKey && query != "" && (strings.HasPrefix(key, b.Prefix) || key == exact) {
+				keys = append(keys, key)
+			}
 		}
+		if len(keys) == 0 {
+			return nil, fmt.Errorf("no registered variants for %q in definition %q matching prefix %q (regenerate the snapshot or supply named Variants)", site.QueryKey, d.Name, b.Prefix)
+		}
+		slices.Sort(keys)
+	case site.QueryKey == "exists":
+		keys = []string{"exists"}
+	default:
+		column, ok := strings.CutPrefix(site.QueryKey, "countby:")
+		if !ok || column == "" {
+			return nil, fmt.Errorf("aggregate %q in definition %q requires named Variants", site.QueryKey, d.Name)
+		}
+		keys = []string{"count_by_" + column}
 	}
-	return out
+	stmts := make([]Statement, 0, len(keys))
+	for _, key := range keys {
+		query, ok := d.Statements[key]
+		if !ok {
+			return nil, fmt.Errorf("missing registered statement %q in definition %q for %q (check the snapshot or supply named Variants)", key, d.Name, site.QueryKey)
+		}
+		stmts = append(stmts, Statement{Name: site.ID + "/" + d.Name + "/" + key, SQL: query, Access: b.Access})
+	}
+	return stmts, nil
 }

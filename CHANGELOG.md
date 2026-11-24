@@ -27,6 +27,8 @@ v1.0 a minor version may contain breaking changes.
 - **Single-table aggregates, composed view queries & embedded SQL files (C1–C4)**: `tabula.Max`, `Min`, `Sum`, `Avg`, `CountBy` (`TableSpec.GroupBy`), `Rows.Exists(ctx, where)`; `View.DefineQuery` / `TryDefineQuery` (`QuerySpec` with `Select`/`Where`/`Tail`/`CountBase`, fragment-local `$1…$m`, `ScopeColumns`/`ScopeByRLS`/`ScopeGlobal`, ordered `QueryFilter` with `Secret`, zero-value `QueryParams`, `List`/`Count`/`Find`/`Iter`/`ListKeyset` with `KeysetPage.Next`, C3 deterministic variant registration on `ViewDefinition.Statements`, and `FuzzCompileQueryFragment`); `LoadSQLFiles` / `MustSQLFiles` / `SQLFiles`.
 - **Extended source inventory & workload binding (D)**: `sqlcheck.CollectSQL` recognizes `View.DefineQuery` and single-table aggregates as static sites, collects typed security/factory/raw-tx call sites (`CallTarget`, `CallSite`, `DefaultSecurityCallTargets`, `InventoryConfig.AuditSecurityCalls`), and expands composed-query C3 variants automatically via `RoleStatements.AddViews`, `SQLInventory.BindRolesWithDefinitions`, and `tabula inventory --snapshot`.
 
+Role bindings expand only statements registered for the selected descriptor and query. An unresolved owner or missing aggregate fails the inventory check with the site ID. Manual variants carry their own access requirements. Typed field inventory includes promoted fields. [Authorization guide](docs/AUTHORIZATION.md)
+
 ## v0.3.0 — 2026-11-24
 
 ### Public API changes

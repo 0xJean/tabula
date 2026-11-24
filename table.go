@@ -104,6 +104,9 @@ type Definition struct {
 	Columns    []DefinedColumn
 	Statements map[string]string
 	Privileges []DefinedPrivilege
+	// StatementQueries maps each composed-query variant's statement key to
+	// the exact query key supplied to View.DefineQuery.
+	StatementQueries map[string]string `json:",omitempty"`
 }
 
 // DefinedColumn is one column's metadata for schema and privilege checks.

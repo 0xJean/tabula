@@ -22,6 +22,13 @@ func TestCollectSQL_V031ComposedQueriesAggregatesAndSecurityCallSites(t *testing
 	}
 	t.Setenv("GOWORK", "off")
 	write("go.mod", "module example.test/audit\n\ngo 1.26.0\n\nrequire github.com/0xJean/tabula v0.3.0\n\nreplace github.com/0xJean/tabula => "+filepath.ToSlash(repoRoot)+"\n")
+	write("descriptors.go", `package audit
+import tb "github.com/0xJean/tabula"
+var registry = tb.NewRegistry(tb.RegistryConfig[string]{})
+var shared = tb.DefineView(registry, tb.ViewSpec[item]{Name: "shared_view"})
+var mutable = shared
+var Exported = shared
+`)
 	write("app.go", `package audit
 
 import (
@@ -51,6 +58,10 @@ func setup(ctx context.Context, db *sql.DB, dynKey, dynCol string) {
 
 	tbl := tb.Define(reg, tb.TableSpec[item, int64]{Name: "items", GroupBy: []string{"kind"}})
 	view := tb.DefineView(reg, tb.ViewSpec[item]{Name: "items_view"})
+	mutable = view
+	_, _ = shared.TryDefineQuery("private", tb.QuerySpec{})
+	_, _ = mutable.TryDefineQuery("mutable", tb.QuerySpec{})
+	_, _ = Exported.TryDefineQuery("exported", tb.QuerySpec{})
 	_ = view.DefineQuery("items.search", tb.QuerySpec{
 		Select:   "SELECT id, tenant_id, rank, kind FROM items",
 		Scope:    tb.ScopeColumns("tenant_id"),
@@ -103,10 +114,16 @@ func setup(ctx context.Context, db *sql.DB, dynKey, dynCol string) {
 		} else {
 			staticDQ++
 			require.Equal(t, "items.search", s.QueryKey)
+			require.Equal(t, "items_view", s.Definition)
 		}
 	}
 	require.Equal(t, 1, staticDQ)
 	require.Equal(t, 1, dynamicDQ)
+	owners := map[string]string{}
+	for _, site := range byMethod["TryDefineQuery"] {
+		owners[site.QueryKey] = site.Definition
+	}
+	require.Equal(t, map[string]string{"private": "shared_view", "mutable": "", "exported": ""}, owners)
 
 	require.Len(t, byMethod["Max"], 1)
 	require.False(t, byMethod["Max"][0].Dynamic)
@@ -115,12 +132,14 @@ func setup(ctx context.Context, db *sql.DB, dynKey, dynCol string) {
 	require.Len(t, byMethod["CountBy"], 1)
 	require.False(t, byMethod["CountBy"][0].Dynamic)
 	require.Equal(t, "countby:kind", byMethod["CountBy"][0].QueryKey)
+	require.Equal(t, "items", byMethod["CountBy"][0].Definition)
 
 	require.Len(t, byMethod["Min"], 1)
 	require.True(t, byMethod["Min"][0].Dynamic)
 
 	require.Len(t, byMethod["Exists"], 1)
 	require.False(t, byMethod["Exists"][0].Dynamic)
+	require.Equal(t, "items", byMethod["Exists"][0].Definition)
 
 	// Verify dynamic sites generated findings.
 	require.Len(t, inv.Findings, 2)
@@ -179,7 +198,7 @@ func setup(ctx context.Context, db *sql.DB, dynKey, dynCol string) {
 		}},
 	}
 	bound, err := cleanInv.BindRolesWithDefinitions(
-		map[string]SQLBinding{"app.go#dq-1": {Roles: []string{"app_reader"}}},
+		map[string]SQLBinding{"app.go#dq-1": {Roles: []string{"app_reader"}, Definition: "items_view"}},
 		nil,
 		reg.DefinedViews(),
 	)

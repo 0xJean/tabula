@@ -279,9 +279,10 @@ func cloneDefinition(d Definition) Definition {
 		privs[i].Columns = slices.Clone(privs[i].Columns)
 	}
 	return Definition{
-		Name:       d.Name,
-		Columns:    slices.Clone(d.Columns),
-		Statements: maps.Clone(d.Statements),
-		Privileges: privs,
+		Name:             d.Name,
+		Columns:          slices.Clone(d.Columns),
+		Statements:       maps.Clone(d.Statements),
+		Privileges:       privs,
+		StatementQueries: maps.Clone(d.StatementQueries),
 	}
 }

@@ -20,10 +20,11 @@ func ViewsToDefinitions(views []tabula.ViewDefinition) []tabula.Definition {
 	out := make([]tabula.Definition, len(views))
 	for i, v := range views {
 		out[i] = tabula.Definition{
-			Name:       v.Name,
-			Columns:    slices.Clone(v.Columns),
-			Statements: maps.Clone(v.Statements),
-			Privileges: slices.Clone(v.Privileges),
+			Name:             v.Name,
+			Columns:          slices.Clone(v.Columns),
+			Statements:       maps.Clone(v.Statements),
+			Privileges:       slices.Clone(v.Privileges),
+			StatementQueries: maps.Clone(v.StatementQueries),
 		}
 	}
 	return out
@@ -31,13 +32,19 @@ func ViewsToDefinitions(views []tabula.ViewDefinition) []tabula.Definition {
 
 // RenderSnapshot formats every statement across defs deterministically (sorted
 // by table name, then statement key), prefixed by headerLines (each written as
-// a "-- " comment line).
+// a "-- " comment line). A header records the owning query of each
+// composed-query statement so role bindings survive a snapshot round trip.
 func RenderSnapshot(defs []tabula.Definition, headerLines ...string) string {
 	sorted := slices.Clone(defs)
 	slices.SortFunc(sorted, func(a, b tabula.Definition) int { return strings.Compare(a.Name, b.Name) })
 	var b strings.Builder
 	for _, line := range headerLines {
 		b.WriteString("-- " + line + "\n")
+	}
+	for _, d := range sorted {
+		if len(d.StatementQueries) > 0 {
+			writeQueryHeader(&b, d)
+		}
 	}
 	for _, d := range sorted {
 		if len(d.Statements) == 0 {

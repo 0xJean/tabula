@@ -114,7 +114,13 @@ func TestComposedQueryCompileAndValidation(t *testing.T) {
 		Keyset:   true,
 	})
 
-	stmts := view.Definition().Statements
+	def := view.Definition()
+	stmts := def.Statements
+	for key := range stmts {
+		require.Equal(t, "list", def.StatementQueries[key], key)
+	}
+	delete(def.StatementQueries, "list.scoped.page")
+	require.Equal(t, "list", view.Definition().StatementQueries["list.scoped.page"])
 	require.Contains(t, stmts, "list.scoped.page")
 	require.Contains(t, stmts, "list.unscoped.page")
 	require.Contains(t, stmts, "list.scoped.all.page")

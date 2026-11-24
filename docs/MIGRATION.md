@@ -24,6 +24,8 @@ To adopt **sealed sessions (A4)** incrementally:
 2. During startup, allocate `key := tabula.NewSessionKey()`, pass `SessionKey: key` into every `RunnerOptions` (and `stdsql.DirectSessionKey(key)` / `pgxdriver.DirectWithConfig(..., DirectConfig{SessionKey: key})`), and call `reg.Seal(key)` checking the error.
 3. Unsealed handles (including `NewSession` migration wrappers) fail closed with `tabula.ErrForeignSession` on keyed registries.
 
+For applications using the v0.3.1 preview, regenerate composed-query snapshots with `RenderAllSnapshot` and rerun `tabula inventory`. A resolved descriptor name is part of the site's identity, so review the bindings for changed IDs. Existing SQL snapshots remain readable by `tabula check`. [Role workload configuration](AUTHORIZATION.md)
+
 ## From the v0.2.0 release
 
 | v0.2.0 declaration or call | v0.3 equivalent |

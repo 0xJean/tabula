@@ -131,3 +131,38 @@ func TestCollectSQL(t *testing.T) {
 	require.Error(t, err)
 	require.False(t, strings.Contains(strings.Join(ids, ","), dir))
 }
+
+func TestInventoryFieldsUseDeclaringStruct(t *testing.T) {
+	t.Setenv("GOWORK", "off")
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.test/fields\n\ngo 1.26\n"), 0600))
+	const src = `package fields
+type Display[T any] struct { Label T }
+type Alias = Display[string]
+type Details struct { *Alias }
+type Panel struct { Details }
+type Shadow struct { Panel; Label string }
+type Copy Display[string]
+func captions(d *Alias, p Panel, s Shadow, c Copy) {
+	_ = d.Label
+	_ = p.Label
+	_ = Display[int]{Label: 1}
+	_ = s.Label
+	_ = c.Label
+	_ = Copy{Label: ""}
+}
+`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "fields.go"), []byte(src), 0600))
+	cfg := InventoryConfig{Dir: dir, CallTargets: []CallTarget{{
+		Package: "example.test/fields", Receiver: "example.test/fields.Display", Name: "Label", Field: true, Category: "display",
+	}}}
+	inv, err := CollectSQL(t.Context(), cfg)
+	require.NoError(t, err)
+	var lines []int
+	for _, site := range inv.CallSites {
+		require.Equal(t, "example.test/fields.Display.Label", site.Symbol)
+		require.Equal(t, "display", site.Category)
+		lines = append(lines, site.Line)
+	}
+	require.Equal(t, []int{9, 10, 11}, lines)
+}

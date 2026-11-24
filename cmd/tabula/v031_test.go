@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/0xJean/tabula"
+	"github.com/0xJean/tabula/cmd/tabula/testdata/inventoryfixture"
 	"github.com/0xJean/tabula/sqlcheck"
 	"github.com/stretchr/testify/require"
 )
@@ -31,68 +32,84 @@ func TestCheckLoginRoleCLIValidation(t *testing.T) {
 }
 
 func TestInventoryCLIWithComposedQuerySnapshot(t *testing.T) {
-	t.Setenv("GOWORK", "off")
-	repoRoot, err := filepath.Abs("../..")
-	require.NoError(t, err)
-
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"),
-		[]byte("module sample.test/q\n\ngo 1.26.0\n\nrequire github.com/0xJean/tabula v0.3.0\n\nreplace github.com/0xJean/tabula => "+filepath.ToSlash(repoRoot)+"\n"), 0600))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "q.go"), []byte(`package q
-import "github.com/0xJean/tabula"
-type row struct { ID int64 `+"`db:\"id\"`"+` }
-func def(r *tabula.Registry[struct{}]) {
-	v := tabula.DefineView(r, tabula.ViewSpec[row]{Name: "items_v"})
-	_ = v.DefineQuery("items.list", tabula.QuerySpec{Select: "SELECT id FROM items", MaxLimit: 10})
-}
-`), 0600))
-
-	// Generate matching C3 snapshot.
-	type row struct {
-		ID int64 `db:"id"`
+	writeJSON := func(name string, value any) string {
+		t.Helper()
+		path := filepath.Join(dir, name)
+		data, err := json.Marshal(value)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(path, data, 0600))
+		return path
 	}
-	reg := tabula.NewRegistry(tabula.RegistryConfig[struct{}]{})
-	v := tabula.DefineView(reg, tabula.ViewSpec[row]{Name: "items_v"})
-	v.DefineQuery("items.list", tabula.QuerySpec{
-		Select: "SELECT id FROM items",
-		Order: tabula.QueryOrderSpec{
-			Default:          "id",
-			DefaultDirection: tabula.SortAsc,
-			Sorts:            []tabula.QuerySort{{Key: "id", Expr: "id", Column: "id"}},
-		},
-		MaxLimit: 10,
-	})
-	snapPath := filepath.Join(dir, "views.sql")
-	require.NoError(t, os.WriteFile(snapPath, []byte(sqlcheck.RenderAllSnapshot(nil, reg.DefinedViews())), 0600))
-
-	cfgPath := filepath.Join(dir, "cfg.json")
-	cfgBytes, err := json.Marshal(sqlcheck.InventoryConfig{
-		Dir:                dir,
-		AuditSecurityCalls: true,
-	})
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(cfgPath, cfgBytes, 0600))
-
+	cfg := writeJSON("config.json", sqlcheck.InventoryConfig{Dir: "testdata/inventoryfixture", AuditSecurityCalls: true})
 	var out, diag bytes.Buffer
-	require.Equal(t, 0, run(t.Context(), []string{"inventory", "--config", cfgPath}, &out, &diag), diag.String())
+	require.Equal(t, 0, run(t.Context(), []string{"inventory", "--config", cfg}, &out, &diag), diag.String())
+
 	var inv sqlcheck.SQLInventory
 	require.NoError(t, json.Unmarshal(out.Bytes(), &inv))
-	require.Len(t, inv.Sites, 1)
-	require.Equal(t, "items.list", inv.Sites[0].QueryKey)
+	require.Empty(t, inv.Findings)
+	require.Len(t, inv.Sites, 4)
+	ids := map[string]string{}
+	bindings := map[string]sqlcheck.SQLBinding{}
+	for _, site := range inv.Sites {
+		var role string
+		var binding sqlcheck.SQLBinding
+		switch site.QueryKey {
+		case "list":
+			require.Contains(t, []string{"notes_view", "labels_view"}, site.Definition)
+			role = site.Definition + "_reader"
+		case "list.recent":
+			role = "recent_reader"
+		case "countby:category":
+			require.Empty(t, site.Definition, "rows are supplied by the caller")
+			role = "counts_reader"
+			binding.Definition = "records"
+		default:
+			t.Fatalf("unexpected site %+v", site)
+		}
+		ids[role] = site.ID
+		binding.Roles = []string{role}
+		bindings[site.ID] = binding
+	}
+	bindPath := writeJSON("bindings.json", bindings)
+	snapPath := filepath.Join(dir, "statements.sql")
+	bind := func(tables []tabula.Definition, views []tabula.ViewDefinition, wantCode int) sqlcheck.RoleStatements {
+		t.Helper()
+		require.NoError(t, os.WriteFile(snapPath, []byte(sqlcheck.RenderAllSnapshot(tables, views)), 0600))
+		out.Reset()
+		diag.Reset()
+		code := run(t.Context(), []string{"inventory", "--config", cfg, "--bindings", bindPath, "--snapshot", snapPath}, &out, &diag)
+		require.Equal(t, wantCode, code, diag.String())
+		var work sqlcheck.RoleStatements
+		require.NoError(t, json.Unmarshal(out.Bytes(), &work))
+		return work
+	}
 
-	bindPath := filepath.Join(dir, "bindings.json")
-	bindBytes, err := json.Marshal(map[string]sqlcheck.SQLBinding{
-		inv.Sites[0].ID: {Roles: []string{"app_reader"}},
-	})
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(bindPath, bindBytes, 0600))
+	reg := inventoryfixture.Registry()
+	tables, views := reg.Defined(), reg.DefinedViews()
+	work := bind(tables, views, 0)
+	require.Len(t, work, 4)
+	for _, group := range []struct{ role, view, query, relation string }{
+		{"notes_view_reader", "notes_view", "list", "notes"},
+		{"labels_view_reader", "labels_view", "list", "labels"},
+		{"recent_reader", "notes_view", "list.recent", "recent_notes"},
+	} {
+		stmts := work[group.role]
+		require.Len(t, stmts, 3)
+		for i, suffix := range []string{"count", "find", "page"} {
+			require.Equal(t, ids[group.role]+"/"+group.view+"/"+group.query+"."+suffix, stmts[i].Name)
+			require.Contains(t, stmts[i].SQL, "FROM "+group.relation)
+		}
+	}
+	require.Len(t, work["counts_reader"], 1)
+	require.Equal(t, ids["counts_reader"]+"/records/count_by_category", work["counts_reader"][0].Name)
 
-	out.Reset()
-	diag.Reset()
-	require.Equal(t, 0, run(t.Context(), []string{"inventory", "--config", cfgPath, "--bindings", bindPath, "--snapshot", snapPath}, &out, &diag), diag.String())
-	var work sqlcheck.RoleStatements
-	require.NoError(t, json.Unmarshal(out.Bytes(), &work))
-	require.NotEmpty(t, work["app_reader"])
+	require.Nil(t, bind(tables, views[:1], 1))
+	require.Contains(t, diag.String(), ids["labels_view_reader"])
+	require.Contains(t, diag.String(), "labels_view")
+	require.Nil(t, bind(nil, views, 1))
+	require.Contains(t, diag.String(), ids["counts_reader"])
+	require.Contains(t, diag.String(), "records")
 }
 
 func TestCheckLoginRoleCLI_Integration(t *testing.T) {

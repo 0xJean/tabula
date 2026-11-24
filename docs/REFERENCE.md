@@ -310,6 +310,9 @@ type Definition struct {
 	Columns    []DefinedColumn
 	Statements map[string]string
 	Privileges []DefinedPrivilege
+	// StatementQueries maps each composed-query variant's statement key to
+	// the exact query key supplied to View.DefineQuery.
+	StatementQueries map[string]string `json:",omitempty"`
 }
     Definition is one defined table as Registry.Defined lists it.
 
@@ -1837,10 +1840,9 @@ func FirstDifference(want, got string) string
 
 func ParseSnapshot(content string) ([]tabula.Definition, error)
     ParseSnapshot parses a SQL snapshot previously rendered by RenderSnapshot
-    back into tabula.Definition entries (table name + named statements). This
-    allows standalone CI tooling such as `tabula check` to verify a committed
-    snapshot directly against PostgreSQL without importing the application's Go
-    packages.
+    into named statements and their recorded query ownership. Standalone tools
+    such as tabula check can verify the snapshot against PostgreSQL without
+    importing the application's Go packages.
 
 func PrepareStatement(ctx context.Context, tx *sql.Tx, query, role string) (err error)
     PrepareStatement has the server PREPARE query inside tx, optionally as role,
@@ -1855,9 +1857,10 @@ func RenderAllSnapshot(tables []tabula.Definition, views []tabula.ViewDefinition
     one deterministic SQL snapshot.
 
 func RenderSnapshot(defs []tabula.Definition, headerLines ...string) string
-    RenderSnapshot formats every statement across defs deterministically (sorted
-    by table name, then statement key), prefixed by headerLines (each written as
-    a "-- " comment line).
+    RenderSnapshot formats every statement across defs deterministically
+    (sorted by table name, then statement key), prefixed by headerLines (each
+    written as a "-- " comment line). A header records the owning query of each
+    composed-query statement so role bindings survive a snapshot round trip.
 
 func RunRLSMatrix(ctx context.Context, db *sql.DB, m RLSMatrix) ([]string, error)
     RunRLSMatrix executes application SQL against a disposable fixture and rolls
@@ -1930,8 +1933,8 @@ type CallTarget struct {
 	Category string `json:",omitempty"`
 }
     CallTarget matches a Go package-level function (Receiver == ""), method
-    (Receiver != ""), or struct field (Field != "") by canonical package path
-    and symbol name, independent of import aliases or generic instantiations.
+    (Receiver != ""), or struct field (Field == true) by canonical package path
+    and symbol name. Field targets also match selections promoted by embedding.
 
 func DefaultSecurityCallTargets() []CallTarget
     DefaultSecurityCallTargets returns the v0.3.1 security-review call targets:
@@ -2175,17 +2178,17 @@ type RuntimeProbe struct {
     savepoint.
 
 type SQLBinding struct {
-	Roles    []string
-	Access   []PolicyAccess
-	Variants []Statement
-	Prefix   string `json:",omitempty"`
-	Skip     bool
+	Roles      []string
+	Access     []PolicyAccess
+	Variants   []Statement
+	Definition string `json:",omitempty"`
+	Prefix     string `json:",omitempty"`
+	Skip       bool
 }
-    SQLBinding assigns one inventoried site to its execution roles. Dynamic
-    builders require reviewed named variants. Skip requires a registered
-    exception. Composed-query sites (Kind == "composed_query") expand
-    automatically from registered ViewDefinitions or snapshot definitions passed
-    to BindRolesWithDefinitions without manual variant listing.
+    SQLBinding assigns one inventoried site to its execution roles. Definition
+    names the owning table or view when the collector cannot resolve it. Prefix
+    optionally narrows the variants of that one composed query. Manual Variants
+    carry their own Access requirements. Skip requires a registered exception.
 
 type SQLInventory struct {
 	Sites     []SQLSite
@@ -2213,10 +2216,10 @@ func (inv SQLInventory) BindRolesWithDefinitions(
 	defs []tabula.Definition,
 	views []tabula.ViewDefinition,
 ) (RoleStatements, error)
-    BindRolesWithDefinitions is BindRoles with table Definitions and
-    ViewDefinitions (including C3 composed-query variants and C1 aggregates)
-    so composed-query and aggregate sites expand automatically without manual
-    listing.
+    BindRolesWithDefinitions expands each static composed query or aggregate
+    against its owning definition. A missing owner, ambiguous definition, or
+    site with no matching statements returns an error and no partial workload.
+    Supply named Variants for SQL that is not registered in a definition.
 
 type SQLMethod struct {
 	Receiver, Method string
@@ -2232,9 +2235,11 @@ type SQLSite struct {
 	Receiver, Method string
 	SQL              string `json:",omitempty"`
 	QueryKey         string `json:",omitempty"`
-	Kind             string `json:",omitempty"`
-	Dynamic          bool   `json:",omitempty"`
-	Exception        string `json:",omitempty"`
+	// Definition is the owning descriptor when its name is resolved from source.
+	Definition string `json:",omitempty"`
+	Kind       string `json:",omitempty"`
+	Dynamic    bool   `json:",omitempty"`
+	Exception  string `json:",omitempty"`
 }
     SQLSite describes a static or dynamic SQL call, composed query definition,
     or single-table aggregate call. ID is independent of line numbers.
@@ -2648,7 +2653,7 @@ Usage of inventory:
   -config string
         path to command-specific JSON configuration
   -snapshot string
-        optional sqlcheck snapshot file to expand composed-query variants automatically
+        sqlcheck snapshot containing the owning definitions for composed queries and aggregates
 ```
 
 ### tabula verify-roles

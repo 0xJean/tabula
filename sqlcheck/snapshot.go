@@ -1,19 +1,36 @@
 package sqlcheck
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/0xJean/tabula"
 )
 
+// Query ownership lives in the file preamble, which older snapshot readers
+// already ignore. Ordinary statement keys and SQL keep their original format.
+const queryHeader = "-- tabula:statement-queries "
+
+type snapshotQueries struct {
+	Definition string
+	Statements map[string]string
+}
+
+func writeQueryHeader(b *strings.Builder, d tabula.Definition) {
+	data, _ := json.Marshal(snapshotQueries{Definition: d.Name, Statements: d.StatementQueries})
+	b.WriteString(queryHeader)
+	b.Write(data)
+	b.WriteByte('\n')
+}
+
 // ParseSnapshot parses a SQL snapshot previously rendered by RenderSnapshot
-// back into tabula.Definition entries (table name + named statements). This
-// allows standalone CI tooling such as `tabula check` to verify a committed
-// snapshot directly against PostgreSQL without importing the application's Go
-// packages.
+// into named statements and their recorded query ownership. Standalone tools
+// such as tabula check can verify the snapshot against PostgreSQL without
+// importing the application's Go packages.
 func ParseSnapshot(content string) ([]tabula.Definition, error) {
 	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+	queries := make(map[string]map[string]string)
 	var (
 		defs     []tabula.Definition
 		curDef   *tabula.Definition
@@ -56,15 +73,33 @@ func ParseSnapshot(content string) ([]tabula.Definition, error) {
 				return nil, err
 			}
 			if isTableHeader(lines, i) {
+				owners, recorded := queries[comment]
+				if recorded && owners == nil {
+					return nil, fmt.Errorf("sqlcheck.ParseSnapshot: ambiguous query ownership for duplicate definition %q", comment)
+				}
 				defs = append(defs, tabula.Definition{
-					Name:       comment,
-					Statements: map[string]string{},
+					Name:             comment,
+					Statements:       map[string]string{},
+					StatementQueries: owners,
 				})
+				if recorded {
+					queries[comment] = nil
+				}
 				curDef = &defs[len(defs)-1]
 				continue
 			}
 			// Before the first table header, comment lines are file-level headers.
 			if curDef == nil {
+				if data, ok := strings.CutPrefix(trimmed, queryHeader); ok {
+					var h snapshotQueries
+					if err := json.Unmarshal([]byte(data), &h); err != nil {
+						return nil, fmt.Errorf("sqlcheck.ParseSnapshot: query header at line %d: %w", i+1, err)
+					}
+					if h.Definition == "" || len(h.Statements) == 0 || queries[h.Definition] != nil {
+						return nil, fmt.Errorf("sqlcheck.ParseSnapshot: invalid or duplicate query header at line %d", i+1)
+					}
+					queries[h.Definition] = h.Statements
+				}
 				continue
 			}
 			curKey = comment

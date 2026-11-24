@@ -476,6 +476,7 @@ other statement. Missing files fail at start-up. With C2's agreed
 
 - `tabula inventory` recognizes `DefineQuery` and aggregate calls as static sites.
 - The workload format accepts composed-query variants from C3 without manual listing.
+- Snapshot expansion selects the owning descriptor by name and each registered variant by its exact query key. Every assigned site must contribute SQL or have an explicit skip with a reviewed exception.
 - Extend inventory's typed call-site collection to include `NewSessionKey`, registry
   sealing, `SessionKey.Sign`, keyed factories, `WithoutTransaction` escape
   sites and both drivers' raw transaction access. Report package, file and line,

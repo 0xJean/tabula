@@ -690,34 +690,37 @@ func (q *Query[T, S]) registerVariants() {
 		}
 		return sqlText
 	}
+	register := func(key, sql string) {
+		q.v.registerStatement(key, sql, q.key, q.opts)
+	}
 	for _, m := range modes {
 		prefix := q.key + m.suffix
 		// 1. Zero-filter baseline.
-		q.v.Statement(prefix+".find", must(q.buildSelectSQL(m.scoped, nil, q.defaultSort, q.defaultDir, false, false, false)), q.opts...)
-		q.v.Statement(prefix+".page", must(q.buildSelectSQL(m.scoped, nil, q.defaultSort, q.defaultDir, true, false, false)), q.opts...)
-		q.v.Statement(prefix+".count", must(q.buildCountSQL(m.scoped, nil)), q.opts...)
+		register(prefix+".find", must(q.buildSelectSQL(m.scoped, nil, q.defaultSort, q.defaultDir, false, false, false)))
+		register(prefix+".page", must(q.buildSelectSQL(m.scoped, nil, q.defaultSort, q.defaultDir, true, false, false)))
+		register(prefix+".count", must(q.buildCountSQL(m.scoped, nil)))
 
 		// 2. All-filters canonical variant.
 		if len(allIdx) > 0 {
-			q.v.Statement(prefix+".all.page", must(q.buildSelectSQL(m.scoped, allIdx, q.defaultSort, q.defaultDir, true, false, false)), q.opts...)
-			q.v.Statement(prefix+".all.count", must(q.buildCountSQL(m.scoped, allIdx)), q.opts...)
+			register(prefix+".all.page", must(q.buildSelectSQL(m.scoped, allIdx, q.defaultSort, q.defaultDir, true, false, false)))
+			register(prefix+".all.count", must(q.buildCountSQL(m.scoped, allIdx)))
 		}
 
 		// 3. Individual single-filter variants.
 		for i, flt := range q.filters {
 			one := []int{i}
-			q.v.Statement(prefix+".filter."+flt.name+".page", must(q.buildSelectSQL(m.scoped, one, q.defaultSort, q.defaultDir, true, false, false)), q.opts...)
-			q.v.Statement(prefix+".filter."+flt.name+".count", must(q.buildCountSQL(m.scoped, one)), q.opts...)
+			register(prefix+".filter."+flt.name+".page", must(q.buildSelectSQL(m.scoped, one, q.defaultSort, q.defaultDir, true, false, false)))
+			register(prefix+".filter."+flt.name+".count", must(q.buildCountSQL(m.scoped, one)))
 		}
 
 		// 4. Every selectable sort order (+ keyset variants when enabled).
 		for _, cs := range q.sorts {
 			if cs.key != q.defaultSort {
-				q.v.Statement(prefix+".sort."+cs.key+".page", must(q.buildSelectSQL(m.scoped, nil, cs.key, q.defaultDir, true, false, false)), q.opts...)
+				register(prefix+".sort."+cs.key+".page", must(q.buildSelectSQL(m.scoped, nil, cs.key, q.defaultDir, true, false, false)))
 			}
 			if q.keyset {
-				q.v.Statement(prefix+".keyset."+cs.key+".first", must(q.buildSelectSQL(m.scoped, nil, cs.key, q.defaultDir, false, true, false)), q.opts...)
-				q.v.Statement(prefix+".keyset."+cs.key+".after", must(q.buildSelectSQL(m.scoped, nil, cs.key, q.defaultDir, false, true, true)), q.opts...)
+				register(prefix+".keyset."+cs.key+".first", must(q.buildSelectSQL(m.scoped, nil, cs.key, q.defaultDir, false, true, false)))
+				register(prefix+".keyset."+cs.key+".after", must(q.buildSelectSQL(m.scoped, nil, cs.key, q.defaultDir, false, true, true)))
 			}
 		}
 	}

@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"go/ast"
-	"go/constant"
 	"go/format"
 	"go/importer"
 	"go/parser"
@@ -36,8 +35,8 @@ type SQLMethod struct {
 }
 
 // CallTarget matches a Go package-level function (Receiver == ""), method
-// (Receiver != ""), or struct field (Field != "") by canonical package path and
-// symbol name, independent of import aliases or generic instantiations.
+// (Receiver != ""), or struct field (Field == true) by canonical package path
+// and symbol name. Field targets also match selections promoted by embedding.
 type CallTarget struct {
 	Package  string
 	Receiver string `json:",omitempty"`
@@ -112,9 +111,11 @@ type SQLSite struct {
 	Receiver, Method string
 	SQL              string `json:",omitempty"`
 	QueryKey         string `json:",omitempty"`
-	Kind             string `json:",omitempty"`
-	Dynamic          bool   `json:",omitempty"`
-	Exception        string `json:",omitempty"`
+	// Definition is the owning descriptor when its name is resolved from source.
+	Definition string `json:",omitempty"`
+	Kind       string `json:",omitempty"`
+	Dynamic    bool   `json:",omitempty"`
+	Exception  string `json:",omitempty"`
 }
 
 // SQLInventory retains reviewed sites, typed security/factory call sites, and
@@ -349,13 +350,28 @@ func (p buildPackage) inventory(
 	addSite := func(owner string, site SQLSite, expr ast.Expr) {
 		var b bytes.Buffer
 		_ = format.Node(&b, fset, expr)
-		digest := sha256.Sum256([]byte(owner + "\n" + site.Receiver + "." + site.Method + "\n" + b.String() + "\n" + site.SQL + "\n" + site.QueryKey))
+		identity := owner + "\n" + site.Receiver + "." + site.Method + "\n" + b.String() + "\n" + site.SQL + "\n" + site.QueryKey
+		if site.Definition != "" {
+			identity += "\n" + site.Definition
+		}
+		digest := sha256.Sum256([]byte(identity))
 		base := fmt.Sprintf("%s#%x", site.File, digest[:12])
 		counts[base]++
 		site.ID = fmt.Sprintf("%s-%d", base, counts[base])
 		sites = append(sites, site)
 	}
+	addField := func(recv, name string, at token.Pos) {
+		if t, ok := targets.fields[[2]string{recv, name}]; ok {
+			pos := fset.PositionFor(at, true)
+			rel, _ := filepath.Rel(root, pos.Filename)
+			callSites = append(callSites, CallSite{
+				Package: pkgPath, File: filepath.ToSlash(rel), Line: pos.Line,
+				Symbol: recv + "." + name, Category: t.Category,
+			})
+		}
+	}
 
+	source := inventorySource{info: info, initializers: singleInitializers(files, info)}
 	for _, file := range files {
 		if p.ForTest != "" && !strings.HasSuffix(fset.PositionFor(file.Pos(), false).Filename, "_test.go") {
 			continue
@@ -363,7 +379,6 @@ func (p buildPackage) inventory(
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
 		}
-		bindings := constantLocals(file, info)
 		selectorCalls := map[*ast.SelectorExpr]*ast.CallExpr{}
 		identCalls := map[*ast.Ident]*ast.CallExpr{}
 		ast.Inspect(file, func(n ast.Node) bool {
@@ -378,17 +393,6 @@ func (p buildPackage) inventory(
 			}
 			return true
 		})
-
-		constString := func(expr ast.Expr) (string, bool) {
-			value := info.Types[expr].Value
-			if id, ok := ast.Unparen(expr).(*ast.Ident); ok && value == nil {
-				value = bindings[info.Uses[id]]
-			}
-			if value != nil && value.Kind() == constant.String {
-				return constant.StringVal(value), true
-			}
-			return "", false
-		}
 
 		for _, decl := range file.Decls {
 			owner := "init"
@@ -408,14 +412,9 @@ func (p buildPackage) inventory(
 
 					if sel != nil && sel.Kind() == types.FieldVal {
 						recv := receiverName(sel.Recv())
-						if t, ok := targets.fields[[2]string{recv, node.Sel.Name}]; ok {
-							callSites = append(callSites, CallSite{
-								Package:  pkgPath,
-								File:     rel,
-								Line:     pos.Line,
-								Symbol:   recv + "." + node.Sel.Name,
-								Category: t.Category,
-							})
+						addField(recv, node.Sel.Name, node.Pos())
+						if declaring := fieldReceiver(sel); declaring != recv {
+							addField(declaring, node.Sel.Name, node.Pos())
 						}
 						return true
 					}
@@ -438,7 +437,7 @@ func (p buildPackage) inventory(
 							}
 							if i < len(c.Args) {
 								expr = c.Args[i]
-								if sVal, ok := constString(expr); ok {
+								if sVal, ok := source.constantString(expr); ok {
 									site.SQL = sVal
 									site.Dynamic = false
 								}
@@ -460,13 +459,14 @@ func (p buildPackage) inventory(
 						}
 						var expr ast.Expr = node
 						if c := selectorCalls[node]; c != nil {
+							site.Definition = source.definitionName(methodReceiver(node, sel, c))
 							keyIdx := 0
 							if sel.Kind() == types.MethodExpr {
 								keyIdx++
 							}
 							if keyIdx < len(c.Args) {
 								expr = c.Args[keyIdx]
-								if keyVal, ok := constString(expr); ok && keyVal != "" {
+								if keyVal, ok := source.constantString(expr); ok && keyVal != "" {
 									site.QueryKey = keyVal
 									site.Dynamic = false
 								}
@@ -488,6 +488,7 @@ func (p buildPackage) inventory(
 						}
 						if !site.Dynamic {
 							site.QueryKey = "exists"
+							site.Definition = source.definitionName(methodReceiver(node, sel, selectorCalls[node]))
 						}
 						addSite(owner, site, node)
 					}
@@ -510,28 +511,13 @@ func (p buildPackage) inventory(
 						})
 					}
 
-				case *ast.KeyValueExpr:
-					// Match struct composite literal field targets (e.g. RunnerOptions{ExposeTx: true}).
-					if id, ok := node.Key.(*ast.Ident); ok {
-						if obj, ok := info.Uses[id].(*types.Var); ok && obj.IsField() {
-							// Locate enclosing composite literal type by matching parent via pos or checking all field targets.
-							// info.Uses[id] is the exact struct field *types.Var. We check if its package matches and name matches.
-							if obj.Pkg() != nil {
-								for k, t := range targets.fields {
-									if k[1] == obj.Name() && strings.HasPrefix(k[0], obj.Pkg().Path()+".") {
-										// Confirm field belongs to the target struct type.
-										if fieldBelongsTo(obj, k[0]) {
-											pos := fset.PositionFor(id.Pos(), true)
-											rel, _ := filepath.Rel(root, pos.Filename)
-											callSites = append(callSites, CallSite{
-												Package:  pkgPath,
-												File:     filepath.ToSlash(rel),
-												Line:     pos.Line,
-												Symbol:   k[0] + "." + obj.Name(),
-												Category: t.Category,
-											})
-										}
-									}
+				case *ast.CompositeLit:
+					recv := receiverName(info.TypeOf(node))
+					for _, elt := range node.Elts {
+						if kv, ok := elt.(*ast.KeyValueExpr); ok {
+							if id, ok := kv.Key.(*ast.Ident); ok {
+								if field, ok := info.Uses[id].(*types.Var); ok && field.IsField() {
+									addField(recv, id.Name, id.Pos())
 								}
 							}
 						}
@@ -565,7 +551,8 @@ func (p buildPackage) inventory(
 						var expr ast.Expr = node
 						if c := identCalls[node]; c != nil && len(c.Args) > 2 {
 							expr = c.Args[2]
-							if col, ok := constString(expr); ok && col != "" {
+							site.Definition = source.definitionName(c.Args[1])
+							if col, ok := source.constantString(expr); ok && col != "" {
 								site.QueryKey = strings.ToLower(fnName) + ":" + col
 								site.Dynamic = false
 							}
@@ -601,31 +588,6 @@ func methodReceiverNames(sel *types.Selection) (string, string) {
 	return recv, sigRecv
 }
 
-func fieldBelongsTo(field *types.Var, qualifiedStruct string) bool {
-	if field.Pkg() == nil {
-		return false
-	}
-	dot := strings.LastIndexByte(qualifiedStruct, '.')
-	if dot <= 0 || qualifiedStruct[:dot] != field.Pkg().Path() {
-		return false
-	}
-	typeName := qualifiedStruct[dot+1:]
-	obj := field.Pkg().Scope().Lookup(typeName)
-	if obj == nil {
-		return false
-	}
-	st, ok := obj.Type().Underlying().(*types.Struct)
-	if !ok {
-		return false
-	}
-	for i := range st.NumFields() {
-		if st.Field(i) == field {
-			return true
-		}
-	}
-	return false
-}
-
 func receiverName(t types.Type) string {
 	t = types.Unalias(t)
 	if p, ok := t.(*types.Pointer); ok {
@@ -635,60 +597,4 @@ func receiverName(t types.Type) string {
 		return n.Obj().Pkg().Path() + "." + n.Obj().Name()
 	}
 	return ""
-}
-
-// Only a local initialized once with a constant, never reassigned or
-// addressed, can be substituted for its expression.
-func constantLocals(f *ast.File, info *types.Info) map[types.Object]constant.Value {
-	out := map[types.Object]constant.Value{}
-	seen := map[types.Object]bool{}
-	record := func(e ast.Expr, v constant.Value) {
-		id, ok := ast.Unparen(e).(*ast.Ident)
-		if !ok {
-			return
-		}
-		obj := info.ObjectOf(id)
-		if obj == nil || obj.Pkg() == nil || obj.Parent() == obj.Pkg().Scope() {
-			return
-		}
-		if seen[obj] {
-			delete(out, obj)
-		} else {
-			out[obj] = v
-		}
-		seen[obj] = true
-	}
-	ast.Inspect(f, func(n ast.Node) bool {
-		switch x := n.(type) {
-		case *ast.AssignStmt:
-			for i, e := range x.Lhs {
-				var v constant.Value
-				if x.Tok == token.DEFINE && len(x.Rhs) == len(x.Lhs) {
-					v = info.Types[x.Rhs[i]].Value
-				}
-				record(e, v)
-			}
-		case *ast.ValueSpec:
-			for i, id := range x.Names {
-				var v constant.Value
-				if len(x.Values) == len(x.Names) {
-					v = info.Types[x.Values[i]].Value
-				}
-				record(id, v)
-			}
-		case *ast.RangeStmt:
-			if x.Key != nil {
-				record(x.Key, nil)
-			}
-			if x.Value != nil {
-				record(x.Value, nil)
-			}
-		case *ast.UnaryExpr:
-			if x.Op == token.AND {
-				record(x.X, nil)
-			}
-		}
-		return true
-	})
-	return out
 }

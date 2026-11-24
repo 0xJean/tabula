@@ -99,3 +99,25 @@ func TestParseSnapshotRoundTrip(t *testing.T) {
 	_, err = ParseSnapshot("SELECT 1;\n")
 	require.ErrorContains(t, err, "unexpected SQL")
 }
+
+func TestSnapshotQueryOwnership(t *testing.T) {
+	defs := []tabula.Definition{
+		{Name: "notes", Statements: map[string]string{"list": "SELECT 1"}},
+		{Name: "notes_view", Statements: map[string]string{"list.find": "SELECT 2", "list.extra": "SELECT 3"}, StatementQueries: map[string]string{"list.find": "list"}},
+	}
+	snapshot := RenderSnapshot(defs, "Review copy")
+	require.Equal(t, snapshot, RenderSnapshot([]tabula.Definition{defs[1], defs[0]}, "Review copy"))
+	got, err := ParseSnapshot(snapshot)
+	require.NoError(t, err)
+	require.Equal(t, defs, got)
+	_, err = ParseSnapshot(snapshot + "\n-- notes_view\n-- another\nSELECT 4;\n")
+	require.ErrorContains(t, err, "ambiguous query ownership")
+	for _, header := range []string{
+		"-- tabula:statement-queries {",
+		"-- tabula:statement-queries {}",
+		"-- tabula:statement-queries {\"Definition\":\"v\",\"Statements\":{\"a\":\"q\"}}\n-- tabula:statement-queries {\"Definition\":\"v\",\"Statements\":{\"b\":\"q\"}}",
+	} {
+		_, err := ParseSnapshot(header + "\n\n-- v\n-- a\nSELECT 1;\n")
+		require.ErrorContains(t, err, "query header")
+	}
+}

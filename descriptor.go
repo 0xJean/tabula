@@ -55,6 +55,10 @@ func (d *descriptor[T, S]) Definition() Definition {
 // Statement registers hand-written SQL for verification and observation.
 // Keys are unique within a table or view.
 func (d *descriptor[T, S]) Statement(key, query string, opts ...StatementOption) string {
+	return d.registerStatement(key, query, "", opts)
+}
+
+func (d *descriptor[T, S]) registerStatement(key, query, queryKey string, opts []StatementOption) string {
 	e := d.registered()
 	meta := statementMeta(d.name+"."+key, opts)
 	d.reg.mu.Lock()
@@ -63,6 +67,12 @@ func (d *descriptor[T, S]) Statement(key, query string, opts ...StatementOption)
 		panic(fmt.Sprintf("%s.Statement %s: key %s declared twice", d.prefix(), d.name, key))
 	}
 	e.def.Statements[key] = query
+	if queryKey != "" {
+		if e.def.StatementQueries == nil {
+			e.def.StatementQueries = make(map[string]string)
+		}
+		e.def.StatementQueries[key] = queryKey
+	}
 	e.bySQL[query] = meta
 	return query
 }

@@ -17,6 +17,9 @@ Send the following details to the maintainers. [Report a vulnerability](https://
   values always bind via numbered PostgreSQL placeholders (`$1..$n`). Composed query
   fragments are lexically checked and fuzzed (`FuzzCompileQueryFragment`), and C3 registers
   all deterministic variants for PostgreSQL `PREPARE`/`EXPLAIN` verification.
+- Role workload verification matches registered statements to their owning descriptor
+  and query. Missing registrations and unreviewed skips fail the inventory check.
+  [Authorization guide](docs/AUTHORIZATION.md)
 - **Session provenance and capability limits**: registries configured with `SessionKey` or
   `RequireSealed` + `Registry.Seal(key)` reject foreign, copied, wrapped or unsealed sessions
   with `ErrForeignSession` before I/O. `RegistryConfig.Deny` enforces `DenyDelete`,
