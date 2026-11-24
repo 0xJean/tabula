@@ -167,8 +167,9 @@ func NewSessionGuard(cfg SessionGuardConfig) (func(string) error, error)
     RESET ALL, DISCARD ALL, and transaction-ending commands (COMMIT, END, ABORT,
     non-savepoint ROLLBACK, PREPARE TRANSACTION) are rejected whenever the
     guard protects role, session-authorization, or variable state. Any active
-    restriction rejects anonymous DO blocks and Unicode-escaped identifiers.
-    A zero config permits all statements.
+    restriction rejects anonymous DO blocks, Unicode-escaped identifiers and
+    UPDATE of pg_settings, which PostgreSQL applies as set_config. A zero config
+    permits all statements.
 
 func RegisterType[S, V any](r *Registry[S], wrap func(*V) any)
     RegisterType registers a converter wrapping a pointer to a value of type T.
@@ -1074,11 +1075,15 @@ type SessionGuardConfig struct {
 	ForbidRole                 bool
 	ForbidSessionAuthorization bool
 	ForbidSetConfig            bool
+	ForbidVariableReads        bool
 }
     SessionGuardConfig selects prohibited session operations. The constructor
     copies GUC name prefixes such as "scope.", "session." and "local." and
     matches them case-insensitively. Dynamic set_config keys are rejected
-    whenever a namespace is protected.
+    whenever a namespace is protected. ForbidVariableReads additionally rejects
+    reading the protected namespaces: current_setting with a protected or
+    non-literal key, SHOW of a protected name or SHOW ALL, and any reference to
+    pg_settings; it requires at least one VariablePrefixes entry.
 
 type SessionKey struct {
 	// Has unexported fields.

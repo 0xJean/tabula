@@ -149,7 +149,21 @@ func FuzzGuardNoSessionEscape(f *testing.F) {
 	f.Add("END TRANSACTION")
 	f.Add("ABORT")
 	f.Add("PREPARE TRANSACTION 'tx1'")
+	f.Add("UPDATE pg_settings SET setting = 'x' WHERE name = 'scope.id'")
+	f.Add(`UPDATE ONLY "pg_catalog" . pg_settings SET setting = $1`)
+	f.Add("SELECT current_setting('scope.id', true)")
+	f.Add(`SELECT $$SHOW scope.id$$; SHOW ALL`)
+	reads, err := NewSessionGuard(SessionGuardConfig{VariablePrefixes: []string{"scope."}, ForbidVariableReads: true})
+	if err != nil {
+		f.Fatal(err)
+	}
 	f.Fuzz(func(t *testing.T, query string) {
+		if err := GuardNoSessionEscape("UPDATE pg_settings SET setting = 'x';" + query); !errors.Is(err, ErrForbiddenStatement) {
+			t.Fatalf("session guard allowed a pg_settings update prefix: %v", err)
+		}
+		if err := reads("SELECT current_setting('scope.id');" + query); !errors.Is(err, ErrForbiddenStatement) {
+			t.Fatalf("variable-read guard allowed a protected read prefix: %v", err)
+		}
 		if err := GuardReadOnlyTransaction(query); err != nil && !errors.Is(err, ErrReadOnly) {
 			t.Fatalf("read-only transaction guard returned %v for %q", err, query)
 		}

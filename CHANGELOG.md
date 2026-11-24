@@ -3,6 +3,16 @@
 All notable changes are listed here. The project follows semantic versioning; before
 v1.0 a minor version may contain breaking changes.
 
+## Unreleased
+
+### Security
+
+- `GuardNoSessionEscape`, `GuardReadOnlyTransaction` and any configured `NewSessionGuard` with an active restriction now reject `UPDATE pg_settings` (with `ONLY`, `pg_catalog` qualification, comments or inside a CTE). PostgreSQL applies such an update as `set_config`, so earlier guards could be bypassed to change protected variables, the role or the session authorization.
+
+### Additions
+
+- `SessionGuardConfig.ForbidVariableReads` rejects reading protected variable namespaces: `current_setting` with a protected or non-literal key, `SHOW` of a protected name or `SHOW ALL`, and any reference to `pg_settings`. It requires `VariablePrefixes`; `NewSessionGuard` returns an error otherwise.
+
 ## v0.3.2 — 2026-11-24
 
 v0.3.2 includes the work from the untagged v0.3.1 candidate. Applications can upgrade directly from v0.3.0. [Migration guide](docs/MIGRATION.md#from-v030-to-v032)

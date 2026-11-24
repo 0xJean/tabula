@@ -11,20 +11,25 @@ import (
 // SessionGuardConfig selects prohibited session operations. The constructor
 // copies GUC name prefixes such as "scope.", "session." and "local." and matches
 // them case-insensitively. Dynamic set_config keys are rejected whenever a
-// namespace is protected.
+// namespace is protected. ForbidVariableReads additionally rejects reading the
+// protected namespaces: current_setting with a protected or non-literal key,
+// SHOW of a protected name or SHOW ALL, and any reference to pg_settings; it
+// requires at least one VariablePrefixes entry.
 type SessionGuardConfig struct {
 	VariablePrefixes           []string
 	ForbidRole                 bool
 	ForbidSessionAuthorization bool
 	ForbidSetConfig            bool
+	ForbidVariableReads        bool
 }
 
 // NewSessionGuard compiles an application GuardQuery for trusted adapter SQL.
 // RESET ALL, DISCARD ALL, and transaction-ending commands (COMMIT, END, ABORT,
 // non-savepoint ROLLBACK, PREPARE TRANSACTION) are rejected whenever the guard
 // protects role, session-authorization, or variable state. Any active
-// restriction rejects anonymous DO blocks and Unicode-escaped identifiers. A
-// zero config permits all statements.
+// restriction rejects anonymous DO blocks, Unicode-escaped identifiers and
+// UPDATE of pg_settings, which PostgreSQL applies as set_config. A zero config
+// permits all statements.
 func NewSessionGuard(cfg SessionGuardConfig) (func(string) error, error) {
 	prefixes := slices.Clone(cfg.VariablePrefixes)
 	for i, p := range prefixes {
@@ -32,6 +37,9 @@ func NewSessionGuard(cfg SessionGuardConfig) (func(string) error, error) {
 			return nil, fmt.Errorf("invalid session variable prefix %q", p)
 		}
 		prefixes[i] = strings.ToLower(p)
+	}
+	if cfg.ForbidVariableReads && len(prefixes) == 0 {
+		return nil, fmt.Errorf("ForbidVariableReads requires VariablePrefixes")
 	}
 	cfg.VariablePrefixes = prefixes
 	check := compileSessionGuard(cfg, false)
@@ -49,12 +57,7 @@ func compileSessionGuard(cfg SessionGuardConfig, readOnlyTx bool) func([]pgstmt.
 		if cfg.ForbidRole && name == "role" || cfg.ForbidSessionAuthorization && name == "session_authorization" {
 			return true
 		}
-		for _, p := range cfg.VariablePrefixes {
-			if strings.HasPrefix(name, p) {
-				return true
-			}
-		}
-		return false
+		return protectedVariable(cfg.VariablePrefixes, name)
 	}
 	return func(t []pgstmt.Token) error {
 		at := func(i int) string {
@@ -78,6 +81,21 @@ func compileSessionGuard(cfg SessionGuardConfig, readOnlyTx bool) func([]pgstmt.
 				literalKey := i+3 < len(t) && t[i+2].Kind == pgstmt.Literal && at(i+3) == "," && !strings.Contains(t[i+2].Text, "\\")
 				if cfg.ForbidSetConfig || guardsState && (!literalKey || protected(t[i+2].Text)) {
 					return fmt.Errorf("%w: set_config", ErrForbiddenStatement)
+				}
+			}
+			// UPDATE pg_settings is applied by PostgreSQL as set_config.
+			if restricted && at(i) == "update" && settingsRelation(t, i+1) {
+				return fmt.Errorf("%w: pg_settings update", ErrForbiddenStatement)
+			}
+			if cfg.ForbidVariableReads {
+				if settingsRelation(t, i) {
+					return fmt.Errorf("%w: pg_settings", ErrForbiddenStatement)
+				}
+				if at(i) == "current_setting" && at(i+1) == "(" {
+					literalKey := i+3 < len(t) && t[i+2].Kind == pgstmt.Literal && (at(i+3) == "," || at(i+3) == ")") && !strings.Contains(t[i+2].Text, "\\")
+					if !literalKey || protectedVariable(cfg.VariablePrefixes, t[i+2].Text) {
+						return fmt.Errorf("%w: current_setting", ErrForbiddenStatement)
+					}
 				}
 			}
 			if !start {
@@ -108,6 +126,15 @@ func compileSessionGuard(cfg SessionGuardConfig, readOnlyTx bool) func([]pgstmt.
 			}
 			if op == "discard" && at(i+1) == "all" && guardsState {
 				return fmt.Errorf("%w: discard all", ErrForbiddenStatement)
+			}
+			if cfg.ForbidVariableReads && op == "show" {
+				name := at(i + 1)
+				for j := i + 2; at(j) == "."; j += 2 {
+					name += "." + at(j+1)
+				}
+				if name == "all" || protectedVariable(cfg.VariablePrefixes, name) {
+					return fmt.Errorf("%w: show %s", ErrForbiddenStatement, name)
+				}
 			}
 			if op != "set" && op != "reset" {
 				continue
@@ -164,4 +191,33 @@ func hasSetModifier(args []pgstmt.Token) bool {
 		return args[1] != (pgstmt.Token{Kind: pgstmt.Word, Text: "authorization"})
 	}
 	return false
+}
+
+func protectedVariable(prefixes []string, name string) bool {
+	name = strings.ToLower(name)
+	for _, p := range prefixes {
+		if strings.HasPrefix(name, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// settingsRelation reports whether t[j:] names the pg_settings view, optionally
+// after ONLY and qualified as pg_catalog. Unquoted words are already folded;
+// a quoted name must match exactly, as PostgreSQL resolves it.
+func settingsRelation(t []pgstmt.Token, j int) bool {
+	name := func(k int) string {
+		if k < len(t) && (t[k].Kind == pgstmt.Word || t[k].Kind == pgstmt.Quoted) {
+			return t[k].Text
+		}
+		return ""
+	}
+	if j < len(t) && t[j] == (pgstmt.Token{Kind: pgstmt.Word, Text: "only"}) {
+		j++
+	}
+	if name(j) == "pg_catalog" && j+1 < len(t) && t[j+1] == (pgstmt.Token{Kind: pgstmt.Symbol, Text: "."}) {
+		j += 2
+	}
+	return name(j) == "pg_settings"
 }
