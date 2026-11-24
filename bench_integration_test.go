@@ -101,7 +101,10 @@ func BenchmarkPG_Select100_TabulaStdSQL(b *testing.B) {
 	ctx := b.Context()
 	reg := tabula.NewRegistry(tabula.RegistryConfig[struct{}]{})
 	tbl := tabula.Define(reg, tabula.TableSpec[pgBenchRow, int64]{Name: schema + ".items", Order: "id ASC"})
-	runner := stdsql.NewRunner(db, stdsql.NoScopePolicy())
+	runner, err := stdsql.NewRunner(db, stdsql.NoScopePolicy(), stdsql.RunnerOptions{})
+	if err != nil {
+		b.Fatal(err)
+	}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
@@ -123,7 +126,10 @@ func BenchmarkPG_InsertMany1000_TabulaStdSQL(b *testing.B) {
 	ctx := b.Context()
 	reg := tabula.NewRegistry(tabula.RegistryConfig[struct{}]{})
 	tbl := tabula.Define(reg, tabula.TableSpec[pgBenchRow, int64]{Name: schema + ".items"})
-	runner := stdsql.NewRunner(db, stdsql.NoScopePolicy())
+	runner, err := stdsql.NewRunner(db, stdsql.NoScopePolicy(), stdsql.RunnerOptions{})
+	if err != nil {
+		b.Fatal(err)
+	}
 
 	batch := make([]pgBenchRow, 1000)
 	for i := range batch {

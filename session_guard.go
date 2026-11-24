@@ -20,9 +20,11 @@ type SessionGuardConfig struct {
 }
 
 // NewSessionGuard compiles an application GuardQuery for trusted adapter SQL.
-// RESET ALL and DISCARD ALL are rejected if they could reset protected state.
-// Any active restriction rejects anonymous DO blocks and Unicode-escaped
-// identifiers. A zero config permits all statements.
+// RESET ALL, DISCARD ALL, and transaction-ending commands (COMMIT, END, ABORT,
+// non-savepoint ROLLBACK, PREPARE TRANSACTION) are rejected whenever the guard
+// protects role, session-authorization, or variable state. Any active
+// restriction rejects anonymous DO blocks and Unicode-escaped identifiers. A
+// zero config permits all statements.
 func NewSessionGuard(cfg SessionGuardConfig) (func(string) error, error) {
 	prefixes := slices.Clone(cfg.VariablePrefixes)
 	for i, p := range prefixes {
@@ -32,15 +34,18 @@ func NewSessionGuard(cfg SessionGuardConfig) (func(string) error, error) {
 		prefixes[i] = strings.ToLower(p)
 	}
 	cfg.VariablePrefixes = prefixes
-	check := compileSessionGuard(cfg)
+	check := compileSessionGuard(cfg, false)
 	return func(query string) error { return check(pgstmt.Lex(query)) }, nil
 }
 
-func compileSessionGuard(cfg SessionGuardConfig) func([]pgstmt.Token) error {
-	guardsState := cfg.ForbidRole || cfg.ForbidSessionAuthorization || len(cfg.VariablePrefixes) > 0
+func compileSessionGuard(cfg SessionGuardConfig, readOnlyTx bool) func([]pgstmt.Token) error {
+	guardsState := cfg.ForbidRole || cfg.ForbidSessionAuthorization || len(cfg.VariablePrefixes) > 0 || readOnlyTx
 	restricted := guardsState || cfg.ForbidSetConfig
 	protected := func(name string) bool {
 		name = strings.ToLower(name)
+		if readOnlyTx && (name == "transaction_read_only" || name == "default_transaction_read_only") {
+			return true
+		}
 		if cfg.ForbidRole && name == "role" || cfg.ForbidSessionAuthorization && name == "session_authorization" {
 			return true
 		}
@@ -83,8 +88,26 @@ func compileSessionGuard(cfg SessionGuardConfig) func([]pgstmt.Token) error {
 				return fmt.Errorf("%w: DO", ErrForbiddenStatement)
 			}
 			op := at(i)
+			if guardsState && tok.Kind == pgstmt.Word {
+				switch op {
+				case "commit", "end", "abort":
+					return fmt.Errorf("%w: transaction control (%s)", ErrForbiddenStatement, op)
+				case "prepare":
+					if i+1 < len(t) && t[i+1] == (pgstmt.Token{Kind: pgstmt.Word, Text: "transaction"}) {
+						return fmt.Errorf("%w: transaction control (prepare transaction)", ErrForbiddenStatement)
+					}
+				case "rollback":
+					n := i + 1
+					if at(n) == "work" || at(n) == "transaction" {
+						n++
+					}
+					if at(n) != "to" {
+						return fmt.Errorf("%w: transaction control (rollback)", ErrForbiddenStatement)
+					}
+				}
+			}
 			if op == "discard" && at(i+1) == "all" && guardsState {
-				return ErrForbiddenStatement
+				return fmt.Errorf("%w: discard all", ErrForbiddenStatement)
 			}
 			if op != "set" && op != "reset" {
 				continue
@@ -97,6 +120,12 @@ func compileSessionGuard(cfg SessionGuardConfig) func([]pgstmt.Token) error {
 			for j := n + 1; at(j) == "."; j += 2 {
 				name += "." + at(j+1)
 			}
+			if readOnlyTx && op == "set" {
+				if name == "transaction" ||
+					name == "characteristics" && at(n+1) == "as" && at(n+2) == "transaction" && setsAccessMode(t[n+3:]) {
+					return fmt.Errorf("%w: set transaction", ErrForbiddenStatement)
+				}
+			}
 			if (op == "reset" && name == "all" && guardsState) ||
 				(cfg.ForbidSessionAuthorization && name == "session" && at(n+1) == "authorization") ||
 				protected(name) {
@@ -105,6 +134,20 @@ func compileSessionGuard(cfg SessionGuardConfig) func([]pgstmt.Token) error {
 		}
 		return nil
 	}
+}
+
+// SET SESSION CHARACTERISTICS can combine access mode with isolation clauses.
+func setsAccessMode(options []pgstmt.Token) bool {
+	for i, tok := range options {
+		if tok == (pgstmt.Token{Kind: pgstmt.Symbol, Text: ";"}) {
+			break
+		}
+		if tok == (pgstmt.Token{Kind: pgstmt.Word, Text: "read"}) && i+1 < len(options) &&
+			options[i+1].Kind == pgstmt.Word && (options[i+1].Text == "only" || options[i+1].Text == "write") {
+			return true
+		}
+	}
+	return false
 }
 
 // A SET modifier precedes a separate name. A dot after LOCAL or SESSION

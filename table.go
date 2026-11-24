@@ -43,6 +43,11 @@ type TableSpec[T, K any] struct {
 	// AllowDelete opts this table into physical DELETE statements (Delete / DeleteWhere)
 	// and derives the table-level DELETE privilege for sqlcheck. Cannot combine with ReadOnly.
 	AllowDelete bool
+	// GroupBy whitelists declared columns for CountBy aggregates and records
+	// per-column count_by_<col> statements in Definition for sqlcheck verification.
+	GroupBy []string
+	// Aggregates registers scalar function/column pairs for sqlcheck verification.
+	Aggregates ScalarAggregates
 }
 
 // Table is the compiled handle for a TableSpec. Its column bindings, SQL and
@@ -51,6 +56,8 @@ type Table[T, K, S any] struct {
 	descriptor[T, S]
 	order                   string
 	readOnly, allowDelete   bool
+	groupBy                 map[string]bool
+	groupByOrder            []string
 	keys                    []int
 	keyBinders              []func(*K) any
 	keyBuilder              func(*T) K
@@ -99,6 +106,9 @@ type Definition struct {
 	Columns    []DefinedColumn
 	Statements map[string]string
 	Privileges []DefinedPrivilege
+	// StatementQueries records the owner of each composed-query variant and
+	// registered scalar aggregate (for example, sum_rank belongs to sum:rank).
+	StatementQueries map[string]string `json:",omitempty"`
 }
 
 // DefinedColumn is one column's metadata for schema and privilege checks.
@@ -140,8 +150,27 @@ func Define[T, K, S any](r *Registry[S], spec TableSpec[T, K]) *Table[T, K, S] {
 			stmts["unscoped_delete"] = d.stmt.unscopedDelete
 		}
 	}
+	for _, col := range d.groupByOrder {
+		stmts["count_by_"+col] = "SELECT " + col + ", count(*) FROM " + d.name + " WHERE true GROUP BY " + col
+	}
+	var owners map[string]string
+	for fn, col := range spec.Aggregates.columns {
+		if owners == nil {
+			owners = make(map[string]string)
+		}
+		op := strings.ToLower(fn)
+		key := op + "_" + col
+		base := scalarSQL(fn, col, d.name)
+		owner := op + ":" + col
+		stmts[key] = base + d.liveFilter(d.scope >= 0, nil).Where()
+		owners[key] = owner
+		if d.scope >= 0 {
+			stmts["unscoped_"+key] = base + d.liveFilter(false, nil).Where()
+			owners["unscoped_"+key] = owner
+		}
+	}
 	d.entry = r.record(Definition{
-		Name: d.name, Columns: cols, Statements: stmts,
+		Name: d.name, Columns: cols, Statements: stmts, StatementQueries: owners,
 		Privileges: derivePrivileges(d.name, cols, d.stmt, d.readOnly, d.allowDelete),
 	}, false)
 	return d
@@ -161,6 +190,9 @@ func TryDefine[T, K, S any](r *Registry[S], spec TableSpec[T, K]) (*Table[T, K, 
 	if spec.ReadOnly && spec.AllowDelete {
 		return nil, fail("ReadOnly cannot combine with AllowDelete")
 	}
+	if spec.AllowDelete && r.deny&DenyDelete != 0 {
+		return nil, fmt.Errorf("%w: %s.Define %s: AllowDelete is denied by registry policy", ErrCapabilityDenied, r.prefix, spec.Name)
+	}
 	rt := reflect.TypeFor[T]()
 	if rt.Kind() != reflect.Struct {
 		return nil, fail("row type %s is not a struct", rt)
@@ -177,6 +209,30 @@ func TryDefine[T, K, S any](r *Registry[S], spec TableSpec[T, K]) (*Table[T, K, 
 		if err := t.escape(c, fail); err != nil {
 			return nil, err
 		}
+	}
+	if len(spec.GroupBy) > 0 {
+		t.groupBy = make(map[string]bool, len(spec.GroupBy))
+		for _, col := range spec.GroupBy {
+			if _, ok := t.byName[col]; !ok {
+				return nil, fail("GroupBy column %s is not declared", col)
+			}
+			if t.groupBy[col] {
+				return nil, fail("GroupBy column %s declared twice", col)
+			}
+			t.groupBy[col] = true
+			t.groupByOrder = append(t.groupByOrder, col)
+		}
+	}
+	seenAggregates := make(map[string]bool)
+	for fn, col := range spec.Aggregates.columns {
+		if _, ok := t.byName[col]; !ok {
+			return nil, fail("%s column %s is not declared", fn, col)
+		}
+		key := fn + ":" + col
+		if seenAggregates[key] {
+			return nil, fail("%s column %s declared twice", fn, col)
+		}
+		seenAggregates[key] = true
 	}
 	if err := t.bindKeys(fail); err != nil {
 		return nil, err

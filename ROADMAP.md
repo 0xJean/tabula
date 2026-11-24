@@ -54,10 +54,37 @@ Items keep the red lines in [docs/DESIGN.md](docs/DESIGN.md).
 - Snapshot policies, FORCE RLS tables, grants and SECURITY DEFINER routines. Classify policies with application rules, check command coverage and exercise a role/scope/statement matrix.
 - Distinguish RLS and privilege denials, configure session guards and clone content-addressed PostgreSQL test templates through a chosen migration. [Design and configuration](docs/AUTHORIZATION.md)
 
+## v0.3.1 candidate — included in v0.3.2
+
+Design record: [docs/DESIGN-v0.3.1.md](docs/DESIGN-v0.3.1.md).
+
+- **Role-bound runners and guarded sessions**: runners pinned to one PostgreSQL role with
+  per-role timeouts, context-derived session variables, scoped and unscoped sessions in
+  one transaction (`WithinShared`), sealed sessions (`SessionKey` / `Registry.Seal`),
+  opt-in raw `Tx()` escape (`ExposeTx` / `WithinRaw`), registry capability policy (`Deny`),
+  transaction-level retry (`WithinRetry`), and login role hygiene check (`CheckLoginRole` /
+  `tabula check-login-role`).
+- **Session-level observability**: tracer, metrics, structured logger and `TagStatements` on
+  runners so hand-written SQL is observed too; separate `oteltabula` OpenTelemetry module;
+  server-side slow log guidance in [docs/LOGGING.md](docs/LOGGING.md).
+- **Query composition, aggregates and embedded SQL**: typed single-table aggregates
+  (`Max`/`Min`/`Sum`/`Avg`/`CountBy`) and filtered `Rows.Exists`, view-owned composed
+  queries (`View.DefineQuery` with `Select`/`Where`/`Tail`/`CountBase`, local `$1…$m`
+  filters, three-state scope, verified C3 variants, keyset `Next` cursors and
+  `FuzzCompileQueryFragment`), embedded `.sql` files (`MustSQLFiles`), and extended
+  `sqlcheck` / `tabula inventory` support. Applications write the joins.
+
+## v0.3.2 — released
+
+- Transactions and savepoints close unfinished database cursors on callback exit.
+- Shared transactions can use a dedicated unscoped reader role alongside scoped writes.
+- Tables can register individual scalar aggregates for SQL snapshots and role verification.
+- Composed lists accept a maximum offset. Table keyset lists report invalid options through their error result. [Migration guide](docs/MIGRATION.md#from-v030-to-v032)
+
 ## v1.0 — stability and ecosystem adapters
 
 - API freeze and semver compatibility promise.
-- Optional OpenTelemetry / Prometheus adapter modules over `Tracer` and `Metrics`.
+- Optional Prometheus adapter module over `Metrics` (the OpenTelemetry adapter is included in v0.3.2).
 - Optional prepared-statement cache.
 
 ## Out of scope

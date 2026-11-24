@@ -16,6 +16,7 @@ import (
 	"reflect"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -73,22 +74,35 @@ type RegistryConfig[S any] struct {
 	Tracer Tracer
 	// Metrics optionally records latency, row count, and error class per statement.
 	Metrics Metrics
+	// SessionKey binds the registry at construction so Bind accepts only sessions
+	// carrying a matching SessionProof signed for that exact session instance.
+	SessionKey SessionKey
+	// RequireSealed creates a fail-closed registry that rejects every Bind until
+	// startup code seals it once with Registry.Seal(key). Ignored when SessionKey
+	// is already non-zero.
+	RequireSealed bool
+	// Deny forbids selected table capabilities (such as DenyDelete, DenyUpsert,
+	// DenyUnscopedWrites, DenyCopy) across all descriptors in this registry.
+	Deny Capability
 }
 
 // Registry owns registered value converters, error policy, logging, tracing,
 // metrics, and the list of defined tables and views. Applications normally
 // declare one package-level Registry and may construct isolated registries in tests.
 type Registry[S any] struct {
-	prefix     string
-	scopeType  reflect.Type
-	scopeID    func(S) any
-	scopeLog   func(S) string
-	arrayArgFn func(any) any
-	arrayColFn func(reflect.Type) (func(any) any, error)
-	errors     ErrorPolicy
-	log        *logState
-	tracer     Tracer
-	metrics    Metrics
+	prefix        string
+	scopeType     reflect.Type
+	scopeID       func(S) any
+	scopeLog      func(S) string
+	arrayArgFn    func(any) any
+	arrayColFn    func(reflect.Type) (func(any) any, error)
+	errors        ErrorPolicy
+	log           *logState
+	tracer        Tracer
+	metrics       Metrics
+	requireSealed bool
+	sessionToken  atomic.Pointer[sessionToken]
+	deny          Capability
 
 	mu    sync.RWMutex
 	types map[reflect.Type]func(any) any
@@ -105,17 +119,19 @@ func NewRegistry[S any](cfg RegistryConfig[S]) *Registry[S] {
 		prefix = "tabula"
 	}
 	r := &Registry[S]{
-		prefix:     prefix,
-		scopeType:  reflect.TypeFor[S](),
-		scopeID:    cfg.ScopeID,
-		scopeLog:   cfg.ScopeLog,
-		arrayArgFn: cfg.ArrayArg,
-		arrayColFn: cfg.ArrayColumn,
-		errors:     cfg.Errors,
-		log:        newLogState(cfg.Log),
-		tracer:     cfg.Tracer,
-		metrics:    cfg.Metrics,
-		types:      networkTypes(),
+		prefix:        prefix,
+		scopeType:     reflect.TypeFor[S](),
+		scopeID:       cfg.ScopeID,
+		scopeLog:      cfg.ScopeLog,
+		arrayArgFn:    cfg.ArrayArg,
+		arrayColFn:    cfg.ArrayColumn,
+		errors:        cfg.Errors,
+		log:           newLogState(cfg.Log),
+		tracer:        cfg.Tracer,
+		metrics:       cfg.Metrics,
+		requireSealed: cfg.RequireSealed,
+		deny:          cfg.Deny,
+		types:         networkTypes(),
 		zeros: map[reflect.Type]func(any) any{
 			reflect.TypeFor[string]():    zeroOf[string],
 			reflect.TypeFor[bool]():      zeroOf[bool],
@@ -125,6 +141,9 @@ func NewRegistry[S any](cfg RegistryConfig[S]) *Registry[S] {
 			reflect.TypeFor[float64]():   zeroOf[float64],
 			reflect.TypeFor[time.Time](): zeroOf[time.Time],
 		},
+	}
+	if cfg.SessionKey.token != nil {
+		r.sessionToken.Store(cfg.SessionKey.token)
 	}
 	if cfg.ScopeWrap != nil {
 		r.types[r.scopeType] = func(p any) any { return cfg.ScopeWrap(p.(*S)) }
@@ -260,9 +279,10 @@ func cloneDefinition(d Definition) Definition {
 		privs[i].Columns = slices.Clone(privs[i].Columns)
 	}
 	return Definition{
-		Name:       d.Name,
-		Columns:    slices.Clone(d.Columns),
-		Statements: maps.Clone(d.Statements),
-		Privileges: privs,
+		Name:             d.Name,
+		Columns:          slices.Clone(d.Columns),
+		Statements:       maps.Clone(d.Statements),
+		Privileges:       privs,
+		StatementQueries: maps.Clone(d.StatementQueries),
 	}
 }

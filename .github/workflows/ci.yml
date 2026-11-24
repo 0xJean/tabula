@@ -42,11 +42,11 @@ jobs:
         with:
           go-version: ${{ matrix.go }}
           cache-dependency-path: "**/go.sum"
-      - name: Use the three modules in this checkout
+      - name: Use all modules in this checkout
         run: scripts/workspace.sh
-      - name: Test both modules against PostgreSQL and enforce coverage floor
+      - name: Test modules against PostgreSQL and enforce coverage floor
         run: |
-          for module in . pgxdriver; do
+          for module in . pgxdriver oteltabula; do
             (
               cd "$module"
               go vet -tags=integration ./...
@@ -68,6 +68,7 @@ jobs:
           path: |
             coverage.out
             pgxdriver/coverage.out
+            oteltabula/coverage.out
       - name: Smoke test the comparison benchmark
         if: matrix.postgres == '17'
         working-directory: benchmarks
@@ -83,14 +84,14 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        module: [".", "pgxdriver", "benchmarks"]
+        module: [".", "pgxdriver", "oteltabula", "benchmarks"]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version: "1.27.x"
           cache-dependency-path: "**/go.sum"
-      - name: Use the three modules in this checkout
+      - name: Use all modules in this checkout
         run: scripts/workspace.sh
       - name: Run static and dependency-boundary gates
         if: matrix.module == '.'
@@ -108,7 +109,7 @@ jobs:
       - name: Fuzz parsers and SQL guards
         if: matrix.module == '.'
         run: |
-          for target in FuzzParseColumnTag FuzzFilterAnd FuzzOrderSpecResolve FuzzGuardNoSessionEscape; do
+          for target in FuzzParseColumnTag FuzzFilterAnd FuzzOrderSpecResolve FuzzGuardNoSessionEscape FuzzCompileQueryFragment; do
             go test -run='^$' -fuzz="^${target}$" -fuzztime=1s .
           done
           go test -run='^$' -fuzz='^FuzzParseSnapshot$' -fuzztime=1s ./sqlcheck

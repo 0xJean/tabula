@@ -17,24 +17,37 @@ type readQueries struct {
 	guard func(string) error
 }
 
-// DirectOption customizes the pgxpool.Config used by Direct before the pool is
-// created. Direct always enforces default_transaction_read_only=on after
-// applying options.
+// DirectOption customizes the pgxpool.Config used by Direct or DirectWithConfig
+// before the pool is created. Direct always enforces
+// default_transaction_read_only=on after applying options.
 type DirectOption func(*pgxpool.Config)
+
+// DirectConfig configures A4 session signing and B1/B3 observability on a
+// read-only DirectPool created by DirectWithConfig.
+type DirectConfig struct {
+	SessionKey tabula.SessionKey
+	Observer   *tabula.Observer
+}
 
 // DirectPool owns a pool of read-only pgx connections.
 type DirectPool[S any] struct {
 	pool   *pgxpool.Pool
 	policy ScopePolicy[S]
+	key    tabula.SessionKey
+	obs    *tabula.Observer
 }
 
 // Session binds the scope without opening a transaction or checking out a connection.
 func (p *DirectPool[S]) Session(scope S) tabula.Session[S] {
-	return &directSession[S]{
+	s := &directSession[S]{
 		reader:   readQueries{db: p.pool, guard: p.check},
 		scope:    scope,
 		unscoped: p.policy.IsUnscoped != nil && p.policy.IsUnscoped(scope),
+		scopeLog: p.policy.ScopeLog,
+		obs:      p.obs,
 	}
+	s.proof = p.key.Sign(s)
+	return s
 }
 
 // Stat returns the current pgxpool statistics.
@@ -58,10 +71,17 @@ func (p *DirectPool[S]) Close() error {
 
 // Direct opens a dedicated pool with read-only mode in the startup parameters
 // of every physical connection. Session binds each request without SQL.
-// Transaction-local setup requires a Runner. Call Close at shutdown.
+// Managed transaction-local variables require a Runner. Call Close at shutdown.
 func Direct[S any](ctx context.Context, dsn string, policy ScopePolicy[S], opts ...DirectOption) (*DirectPool[S], error) {
-	if policy.SetupTx != nil {
-		return nil, errors.New("pgxdriver.Direct: SetupTx requires a transaction")
+	return DirectWithConfig(ctx, dsn, policy, DirectConfig{}, opts...)
+}
+
+// DirectWithConfig is Direct with A4 SessionKey signing and optional B1/B3
+// session observability while preserving native DirectOption hooks and
+// default_transaction_read_only=on.
+func DirectWithConfig[S any](ctx context.Context, dsn string, policy ScopePolicy[S], dcfg DirectConfig, opts ...DirectOption) (*DirectPool[S], error) {
+	if len(policy.ManagedVars) > 0 || policy.ScopeVars != nil || policy.ContextVars != nil || len(policy.UnscopedVars) > 0 {
+		return nil, errors.New("pgxdriver.Direct: transaction-local scope variables require a Runner")
 	}
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
@@ -80,18 +100,30 @@ func Direct[S any](ctx context.Context, dsn string, policy ScopePolicy[S], opts 
 	if err != nil {
 		return nil, err
 	}
-	return &DirectPool[S]{pool: pool, policy: policy}, nil
+	return &DirectPool[S]{pool: pool, policy: policy, key: dcfg.SessionKey, obs: dcfg.Observer}, nil
 }
 
 type directSession[S any] struct {
 	reader   readQueries
 	scope    S
 	unscoped bool
+	scopeLog func(S) string
+	proof    tabula.SessionProof
+	obs      *tabula.Observer
 }
 
-func (s *directSession[S]) Scope() S       { return s.scope }
-func (s *directSession[S]) Unscoped() bool { return s.unscoped }
-func (s *directSession[S]) ReadOnly() bool { return true }
+func (s *directSession[S]) Scope() S                           { return s.scope }
+func (s *directSession[S]) Unscoped() bool                     { return s.unscoped }
+func (s *directSession[S]) ReadOnly() bool                     { return true }
+func (s *directSession[S]) SessionProof() tabula.SessionProof  { return s.proof }
+func (s *directSession[S]) TabulaObserved() tabula.ObserveMask { return s.obs.Signals() }
+
+func (s *directSession[S]) scopeLabel() string {
+	if s.scopeLog == nil {
+		return ""
+	}
+	return s.scopeLog(s.scope)
+}
 
 func (s *directSession[S]) Exec(context.Context, string, ...any) (int64, error) {
 	return 0, tabula.ErrReadOnly
@@ -102,11 +134,32 @@ func (s *directSession[S]) Returning(context.Context, string, []any, ...any) err
 }
 
 func (s *directSession[S]) Scan(ctx context.Context, query string, args []any, dest ...any) error {
-	return directReadError(s.reader.Scan(ctx, query, args, dest...))
+	if err := s.reader.check(query); err != nil {
+		return err
+	}
+	tagged := s.obs.TagSQL(ctx, query)
+	opCtx, done := s.obs.Start(ctx, s.scopeLabel(), query, args)
+	err := directReadError(s.reader.Scan(opCtx, tagged, args, dest...))
+	done(-1, err)
+	return err
 }
 
 func (s *directSession[S]) Each(ctx context.Context, query string, args []any, visit func(func(...any) error) error) error {
-	return directReadError(s.reader.Each(ctx, query, args, visit))
+	if err := s.reader.check(query); err != nil {
+		return err
+	}
+	tagged := s.obs.TagSQL(ctx, query)
+	opCtx, done := s.obs.Start(ctx, s.scopeLabel(), query, args)
+	var count int64
+	err := directReadError(s.reader.Each(opCtx, tagged, args, func(scan func(...any) error) error {
+		if err := visit(scan); err != nil {
+			return err
+		}
+		count++
+		return nil
+	}))
+	done(count, err)
+	return err
 }
 
 func directReadError(err error) error {

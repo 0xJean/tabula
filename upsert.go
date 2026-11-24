@@ -59,6 +59,9 @@ func (t *Table[T, K, S]) TryDefineUpsert(key string, spec UpsertSpec, opts ...St
 	if t.readOnly {
 		return nil, fail("cannot define upsert on a ReadOnly table")
 	}
+	if t.reg.deny&DenyUpsert != 0 {
+		return nil, fmt.Errorf("%w: %s.Upsert %s: upsert is denied by registry policy", ErrCapabilityDenied, t.prefix(), t.name)
+	}
 	if key == "" {
 		return nil, fail("statement key is required")
 	}
@@ -165,8 +168,11 @@ func (r *Rows[T, K, S]) Upsert(ctx context.Context, plan *UpsertPlan[T, K, S], r
 // it omits the plan's RETURNING list and leaves the input slice untouched.
 // On error the count covers successful chunks in the current transaction.
 func (r *Rows[T, K, S]) UpsertMany(ctx context.Context, plan *UpsertPlan[T, K, S], rows []T) (int64, error) {
-	if r.readOnly() {
-		return 0, ErrReadOnly
+	if r.bindErr != nil {
+		return 0, r.bindErr
+	}
+	if err := r.checkWriteAccess(); err != nil {
+		return 0, err
 	}
 	r.checkPlan(plan)
 	return r.writeMany(ctx, "upsert_many", plan.meta, plan.conflict, rows)

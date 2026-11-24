@@ -2,6 +2,7 @@ package tabula
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
@@ -245,4 +246,26 @@ type ctxCaptureSession struct {
 func (c *ctxCaptureSession) Returning(ctx context.Context, q string, args []any, dest ...any) error {
 	c.onCtx(ctx)
 	return c.errSession.Returning(ctx, q, args, dest...)
+}
+
+func TestListKeysetRejectsInvalidOptionsBeforeFilterOrIO(t *testing.T) {
+	reg := NewRegistry(RegistryConfig[customTenant]{})
+	tbl := Define(reg, TableSpec[customRow, int64]{Name: "items"})
+	sess := &fakeSession{}
+	for _, tc := range []struct {
+		opts KeysetListing
+		want string
+	}{
+		{KeysetListing{}, "Limit"}, {KeysetListing{Limit: -1}, "Limit"},
+		{KeysetListing{Limit: math.MaxInt}, "Limit"}, {KeysetListing{Limit: 1, Direction: "sideways"}, "direction"},
+		{KeysetListing{Limit: 1, SortColumn: "absent"}, "sort column"},
+		{KeysetListing{Limit: 1, Lock: LockMode(255)}, "lock mode"},
+		{KeysetListing{Limit: 1, SortColumn: "code", After: []any{"c"}}, "expected 2"},
+		{KeysetListing{Limit: 1, SortColumn: "id", After: []any{1, 1}}, "expected 1"},
+	} {
+		page, err := tbl.Bind(sess).ListKeyset(t.Context(), func(*Filter) { t.Fatal("unexpected filter call") }, tc.opts)
+		require.ErrorContains(t, err, tc.want)
+		require.Zero(t, page)
+		require.Empty(t, sess.lastQuery)
+	}
 }

@@ -29,8 +29,8 @@ func SetNow(column string) Assignment { return Assignment{column: column} }
 // Like Set, it checks the affected row count and does not perform version CAS.
 // Key, scope, deleted, version and once columns cannot be expression targets.
 func (r *Rows[T, K, S]) SetExpr(ctx context.Context, key K, assignments ...Assignment) error {
-	if r.readOnly() {
-		return ErrReadOnly
+	if err := r.checkWriteAccess(); err != nil {
+		return err
 	}
 	if len(assignments) == 0 {
 		return fmt.Errorf("tabula.SetExpr %s: an assignment is required", r.t.name)

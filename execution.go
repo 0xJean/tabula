@@ -9,19 +9,33 @@ import (
 )
 
 type readBinding[T, S any] struct {
-	d              *descriptor[T, S]
-	s              Session[S]
-	logger         *slog.Logger
-	directReadOnly bool
+	d               *descriptor[T, S]
+	s               Session[S]
+	logger          *slog.Logger
+	directReadOnly  bool
+	sessionObserved ObserveMask
+	bindErr         error
 }
 
 func bindReader[T, S any](d *descriptor[T, S], s Session[S]) readBinding[T, S] {
+	if err := d.reg.checkSession(s); err != nil {
+		return readBinding[T, S]{d: d, bindErr: err}
+	}
 	readOnly, ok := s.(interface{ ReadOnly() bool })
-	return readBinding[T, S]{d: d, s: s, directReadOnly: ok && readOnly.ReadOnly()}
+	var observed ObserveMask
+	if obs, ok := s.(interface{ TabulaObserved() ObserveMask }); ok {
+		observed = obs.TabulaObserved()
+	}
+	return readBinding[T, S]{
+		d:               d,
+		s:               s,
+		directReadOnly:  ok && readOnly.ReadOnly(),
+		sessionObserved: observed,
+	}
 }
 
-func (r *readBinding[T, S]) start(ctx context.Context, action, key string) (context.Context, opSpan[S]) {
-	return r.d.reg.startOp(ctx, r.logger, r.s.Scope(), r.d.name, action, key)
+func (r *readBinding[T, S]) start(ctx context.Context, action string, meta stmtMeta, secretArgs []bool) (context.Context, opSpan[S]) {
+	return r.d.reg.startOp(ctx, r.logger, r.s.Scope(), r.d.name, action, meta, secretArgs, r.sessionObserved)
 }
 
 func (r *readBinding[T, S]) fail(ctx context.Context, err error) error {
@@ -40,7 +54,16 @@ func (r *readBinding[T, S]) fillAddrs(dst []any, row *T) []any {
 
 func (r *readBinding[T, S]) addrs(row *T) []any { return r.fillAddrs(make([]any, len(r.d.cols)), row) }
 func (r *readBinding[T, S]) one(ctx context.Context, action string, meta stmtMeta, query string, args []any) (*T, error) {
-	ctx, span := r.start(ctx, action, meta.key)
+	if r.bindErr != nil {
+		return nil, r.bindErr
+	}
+	ctx, span := r.start(ctx, action, meta, nil)
+	if r.sessionObserved != 0 {
+		if sm, ok := StatementMetaFrom(ctx); ok {
+			sm.NoRowsOK = true
+			ctx = WithStatementMeta(ctx, sm)
+		}
+	}
 	var row T
 	err := r.s.Scan(ctx, query, args, r.addrs(&row)...)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -56,13 +79,19 @@ func (r *readBinding[T, S]) one(ctx context.Context, action string, meta stmtMet
 }
 
 func (r *readBinding[T, S]) scan(ctx context.Context, action string, meta stmtMeta, query string, args []any, dest ...any) error {
-	ctx, span := r.start(ctx, action, meta.key)
+	if r.bindErr != nil {
+		return r.bindErr
+	}
+	ctx, span := r.start(ctx, action, meta, nil)
 	err := r.s.Scan(ctx, query, args, dest...)
 	span.finish(ctx, query, -1, err, args, nil, meta.secret, meta.quiet)
 	return r.fail(ctx, err)
 }
 
 func (r *readBinding[T, S]) selectOp(ctx context.Context, action string, meta stmtMeta, query string, args []any) ([]T, error) {
+	if r.bindErr != nil {
+		return nil, r.bindErr
+	}
 	return collect(r.stream(ctx, action, meta, query, args))
 }
 
@@ -77,11 +106,21 @@ func collect[T any](seq iter.Seq2[T, error]) ([]T, error) {
 	return rows, nil
 }
 
+func failedIter[T any](err error) iter.Seq2[T, error] {
+	return func(yield func(T, error) bool) {
+		var zero T
+		yield(zero, err)
+	}
+}
+
 const stopIteration staticError = "tabula: iteration stopped"
 
 func (r *readBinding[T, S]) stream(ctx context.Context, action string, meta stmtMeta, query string, args []any) iter.Seq2[T, error] {
+	if r.bindErr != nil {
+		return failedIter[T](r.bindErr)
+	}
 	return func(yield func(T, error) bool) {
-		opCtx, span := r.start(ctx, action, meta.key)
+		opCtx, span := r.start(ctx, action, meta, nil)
 		var count int64
 		dst := make([]any, len(r.d.cols))
 		stopped := false
@@ -111,7 +150,10 @@ func (r *readBinding[T, S]) stream(ctx context.Context, action string, meta stmt
 // execWrite applies the affected-row contract and observes the driver error
 // before application-level classification. A negative bound is unbounded.
 func (r *Rows[T, K, S]) execWrite(ctx context.Context, action string, meta stmtMeta, query string, args []any, secret []bool, minRows, maxRows int64, mismatch error) (int64, error) {
-	ctx, span := r.start(ctx, action, meta.key)
+	if r.bindErr != nil {
+		return 0, r.bindErr
+	}
+	ctx, span := r.start(ctx, action, meta, secret)
 	n, raw := r.s.Exec(ctx, query, args...)
 	err := r.fail(ctx, raw)
 	if raw == nil && (n < minRows || maxRows >= 0 && n > maxRows) {
@@ -124,7 +166,10 @@ func (r *Rows[T, K, S]) execWrite(ctx context.Context, action string, meta stmtM
 // returning executes a single-row write. missing defines the result of a
 // skipped write (nil for upsert, conflict for CAS, sql.ErrNoRows for insert).
 func (r *Rows[T, K, S]) returning(ctx context.Context, action string, meta stmtMeta, query string, args []any, secret []bool, missing error, dest ...any) (bool, error) {
-	ctx, span := r.start(ctx, action, meta.key)
+	if r.bindErr != nil {
+		return false, r.bindErr
+	}
+	ctx, span := r.start(ctx, action, meta, secret)
 	raw := r.s.Returning(ctx, query, args, dest...)
 	n := int64(1)
 	observed := raw

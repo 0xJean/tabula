@@ -149,11 +149,14 @@ func (r *Registry[S]) effectiveLogger(override *slog.Logger) *slog.Logger {
 }
 
 func (r *Registry[S]) logEmit(ctx context.Context, override *slog.Logger, scopeStr string, ev logEvent) {
-	logger := r.effectiveLogger(override)
-	if logger == nil {
+	emitLog(ctx, r.log, r.effectiveLogger(override), r.errors.Sanitize, scopeStr, "", ev)
+}
+
+func emitLog(ctx context.Context, ls *logState, logger *slog.Logger, sanitize func(error) string, scopeStr, role string, ev logEvent) {
+	if ls == nil || logger == nil {
 		return
 	}
-	level := r.log.level.Level()
+	level := ls.level.Level()
 	if level == LogOff {
 		return
 	}
@@ -171,11 +174,11 @@ func (r *Registry[S]) logEmit(ctx context.Context, override *slog.Logger, scopeS
 		msg = "tabula.statement_failed"
 	case ev.quiet:
 		return
-	case r.log.slowThreshold > 0 && ev.duration >= r.log.slowThreshold && level >= LogSlow:
+	case ls.slowThreshold > 0 && ev.duration >= ls.slowThreshold && level >= LogSlow:
 		slogLevel = slog.LevelWarn
 		msg = "tabula.slow_statement"
 	case level == LogAll:
-		if !r.log.shouldSample() {
+		if !ls.shouldSample() {
 			return
 		}
 		slogLevel = slog.LevelInfo
@@ -184,13 +187,16 @@ func (r *Registry[S]) logEmit(ctx context.Context, override *slog.Logger, scopeS
 		return
 	}
 
-	attrs := make([]slog.Attr, 0, 10)
+	attrs := make([]slog.Attr, 0, 11)
 	attrs = append(attrs,
 		slog.String("tabula.key", ev.key),
 		slog.String("tabula.table", ev.table),
 		slog.String("tabula.action", ev.action),
 		slog.Float64("tabula.duration_ms", float64(ev.duration.Nanoseconds())/1e6),
 	)
+	if role != "" {
+		attrs = append(attrs, slog.String("tabula.role", role))
+	}
 	if ev.rows >= 0 {
 		attrs = append(attrs, slog.Int64("tabula.rows", ev.rows))
 	}
@@ -201,19 +207,19 @@ func (r *Registry[S]) logEmit(ctx context.Context, override *slog.Logger, scopeS
 			attrs = append(attrs, slog.String("tabula.sqlstate", state))
 		}
 		errMsg := ev.err.Error()
-		if r.errors.Sanitize != nil {
-			errMsg = r.errors.Sanitize(ev.err)
+		if sanitize != nil {
+			errMsg = sanitize(ev.err)
 		}
 		attrs = append(attrs, slog.String("tabula.error", errMsg))
 	}
 	if scopeStr != "" {
 		attrs = append(attrs, slog.String("tabula.scope", scopeStr))
 	}
-	if level == LogAll && r.log.includeSQL && ev.sql != "" {
+	if level == LogAll && ls.includeSQL && ev.sql != "" {
 		attrs = append(attrs, slog.String("tabula.sql", ev.sql))
 	}
-	if r.log.values != ValuesNever && len(ev.args) > 0 {
-		attrs = append(attrs, slog.Any("tabula.args", formatLogArgs(r.log.values, ev.args, ev.secretArg, ev.allSecret)))
+	if ls.values != ValuesNever && len(ev.args) > 0 {
+		attrs = append(attrs, slog.Any("tabula.args", formatLogArgs(ls.values, ev.args, ev.secretArg, ev.allSecret)))
 	}
 	logger.LogAttrs(ctx, slogLevel, msg, attrs...)
 }

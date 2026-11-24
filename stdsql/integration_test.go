@@ -18,6 +18,66 @@ import (
 	"github.com/0xJean/tabula/stdsql"
 )
 
+func TestReadOnlyTransactionMode(t *testing.T) {
+	dsn := os.Getenv("TABULA_TEST_DSN")
+	require.NotEmpty(t, dsn, "TABULA_TEST_DSN is required for integration tests")
+	ctx := t.Context()
+	db, err := sql.Open("postgres", dsn)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	scope := struct{}{}
+	ro, err := stdsql.NewRunner(db, stdsql.NoScopePolicy(), stdsql.RunnerOptions{
+		ReadOnly: true, Unscoped: stdsql.UnscopedReadOnly, ExposeTx: true,
+	})
+	require.NoError(t, err)
+	check := func(ctx context.Context, s *stdsql.Session[struct{}]) error {
+		_, err := s.Exec(ctx, "SET TRANSACTION READ WRITE")
+		require.ErrorIs(t, err, tabula.ErrReadOnly)
+		_, err = s.Exec(ctx, "SET default_transaction_read_only = off")
+		require.ErrorIs(t, err, tabula.ErrReadOnly)
+		require.True(t, s.ReadOnly())
+		var mode string
+		require.NoError(t, s.Scan(ctx, "SELECT pg_catalog.current_setting('transaction_read_only')", nil, &mode))
+		require.Equal(t, "on", mode)
+		return nil
+	}
+	require.NoError(t, ro.WithinReadOnly(ctx, scope, check))
+	require.NoError(t, ro.WithinShared(ctx, func(ctx context.Context, shared *stdsql.Shared[struct{}]) error {
+		return check(ctx, shared.Unscoped())
+	}))
+
+	// The first snapshot also precedes the callback on the shared path.
+	opts := &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelReadCommitted}
+	err = ro.WithinSharedOptions(ctx, opts, func(ctx context.Context, shared *stdsql.Shared[struct{}]) error {
+		_, err := shared.Scoped(scope).Exec(ctx, "SET transaction_isolation = 'repeatable read'")
+		return err
+	})
+	require.Equal(t, "25001", tabula.SQLState(err))
+
+	// Raw driver calls reach PostgreSQL directly. Setup must have acquired
+	// the first snapshot even when there are no timeouts or managed variables.
+	err = ro.WithinRawOptions(ctx, scope, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, s *stdsql.RawSession[struct{}]) error {
+		_, err := s.Tx().ExecContext(ctx, "SET TRANSACTION READ WRITE")
+		return err
+	})
+	require.Equal(t, "25001", tabula.SQLState(err))
+
+	rw, err := stdsql.NewRunner(db, stdsql.NoScopePolicy(), stdsql.RunnerOptions{Unscoped: stdsql.UnscopedReadOnly})
+	require.NoError(t, err)
+	require.NoError(t, rw.WithinReadOnly(ctx, scope, check))
+	require.NoError(t, rw.WithinShared(ctx, func(ctx context.Context, shared *stdsql.Shared[struct{}]) error {
+		var mode string
+		err := shared.Unscoped().Scan(ctx, "SELECT 1", nil, new(int))
+		require.ErrorIs(t, err, tabula.ErrUnscopedRequiresReadOnly)
+		require.ErrorIs(t, err, tabula.ErrReadOnly)
+		require.EqualError(t, err, "UnscopedReadOnly requires a read-only transaction")
+		require.NoError(t, shared.Scoped(scope).Scan(ctx, "SHOW transaction_read_only", nil, &mode))
+		require.Equal(t, "off", mode)
+		return nil
+	}))
+}
+
 func TestRunnerScopeSavepointAndRetry(t *testing.T) {
 	dsn := os.Getenv("TABULA_TEST_DSN")
 	require.NotEmpty(t, dsn, "TABULA_TEST_DSN is required for integration tests")
@@ -53,17 +113,19 @@ func TestRunnerScopeSavepointAndRetry(t *testing.T) {
 		ForbidRole:       true,
 	})
 	require.NoError(t, err)
-	runner := stdsql.NewRunner(db, stdsql.ScopePolicy[tenant]{
-		SetupTx: func(ctx context.Context, tx *sql.Tx, scope tenant) error {
-			if err := stdsql.SetLocalConfig(ctx, tx, "session.scope", string(scope)); err != nil {
-				return err
+	runner, err := stdsql.NewRunner(db, stdsql.ScopePolicy[tenant]{
+		ManagedVars: []string{"session.scope", "local.scope"},
+		ScopeVars: func(scope tenant) map[string]string {
+			return map[string]string{
+				"session.scope": string(scope),
+				"local.scope":   string(scope),
 			}
-			return stdsql.SetLocalConfig(ctx, tx, "local.scope", string(scope))
 		},
 		GuardQuery: guard,
-	})
+	}, stdsql.RunnerOptions{})
+	require.NoError(t, err)
 
-	// Scope SetupTx + Savepoint rollback keeps outer transaction intact.
+	// Scope vars + Savepoint rollback keeps outer transaction intact.
 	require.NoError(t, runner.Within(ctx, "t-1", func(ctx context.Context, s *stdsql.Session[tenant]) error {
 		for _, q := range []string{
 			"SET ROLE postgres",
@@ -109,13 +171,13 @@ func TestRunnerScopeSavepointAndRetry(t *testing.T) {
 	require.ErrorIs(t, err, tabula.ErrReadOnly)
 	require.Equal(t, "25006", tabula.SQLState(err))
 
-	// WithinIsolation works with Serializable + Retry helper.
-	require.NoError(t, tabula.Retry(ctx, tabula.RetryConfig{MaxAttempts: 3}, func(ctx context.Context) error {
-		return runner.WithinIsolation(ctx, "t-1", sql.LevelSerializable, func(ctx context.Context, s *stdsql.Session[tenant]) error {
-			rows, err := notes.Bind(s).Find(ctx, nil, tabula.Listing{})
-			require.NoError(t, err)
-			require.Len(t, rows, 1)
-			return nil
-		})
+	// WithinIsolation works with Serializable + WithinRetryWith helper.
+	require.NoError(t, runner.WithinRetryWith(ctx, "t-1", tabula.RetryConfig{MaxAttempts: 3}, stdsql.RunOptions[tenant]{
+		TxOptions: &sql.TxOptions{Isolation: sql.LevelSerializable},
+	}, func(ctx context.Context, s *stdsql.Session[tenant]) error {
+		rows, err := notes.Bind(s).Find(ctx, nil, tabula.Listing{})
+		require.NoError(t, err)
+		require.Len(t, rows, 1)
+		return nil
 	}))
 }

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/0xJean/tabula"
 	"github.com/0xJean/tabula/internal/pgstmt"
 )
 
@@ -21,6 +22,27 @@ type Statement struct {
 
 // RoleStatements maps each execution role to its own named probes.
 type RoleStatements map[string][]Statement
+
+// AddDefinitions appends every statement from defs (in deterministic sorted
+// order, including C1 count_by_<col> statements) to role's workload.
+func (r RoleStatements) AddDefinitions(role string, defs ...tabula.Definition) {
+	sorted := slices.Clone(defs)
+	slices.SortFunc(sorted, func(a, b tabula.Definition) int { return strings.Compare(a.Name, b.Name) })
+	for _, d := range sorted {
+		for _, k := range slices.Sorted(maps.Keys(d.Statements)) {
+			r[role] = append(r[role], Statement{
+				Name: d.Name + "/" + k,
+				SQL:  d.Statements[k],
+			})
+		}
+	}
+}
+
+// AddViews appends every registered statement from views (including all C3
+// composed-query variants) to role's workload without manual listing.
+func (r RoleStatements) AddViews(role string, views ...tabula.ViewDefinition) {
+	r.AddDefinitions(role, ViewsToDefinitions(views)...)
+}
 
 // The lexer and PostgreSQL must agree on string boundaries. Check the
 // effective role as PostgreSQL also accepts special role setting values.

@@ -9,6 +9,7 @@ func FuzzParseSnapshot(f *testing.F) {
 	f.Add("\n-- public.a\n-- insert\nINSERT INTO public.a (id)\nVALUES ($1);\n")
 	f.Add("")
 	f.Add("-- only comment")
+	f.Add("-- tabula:statement-queries {\"Definition\":\"v\",\"Statements\":{\"list.find\":\"list\"}}\n\n-- v\n-- list.find\nSELECT 1;\n")
 	f.Add("SELECT 1;")
 	f.Add("-- t\n-- k\n;\n")
 	f.Fuzz(func(t *testing.T, raw string) {

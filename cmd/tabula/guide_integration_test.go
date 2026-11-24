@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -21,7 +22,9 @@ import (
 // Read the published sample inputs so a stale field, command or expected result
 // in the guide fails through the same entry point an application would use.
 func TestAuthorizationGuide(t *testing.T) {
-	guide, err := os.ReadFile(filepath.Join("..", "..", "docs", "AUTHORIZATION.md"))
+	repo, err := filepath.Abs("../..")
+	require.NoError(t, err)
+	guide, err := os.ReadFile(filepath.Join(repo, "docs", "AUTHORIZATION.md"))
 	require.NoError(t, err)
 	dsn := os.Getenv("TABULA_TEST_DSN")
 	require.NotEmpty(t, dsn)
@@ -87,7 +90,7 @@ func Add(ctx context.Context, tx *sql.Tx, id int) (sql.Result, error) {
 		require.Contains(t, configs, config)
 		configs[config] = true
 		var out, diag bytes.Buffer
-		args := append([]string{command, "--config", config}, options...)
+		args := append([]string{command, "--config", filepath.Join(dir, config)}, options...)
 		require.Equal(t, code, run(t.Context(), args, &out, &diag), "%s: %s", command, diag.String())
 		return out.Bytes()
 	}
@@ -109,7 +112,57 @@ func Add(ctx context.Context, tx *sql.Tx, id int) (sql.Result, error) {
 	require.NoError(t, json.Unmarshal(call("check-coverage", "workload.json", 1), &findings))
 	require.Equal(t, []string{fixture(`docs_writer/add-note: "docs"."notes" SELECT: no applicable permissive policy`)}, findings)
 	call("test-rls", "behavior.json", 0)
+
+	// Run the exported-handle example with its own source and real registered SQL.
+	template, err := os.ReadFile("bindings.json")
+	require.NoError(t, err)
+	require.NoError(t, os.Mkdir("items", 0o700))
+	t.Chdir("items")
+	writeGuideItems(t, string(guide), repo)
+	var buildLog bytes.Buffer
+	render := exec.CommandContext(t.Context(), "go", "run", ".")
+	render.Stderr = &buildLog
+	snapshot, err := render.Output()
+	require.NoError(t, err, "%s", buildLog.String())
+	require.NoError(t, os.WriteFile("statements.sql", snapshot, 0o600))
+	var items sqlcheck.SQLInventory
+	require.NoError(t, json.Unmarshal(call("inventory", "inventory.json", 0), &items))
+	require.Len(t, items.Sites, 1)
+	site := items.Sites[0]
+	require.Equal(t, "CountBy", site.Method)
+	require.Empty(t, site.Definition)
+	binding := bytes.ReplaceAll(template, []byte("<CountBy site ID>"), []byte(site.ID))
+	require.NoError(t, os.WriteFile("bindings.json", binding, 0o600))
+	var work sqlcheck.RoleStatements
+	require.NoError(t, json.Unmarshal(call("inventory", "inventory.json", 0, "--bindings", "bindings.json", "--snapshot", "statements.sql"), &work))
+	require.Len(t, work["items_reader"], 1)
+	require.Equal(t, site.ID+"/public.items/count_by_kind", work["items_reader"][0].Name)
+	configs["bindings.json"] = true
 	for name, ran := range configs {
 		require.True(t, ran, "%s has no CLI example test", name)
 	}
+}
+
+func writeGuideItems(t *testing.T, guide, repo string) {
+	t.Helper()
+	block := regexp.MustCompile("(?ms)^`items\\.go`\n\n```go\n(.*?)\n```$").FindStringSubmatch(guide)
+	require.Len(t, block, 2, "missing items.go example")
+	mod := fmt.Sprintf("module example.org/items\n\ngo 1.26.0\n\nrequire github.com/0xJean/tabula v0.3.0\nreplace github.com/0xJean/tabula => %q\n", filepath.ToSlash(repo))
+	require.NoError(t, os.WriteFile("go.mod", []byte(mod), 0o600))
+	const preamble = `package main
+import (
+	"context"
+	"fmt"
+
+	"github.com/0xJean/tabula"
+	"github.com/0xJean/tabula/sqlcheck"
+)
+type item struct {
+	ID int64 ` + "`db:\"id,key\"`" + `
+	Kind string ` + "`db:\"kind\"`" + `
+}
+var reg = tabula.NewRegistry(tabula.RegistryConfig[struct{}]{})
+`
+	const render = "\nfunc main() { fmt.Print(sqlcheck.RenderSnapshot(reg.Defined())) }\n"
+	require.NoError(t, os.WriteFile("items.go", []byte(preamble+block[1]+render), 0o600))
 }

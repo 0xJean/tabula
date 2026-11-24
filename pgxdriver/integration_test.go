@@ -19,6 +19,66 @@ import (
 	"github.com/0xJean/tabula/pgxdriver"
 )
 
+func TestReadOnlyTransactionMode(t *testing.T) {
+	dsn := os.Getenv("TABULA_TEST_DSN")
+	require.NotEmpty(t, dsn, "TABULA_TEST_DSN is required for integration tests")
+	ctx := t.Context()
+	db, err := pgxpool.New(ctx, dsn)
+	require.NoError(t, err)
+	t.Cleanup(db.Close)
+
+	scope := struct{}{}
+	ro, err := pgxdriver.NewRunner(db, pgxdriver.NoScopePolicy(), pgxdriver.RunnerOptions{
+		ReadOnly: true, Unscoped: pgxdriver.UnscopedReadOnly, ExposeTx: true,
+	})
+	require.NoError(t, err)
+	check := func(ctx context.Context, s *pgxdriver.Session[struct{}]) error {
+		_, err := s.Exec(ctx, "SET TRANSACTION READ WRITE")
+		require.ErrorIs(t, err, tabula.ErrReadOnly)
+		_, err = s.Exec(ctx, "SET default_transaction_read_only = off")
+		require.ErrorIs(t, err, tabula.ErrReadOnly)
+		require.True(t, s.ReadOnly())
+		var mode string
+		require.NoError(t, s.Scan(ctx, "SELECT pg_catalog.current_setting('transaction_read_only')", nil, &mode))
+		require.Equal(t, "on", mode)
+		return nil
+	}
+	require.NoError(t, ro.WithinReadOnly(ctx, scope, check))
+	require.NoError(t, ro.WithinShared(ctx, func(ctx context.Context, shared *pgxdriver.Shared[struct{}]) error {
+		return check(ctx, shared.Unscoped())
+	}))
+
+	// The first snapshot also precedes the callback on the shared path.
+	opts := pgx.TxOptions{AccessMode: pgx.ReadOnly, IsoLevel: pgx.ReadCommitted}
+	err = ro.WithinSharedOptions(ctx, opts, func(ctx context.Context, shared *pgxdriver.Shared[struct{}]) error {
+		_, err := shared.Scoped(scope).Exec(ctx, "SET transaction_isolation = 'repeatable read'")
+		return err
+	})
+	require.Equal(t, "25001", tabula.SQLState(err))
+
+	// Raw driver calls reach PostgreSQL directly. Setup must have acquired
+	// the first snapshot even when there are no timeouts or managed variables.
+	err = ro.WithinRawTxOptions(ctx, scope, pgx.TxOptions{AccessMode: pgx.ReadOnly}, func(ctx context.Context, s *pgxdriver.RawSession[struct{}]) error {
+		_, err := s.Tx().Exec(ctx, "SET TRANSACTION READ WRITE")
+		return err
+	})
+	require.Equal(t, "25001", tabula.SQLState(err))
+
+	rw, err := pgxdriver.NewRunner(db, pgxdriver.NoScopePolicy(), pgxdriver.RunnerOptions{Unscoped: pgxdriver.UnscopedReadOnly})
+	require.NoError(t, err)
+	require.NoError(t, rw.WithinReadOnly(ctx, scope, check))
+	require.NoError(t, rw.WithinShared(ctx, func(ctx context.Context, shared *pgxdriver.Shared[struct{}]) error {
+		var mode string
+		err := shared.Unscoped().Scan(ctx, "SELECT 1", nil, new(int))
+		require.ErrorIs(t, err, tabula.ErrUnscopedRequiresReadOnly)
+		require.ErrorIs(t, err, tabula.ErrReadOnly)
+		require.EqualError(t, err, "UnscopedReadOnly requires a read-only transaction")
+		require.NoError(t, shared.Scoped(scope).Scan(ctx, "SHOW transaction_read_only", nil, &mode))
+		require.Equal(t, "off", mode)
+		return nil
+	}))
+}
+
 func TestPgxRunnerAndTabulaIntegration(t *testing.T) {
 	dsn := os.Getenv("TABULA_TEST_DSN")
 	require.NotEmpty(t, dsn, "TABULA_TEST_DSN is required for integration tests")
@@ -57,11 +117,13 @@ func TestPgxRunnerAndTabulaIntegration(t *testing.T) {
 	tbl := tabula.Define(reg, tabula.TableSpec[item, int64]{Name: schema + ".items", Order: "id ASC"})
 	roTbl := tabula.Define(reg, tabula.TableSpec[item, int64]{Name: schema + ".items", ReadOnly: true})
 
-	runner := pgxdriver.NewRunner(pool, pgxdriver.ScopePolicy[tenant]{
-		SetupTx: func(ctx context.Context, tx pgx.Tx, scope tenant) error {
-			return pgxdriver.SetLocalConfig(ctx, tx, "app.current_tenant", string(scope))
+	runner, err := pgxdriver.NewRunner(pool, pgxdriver.ScopePolicy[tenant]{
+		ManagedVars: []string{"app.current_tenant"},
+		ScopeVars: func(scope tenant) map[string]string {
+			return map[string]string{"app.current_tenant": string(scope)}
 		},
-	})
+	}, pgxdriver.RunnerOptions{})
+	require.NoError(t, err)
 
 	require.NoError(t, runner.Within(ctx, "t1", func(ctx context.Context, s *pgxdriver.Session[tenant]) error {
 		r := tbl.Bind(s)
@@ -79,12 +141,22 @@ func TestPgxRunnerAndTabulaIntegration(t *testing.T) {
 		require.Nil(t, missing)
 
 		// Savepoint rollback keeps outer row intact.
+		var finishedChild *pgxdriver.Session[tenant]
 		spErr := s.Savepoint(ctx, func(ctx context.Context, child *pgxdriver.Session[tenant]) error {
+			finishedChild = child
 			tmp := item{Tenant: "t1", Code: "rollback_me", Version: 1}
 			require.NoError(t, tbl.Bind(child).Insert(ctx, &tmp))
 			return errors.New("abort savepoint")
 		})
 		require.ErrorContains(t, spErr, "abort savepoint")
+
+		for item, err := range r.Iter(ctx, nil, tabula.Listing{}) {
+			require.NoError(t, err)
+			_, err = r.Get(ctx, item.ID)
+			require.ErrorIs(t, err, tabula.ErrSessionBusy)
+			_, err = finishedChild.Exec(ctx, "SELECT 1")
+			require.ErrorIs(t, err, tabula.ErrSessionClosed)
+		}
 
 		many, err := r.GetMany(ctx, []int64{row.ID})
 		require.NoError(t, err)
@@ -207,7 +279,9 @@ func TestDirectAndCopyTypes(t *testing.T) {
 	tbl := tabula.Define(reg, tabula.TableSpec[row, int64]{Name: name})
 	input := row{ID: 1, Tenant: "one", Counts: []int32{}, Weights: []float64{0.125}, Enabled: []enabled{true, false}, Address: netip.MustParseAddr("2001:db8::5"), Prefix: netip.MustParsePrefix("10.0.0.0/8")}
 	policy := pgxdriver.ScopePolicy[scope]{}
-	require.NoError(t, pgxdriver.NewRunner(db, policy).Within(ctx, "one", func(ctx context.Context, s *pgxdriver.Session[scope]) error {
+	runner, err := pgxdriver.NewRunner(db, policy, pgxdriver.RunnerOptions{})
+	require.NoError(t, err)
+	require.NoError(t, runner.Within(ctx, "one", func(ctx context.Context, s *pgxdriver.Session[scope]) error {
 		wrong := input
 		wrong.ID = 2
 		wrong.Tenant = "two"
@@ -257,6 +331,6 @@ func TestDirectAndCopyTypes(t *testing.T) {
 	err = s.Each(ctx, lock, nil, func(scan func(...any) error) error { return scan(new(int64)) })
 	require.ErrorIs(t, err, tabula.ErrReadOnly)
 	require.Equal(t, "25006", tabula.SQLState(err))
-	_, err = pgxdriver.Direct(ctx, dsn, pgxdriver.ScopePolicy[scope]{SetupTx: func(context.Context, pgx.Tx, scope) error { return nil }})
+	_, err = pgxdriver.Direct(ctx, dsn, pgxdriver.ScopePolicy[scope]{ManagedVars: []string{"app.scope"}})
 	require.Error(t, err)
 }

@@ -8,10 +8,30 @@ Practical recipes showing how applications bind and use Tabula without an ORM.
 type TenantID string
 
 var reg = tabula.NewRegistry(tabula.RegistryConfig[TenantID]{
-    ScopeID:     func(t TenantID) any { return string(t) },
-    ScopeLog:    func(t TenantID) string { return string(t) },
-    ArrayArg:    pqdriver.Array,
-    ArrayColumn: pqdriver.ArrayColumn,
+    RequireSealed: true,
+    ScopeID:       func(t TenantID) any { return string(t) },
+    ScopeLog:      func(t TenantID) string { return string(t) },
+    ArrayArg:      pqdriver.Array,
+    ArrayColumn:   pqdriver.ArrayColumn,
+})
+
+key := tabula.NewSessionKey()
+runner, err := stdsql.NewRunner(db, stdsql.ScopePolicy[TenantID]{
+    ManagedVars: []string{"app.current_tenant"},
+    ScopeVars: func(tenant TenantID) map[string]string {
+        return map[string]string{"app.current_tenant": string(tenant)}
+    },
+    ScopeLog: func(t TenantID) string { return string(t) },
+}, stdsql.RunnerOptions{
+    Role:        "app_user",
+    RequireRole: true,
+    SessionKey:  key,
+    Timeouts: stdsql.Timeouts{
+        Lock:              time.Second,
+        Statement:         5 * time.Second,
+        IdleInTransaction: 10 * time.Second,
+        Transaction:       30 * time.Second,
+    },
     Log: tabula.LogConfig{
         Logger:        logger,
         Level:         tabula.LogSlow,
@@ -19,19 +39,15 @@ var reg = tabula.NewRegistry(tabula.RegistryConfig[TenantID]{
         Values:        tabula.ValuesNever,
     },
 })
-
-runner := stdsql.NewRunner(db, stdsql.ScopePolicy[TenantID]{
-    SetupTx: func(ctx context.Context, tx *sql.Tx, tenant TenantID) error {
-        if err := stdsql.SetLocalRole(ctx, tx, "app_user"); err != nil {
-            return err
-        }
-        return stdsql.SetLocalConfig(ctx, tx, "app.current_tenant", string(tenant))
-    },
-    GuardQuery: tabula.GuardNoSessionEscape,
-})
+if err != nil {
+    return err
+}
+if err := reg.Seal(key); err != nil {
+    return err
+}
 ```
 
-For single-scope applications, pass `stdsql.NoScopePolicy()` with scope type `struct{}`.
+For single-scope applications, pass `stdsql.NoScopePolicy()` and `stdsql.RunnerOptions{}` with scope type `struct{}`.
 
 ## 2. Single-table CRUD with optimistic locking and `once` protection
 
@@ -136,11 +152,11 @@ page, err := r.ListKeyset(ctx, func(f *tabula.Filter) {
 ## 7. Serializable transactions with explicit retry
 
 ```go
-err := tabula.Retry(ctx, tabula.RetryConfig{MaxAttempts: 3}, func(ctx context.Context) error {
-    return runner.WithinIsolation(ctx, tenant, sql.LevelSerializable, func(ctx context.Context, s *stdsql.Session[TenantID]) error {
-        // ...
-        return nil
-    })
+err := runner.WithinRetryWith(ctx, tenant, tabula.RetryConfig{MaxAttempts: 3}, stdsql.RunOptions[TenantID]{
+    TxOptions: &sql.TxOptions{Isolation: sql.LevelSerializable},
+}, func(ctx context.Context, s *stdsql.Session[TenantID]) error {
+    // Callback must be idempotent apart from database writes.
+    return nil
 })
 ```
 
@@ -184,7 +200,9 @@ for job, err := range jobs.Bind(sess).Iter(ctx, nil, tabula.Listing{
 // The cursor is closed. Process the claimed IDs in the same transaction.
 ```
 
-Starting a range executes one query in the bound session. Each yielded row comes from that cursor. A break releases it. Finish the range or break before issuing another statement on the same transaction. PostgreSQL retains row locks until the transaction ends. Streaming a locked table with `once` columns retains a snapshot per locked row. Unlocked exports decode one row at a time. For hand-written SQL over the table columns use `rows.SelectIter(ctx, query, args...)`. For a projection, use `view.Bind(sess).Iter(ctx, query, args...)`.
+Starting a range executes one query in the bound session. Each yielded row comes from that cursor. A break releases it. Finish the range or break before issuing another statement on the same transaction. Both drivers return `tabula.ErrSessionBusy` while the cursor is open, including when another handle from `WithinShared` issues the statement. PostgreSQL retains row locks until the transaction ends. Streaming a locked table with `once` columns retains a snapshot per locked row. Unlocked exports decode one row at a time. For hand-written SQL over the table columns use `rows.SelectIter(ctx, query, args...)`. For a projection, use `view.Bind(sess).Iter(ctx, query, args...)`.
+
+When pulling rows with `next, stop := iter.Pull2(seq)`, place `defer stop()` in the `Within` or `Savepoint` callback that consumes the rows, immediately after creating the iterator. Both drivers close a partially consumed database cursor on transaction or savepoint exit. With a live context, a later pull reports `ErrSessionClosed`. A canceled context keeps its cancellation error. Calling `stop` also releases the Go iterator and lets you reuse the transaction earlier.
 
 ## 11. Batch upserts and atomic updates
 
@@ -214,7 +232,7 @@ row, err := settings.Bind(pool.Session(struct{}{})).Get(ctx, key)
 
 Create the pool at startup and reuse it across requests. Both `stdsql.Direct` and `pgxdriver.Direct` set `default_transaction_read_only=on` when physical connections open. Tune pool limits via `stdsql.DirectPool`'s `SetMaxOpenConns`/`SetMaxIdleConns`/`SetConnMaxLifetime`/`SetConnMaxIdleTime` (and inspect `Stats()`), or pass `pgxdriver.DirectOption` callbacks to `pgxdriver.Direct` (and inspect `Stat()`); `pgxdriver.Direct` always re-enforces `default_transaction_read_only=on` after applying options. A `Get` or `View.One` uses one query round trip on a warm connection. A `List` with `CountExact` still issues a count and a page query, each with its own snapshot.
 
-Use a read-role connection URL and application-owned SQL. Both Direct adapters apply `tabula.GuardReadOnly` before the application's `GuardQuery`. It accepts one `SELECT` or `WITH` statement at a time. PostgreSQL enforces read-only access inside the query. Use `WithinReadOnly` for transaction-local roles, scope GUCs or a shared transaction snapshot with an appropriate isolation level (`WithinReadOnly` sessions enforce `tabula.ErrReadOnly` consistently with `Direct`). Direct rejects a policy with `SetupTx`.
+Use a read-role connection URL and application-owned SQL. Both Direct adapters apply `tabula.GuardReadOnly` before the application's `GuardQuery`. It accepts one `SELECT` or `WITH` statement at a time. PostgreSQL enforces read-only access inside the query. Use `WithinReadOnly` for transaction-local roles, scope GUCs or a shared transaction snapshot with an appropriate isolation level (`WithinReadOnly` sessions enforce `tabula.ErrReadOnly` consistently with `Direct`). Direct rejects a policy declaring managed transaction-local variables. For sealed registries, pass `stdsql.DirectSessionKey(key)` or `pgxdriver.DirectWithConfig(..., DirectConfig{SessionKey: key})`.
 
 ## 13. PostgreSQL network addresses and arrays
 
@@ -222,12 +240,57 @@ Use `netip.Addr` for a host address and `netip.Prefix` for CIDR networks or inet
 
 Set `RegistryConfig.ArrayColumn` to `pqdriver.ArrayColumn` or `pgxdriver.ArrayColumn` for one-dimensional string, int32, int64, float64 and bool slices, including named element types. A nil slice represents SQL NULL and a non-nil empty slice represents an empty PostgreSQL array.
 
-## Audit handwritten SQL before narrowing grants
+## 14. Composed view queries and aggregates
+
+```go
+// Single-table aggregates reuse declared columns and registry codecs.
+peak, present, err := tabula.Max[int64](ctx, rows, "rank", func(f *tabula.Filter) {
+    f.And("visible = ?", true)
+})
+counts, err := tabula.CountBy[string](ctx, rows, "category", nil)
+exists, err := rows.Exists(ctx, func(f *tabula.Filter) { f.And("pinned = ?", true) })
+
+// View-owned composed query with Select/Where split, local $1 filters and keyset paging.
+var listNotes = noteView.DefineQuery("notes.search", tabula.QuerySpec{
+    Select: "SELECT n.id, n.rank, coalesce(l.caption, '') AS caption FROM public.notes n LEFT JOIN public.labels l ON l.id = n.label_id AND l.tenant_id = n.tenant_id",
+    Where:  "n.deleted_at IS NULL",
+    Scope:  tabula.ScopeColumns("n.tenant_id"),
+    Filters: []tabula.QueryFilter{
+        {Name: "q", SQL: "n.title ILIKE $1 OR n.code ILIKE $1", Secret: true},
+    },
+    Order: tabula.QueryOrderSpec{
+        Default:          "rank",
+        DefaultDirection: tabula.SortDesc,
+        Sorts:            []tabula.QuerySort{{Key: "rank", Expr: "n.rank", Column: "rank"}},
+        TieBreaker:       []tabula.QuerySortTerm{{Expr: "n.id", Column: "id"}},
+    },
+    MaxLimit: 100,
+    MaxOffset: 1000,
+    Keyset:   true,
+})
+
+// Zero-value QueryParams is directly usable without a constructor.
+var params tabula.QueryParams
+if search != "" {
+    params.With("q", "%"+search+"%")
+}
+page, err := listNotes.Bind(sess).ListKeyset(ctx, &params, tabula.QueryKeyset{Limit: 20, After: cursor})
+// page.Next is automatically populated when page.HasMore is true.
+```
+
+Set `MaxOffset` to the largest offset this query should accept. Larger offsets return an error before either the count or page query runs. A zero cap allows any nonnegative offset.
+
+Declare sort and tie-breaker expressions without bind parameters. An ordering that depends on a base argument can use a projected column computed in `Select`. For keyset pagination, expose that column from a subquery so the cursor predicate in `WHERE` can reference it.
+
+With a fixed keyset order, set the same `Direction` on the primary sort and each tie-breaker. Both `ORDER BY` and the `After` comparison use that direction even if the request asks for the opposite order. Leave every term at `SortDefault` to let the caller choose.
+
+## Audit handwritten SQL and login roles before narrowing grants
 
 Run these commands in the application repository using the application’s inventory, workload, scope and expected grant files. Set `TABULA_DSN` to a disposable PostgreSQL installation.
 
 ```sh
-tabula inventory --config inventory.json
+tabula check-login-role --role app_login --member-of app_reader,app_writer --schemas public
+tabula inventory --config inventory.json --bindings bindings.json --snapshot statements.sql > workload.json
 tabula verify-roles --config workload.json
 tabula grants --config privileges.json
 tabula minimize --config trials.json
@@ -235,4 +298,4 @@ tabula check-coverage --config workload.json
 tabula test-rls --config behavior.json
 ```
 
-Review each unregistered dynamic site and each extra grant before changing the application's grant declarations. [Full JSON examples and interpretation](AUTHORIZATION.md)
+Generate `statements.sql` from the tables and views used by the assigned roles. A missing descriptor or aggregate makes `inventory` exit with the affected site ID. Review each unregistered dynamic site and each extra grant before changing the application's grant declarations. [Full JSON examples and interpretation](AUTHORIZATION.md)

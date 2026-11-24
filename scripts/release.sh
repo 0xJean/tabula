@@ -5,7 +5,7 @@ export GOWORK=off
 mode=${1:-}
 version=${2:-}
 module=github.com/0xJean/tabula
-children=(pgxdriver benchmarks)
+children=(pgxdriver oteltabula benchmarks)
 
 die() { echo "$*" >&2; exit 1; }
 
@@ -14,8 +14,8 @@ if [[ ! $version =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; the
 fi
 case "$mode" in
   plan)
-    echo "Prepare both child modules against $module@$version from the committed core."
-    echo "After verification, publish main, $version and pgxdriver/$version in one atomic push."
+    echo "Prepare child modules (${children[*]}) against $module@$version from the committed core."
+    echo "After verification, publish main, $version, pgxdriver/$version and oteltabula/$version in one atomic push."
     exit 0 ;;
   prepare|verify|publish) ;;
   *) die 'Expected plan, prepare, verify, or publish.' ;;
@@ -73,7 +73,7 @@ for dir in "${children[@]}"; do
   if [[ $mode == prepare ]]; then
     # A new candidate at this version may follow edits to the core.
     awk -v m="$module" -v v="$version" '$1 != m || ($2 != v && $2 != v "/go.mod")' \
-      "$dir/go.sum" > "$tmp/$dir.sum"
+      "$dir/go.sum" > "$tmp/$dir.sum" 2>/dev/null || true
     edits=("-require=$module@$version" "-dropreplace=$module")
     while IFS= read -r old_version; do
       edits+=("-dropreplace=$module@$old_version")
@@ -91,23 +91,23 @@ for dir in "${children[@]}"; do
 done
 
 if [[ $mode != prepare ]]; then
-  # Verify the same reference consumers will find at this tag, including the driver.
+  # Verify the same reference consumers will find at this tag, including child modules.
   repo_root=$PWD
-  (cd "$tmp" && go work init "$repo_root" "$repo_root/pgxdriver")
+  (cd "$tmp" && go work init "$repo_root" "$repo_root/pgxdriver" "$repo_root/oteltabula")
   GOWORK="$tmp/go.work" scripts/docs.sh --check
 fi
 
 case "$mode" in
   prepare)
-    # Only update the checkout once both standalone dependency graphs resolve.
+    # Only update the checkout once all standalone dependency graphs resolve.
     for dir in "${children[@]}"; do
       cp "$tmp/$dir.mod" "$dir/go.mod"
       cp "$tmp/$dir.sum" "$dir/go.sum"
     done
-    echo "Prepared both manifests for $version. Review and commit the changes."
+    echo "Prepared child manifests for $version. Review and commit the changes."
     ;;
   verify) echo "Verified the standalone modules against $module@$version ($revision)." ;;
   publish)
-    git push --atomic origin "$revision:refs/heads/main" "$revision:refs/tags/$version" "$revision:refs/tags/pgxdriver/$version"
+    git push --atomic origin "$revision:refs/heads/main" "$revision:refs/tags/$version" "$revision:refs/tags/pgxdriver/$version" "$revision:refs/tags/oteltabula/$version"
     ;;
 esac

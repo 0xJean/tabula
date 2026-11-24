@@ -25,6 +25,36 @@ The default inventory covers production sources selected by the current Go build
 
 Assign each site ID to an entry such as `{"Roles":["docs_reader"]}` in a bindings file. Run `tabula inventory --config inventory.json --bindings bindings.json > workload.json` to collect statements and check their assignments together. `SQLInventory.BindRoles` reports missing or retired assignments. A dynamic entry supplies named `Variants` with their SQL. An explicitly skipped site requires a registered exception. A static site can supply `Access` for command coverage. The same site can be assigned to several roles.
 
+For composed queries and aggregates, add `--snapshot statements.sql`, generated with `sqlcheck.RenderAllSnapshot(reg.Defined(), reg.DefinedViews())`. The collector resolves literal descriptor names in direct declarations and single-assignment local or private package handles. A query key such as `list` can be reused on several views. Each role receives the variants registered for its own view and query. An optional `Prefix` selects a subset of those variants.
+
+Use `Definition` for an injected, mutable or exported handle. For example, another package can reassign the exported variable `Items` below. Here `reg` has scope type `struct{}` and `item` maps the `id` key and the `kind` column.
+
+`items.go`
+
+```go
+var Items = tabula.Define(reg, tabula.TableSpec[item, int64]{
+	Name:     "public.items",
+	ReadOnly: true,
+	GroupBy:  []string{"kind"},
+})
+
+func CountsByKind(ctx context.Context, sess tabula.Session[struct{}]) (map[string]int64, error) {
+	return tabula.CountBy[string](ctx, Items.Bind(sess), "kind", nil)
+}
+```
+
+Copy the `CountBy` site's `ID` from `tabula inventory --config inventory.json` into the bindings file. Set `Definition` to the descriptor's `TableSpec.Name`. This assigns the registered `public.items/count_by_kind` statement to `items_reader`.
+
+`bindings.json`
+
+```json
+{
+  "<CountBy site ID>": {"Roles":["items_reader"], "Definition":"public.items"}
+}
+```
+
+A missing definition or statement fails the command with the site ID. Declare the pairs needed for automatic scalar verification with, for example, `Aggregates: tabula.ScalarAggregates{Max: []string{"id"}}` in `TableSpec`. The snapshot records the query for live rows and, on a scoped table, both scope variants. Automatic scalar verification requires a literal `nil` filter at the call site. Recollect any inventory saved by an earlier version. Supply named `Variants` for calls with a filter callback, undeclared scalar aggregates, unregistered `Exists` statements, queries compiled with `TryDefineQuery`, or helpers used across several descriptors. Put explicit `Access` requirements on each manual variant. To skip a site verified elsewhere, register the reason in `Exceptions` and use `{"Skip":true}` as its binding.
+
 Consumers can also supply ordinary named statements under each execution role. Both routes use the same workload format.
 
 `workload.json`
@@ -41,6 +71,20 @@ Consumers can also supply ordinary named statements under each execution role. B
 ```
 
 `tabula verify-roles --config workload.json` uses `SET LOCAL ROLE`, `PREPARE` and a generic `EXPLAIN EXECUTE` with inferred parameter types. Existing descriptor-based `VerifyStatements` and `VerifyViewStatements` remain available. Database commands below take `--dsn` or read `TABULA_DSN`. The CLI exits 0 on success, 1 for findings and 2 for input or operational errors.
+
+## Using a reader role in a shared transaction
+
+For a job that reads shared rows then writes scoped rows atomically, give the login permission to switch to two roles. Grant the reader only the required schema usage, reads and reviewed functions. Check its inherited privileges, ownership and executable functions as well as direct table grants. Grant scoped writes to the writer and enforce scope with the application's RLS policies.
+
+```go
+opts := stdsql.RunnerOptions{
+    Role:             "records_writer",
+    Unscoped:         stdsql.UnscopedReadOnly,
+    UnscopedReadRole: "records_reader",
+}
+```
+
+Inside `WithinShared`, use `sh.Unscoped()` for reads and `sh.Scoped(scope)` for writes. A scope recognized by `IsUnscoped` gets the same reader handle. Both use the same connection and transaction. Before each statement the runner selects the handle's role with `SET LOCAL ROLE` and reapplies managed scope variables. After the callback succeeds and its handles close, the runner restores `Role` before `COMMIT`. A deferred invoker trigger runs under that role even when the last statement was an unscoped read. A trigger that needs the scope of a particular write can read it from the triggering row. This option adds one role-selection round trip per statement and one before commit in both drivers. Assign each handle's queries to its effective role when verifying the workload.
 
 ## Report grant drift before narrowing access
 
@@ -160,3 +204,9 @@ Each cell gets a new rollback-only transaction with explicit identity and transa
 `postgresfixture.Installation` describes a revision, base bytes and ordered named migrations. Include every input that affects installation. `Through("002_notes.sql")` selects the inclusive prefix. `TemplateName` derives a stable name from the length-framed inputs. The fixture uses an advisory lock on a shared maintenance database, installs into staging, then publishes a complete template. `Fixture.Clone` returns a fresh `Database` with `Name()` and `Drop(ctx)` for test cleanup.
 
 The host supplies a `Backend` that clones and drops databases on the supplied maintenance connection and runs its existing installer against the staging database. The installer must close connections to staging before returning. Give concurrent workers the same maintenance database and a disposable cluster. Reserve the `tabula_tpl_` namespace for this cache and remove obsolete templates with the test environment. The integration test exercises concurrent workers, failed installation, partial migration histories and clone isolation. [Fixture integration test](../postgresfixture/fixture_integration_test.go)
+
+## Audit login-role hygiene and security call sites
+
+Application login roles that use `SET LOCAL ROLE` through `stdsql.Runner` or `pgxdriver.Runner` should hold no direct object access of their own. Run `sqlcheck.CheckLoginRole` or `tabula check-login-role --role app_login --member-of app_reader,app_writer --schemas public` to verify `LOGIN NOINHERIT`, absence of `SUPERUSER`/`BYPASSRLS`/`CREATEROLE`/`CREATEDB`/`REPLICATION`, exact role memberships (including PostgreSQL 16+ per-membership `WITH INHERIT TRUE` grants), zero direct table or column grants, zero owned objects and no `CREATE` privilege on selected schemas.
+
+Set `"AuditSecurityCalls": true` in `inventory.json` (or `InventoryConfig.AuditSecurityCalls = true`) to collect typed call sites for `NewSessionKey`, `Registry.Seal`, `SessionKey.Sign`, keyed runner/Direct factories, `WithoutTransaction` / `MarkTransaction` / `InTransaction`, and both drivers' raw transaction access (`WithinRaw`, `RawSession.Tx`, `ExposeTx`) across import aliases and escaped function or method values. Field targets include direct selections, fields promoted by embedding, and keyed struct literals.

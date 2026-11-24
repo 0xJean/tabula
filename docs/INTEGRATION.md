@@ -11,11 +11,12 @@ From an application checkout, ask Go which copy it actually selected. `Dir` loca
 ```sh
 go list -m -json github.com/0xJean/tabula
 go list -m -json github.com/0xJean/tabula/pgxdriver
+go list -m -json github.com/0xJean/tabula/oteltabula
 ```
 
 Read a signature directly from the selected packages, for example with `go doc github.com/0xJean/tabula.Rows.SetWhere`. Build the CLI from the same core revision. From the v0.3 Tabula checkout, `go install ./cmd/tabula` installs that revision's binary. Run `tabula --help` to list commands and `tabula <command> -h` to inspect its flags.
 
-For a published patch, set `TABULA_VERSION` to its exact tag and run `go get "github.com/0xJean/tabula@$TABULA_VERSION"`. Applications using pgxdriver also pin `github.com/0xJean/tabula/pgxdriver` to that tag.
+For a published patch, set `TABULA_VERSION` to its exact tag and run `go get "github.com/0xJean/tabula@$TABULA_VERSION"`. Applications using pgxdriver or oteltabula also pin `github.com/0xJean/tabula/pgxdriver` and `github.com/0xJean/tabula/oteltabula` to that tag.
 
 To try a local v0.3 checkout from an application that already depends on Tabula, set `TABULA_SRC` to its absolute path. Run this in the application module. The temporary workspace selects the local modules for this run. Include any sibling application modules your build needs in the `go work init` call.
 
@@ -28,7 +29,8 @@ To try a local v0.3 checkout from an application that already depends on Tabula,
   (cd "$work_dir" && GOWORK=off go work init "$app_dir")
   export GOWORK="$work_dir/go.work"
   go work edit -replace="github.com/0xJean/tabula=$TABULA_SRC" \
-               -replace="github.com/0xJean/tabula/pgxdriver=$TABULA_SRC/pgxdriver"
+               -replace="github.com/0xJean/tabula/pgxdriver=$TABULA_SRC/pgxdriver" \
+               -replace="github.com/0xJean/tabula/oteltabula=$TABULA_SRC/oteltabula"
   go list -m -json github.com/0xJean/tabula
   go test ./...
 )
@@ -46,13 +48,13 @@ To try a local v0.3 checkout from an application that already depends on Tabula,
 | --- | --- | --- |
 | Describe a table, composite key, soft delete, result projection or codec | `TableSpec`, `ViewSpec`, `Define`, `DefineView`, `RegisterType`, `RegisterZero`. Use `Statement` for application SQL and `Requires` or `RequiresFunction` for privileges. | [Core API](REFERENCE.md#tabula) |
 | Map PostgreSQL values | `db:"…,json"`, `db:"…,zero"` and `db:"…,array"` select field codecs. Network columns accept `netip.Addr` or `netip.Prefix`. Driver array converters support one-dimensional string, int32, int64, float64 and bool slices. | [Network and array recipes](COOKBOOK.md#13-postgresql-network-addresses-and-arrays) |
-| Read or lock rows | `Rows.Get`, `GetMany`, `Lock`, `LockMany`, `Find`, `List`, `ListKeyset`, `Iter`. Use `Filter` and `OrderSpec` for runtime values and sort choices, `LockMode` for row locks and `CountMode` for totals. | [Keyset pagination](COOKBOOK.md#6-keyset-pagination-without-offset) · [Streaming and locks](COOKBOOK.md#10-stream-a-worker-batch) |
-| Execute handwritten SQL or stream a join | Use `Rows.SelectIter` for table-shaped results, or declare a projection and use `ViewRows.One`, `Select` or `Iter`. | [Projection example](../example_test.go) |
-| Write one row or a batch | `Insert`, `Save`, `SetWhere`, `UpdateWhere`, `SetExpr`, `SoftDelete` and opt-in `Delete`. Use `InsertReturning` or `SaveReturning` for returned columns, `InsertMany` or `UpsertMany` for batches, and `DefineUpsert` for a conflict plan. | [Batch and atomic updates](COOKBOOK.md#11-batch-upserts-and-atomic-updates) |
-| Integrate database/sql or lib/pq | Wrap a transaction with `NewSession` or let a `Runner` handle transactions, isolation, read-only work and savepoints. `Direct` supports reads on a pool. Plug in array converters for lib/pq. | [stdsql](REFERENCE.md#stdsql) · [pqdriver](REFERENCE.md#pqdriver) |
-| Integrate pgx/v5 | The separate module provides sessions, runners, read-only pools, native array converters and binary `CopyFrom`. Select the matching driver release when pinning modules. | [pgxdriver](REFERENCE.md#pgxdriver) |
-| Handle failures and observe queries | Use `ClassifyError` or `SQLState`, inject `ErrorPolicy`, and wrap a retryable transaction with `Retry`. Configure logging, redaction, `Tracer` and `Metrics` on the registry. | [Logging and telemetry contract](LOGGING.md) |
-| Protect session settings | Apply `GuardNoSessionEscape` or configure `NewSessionGuard` on the scope policy. PostgreSQL roles, scope variables and exceptions are application choices. | [Security model](../SECURITY.md) |
+| Read, aggregate or lock rows | `Rows.Get`, `GetMany`, `Lock`, `LockMany`, `Find`, `List`, `ListKeyset` (with `KeysetPage.Next`), `Iter`, `Exists`, and package aggregates `Max`, `Min`, `Sum`, `Avg`, `CountBy`. Use `Filter` and `OrderSpec` for runtime values and sort choices, `LockMode` for row locks and `CountMode` for totals. | [Keyset pagination](COOKBOOK.md#6-keyset-pagination-without-offset) · [Streaming and locks](COOKBOOK.md#10-stream-a-worker-batch) |
+| Execute handwritten SQL, composed view queries or embedded SQL files | Use `Rows.SelectIter` for table-shaped results, `View.Statement` + `ViewRows.One`/`Select`/`Iter` for full queries, `View.DefineQuery` (`Select`/`Where`/`Tail`/`CountBase`, `ScopeColumns`/`ScopeByRLS`/`ScopeGlobal`, `QueryParams`) for composed lists/counts/keyset pages, and `MustSQLFiles`/`LoadSQLFiles` for embedded `.sql` files. | [Composed queries](COOKBOOK.md#14-composed-view-queries-and-aggregates) · [Projection example](../example_test.go) |
+| Write one row or a batch | `Insert`, `Save`, `SetWhere`, `UpdateWhere`, `SetExpr`, `SoftDelete` and opt-in `Delete`. Use `InsertReturning` or `SaveReturning` for returned columns, `InsertMany` or `UpsertMany` for batches, and `DefineUpsert` for a conflict plan. Configure `RegistryConfig.Deny` for capability limits. | [Batch and atomic updates](COOKBOOK.md#11-batch-upserts-and-atomic-updates) |
+| Integrate database/sql or lib/pq | Configure a role-bound `stdsql.NewRunner` with `ScopePolicy` (`ManagedVars`, `ScopeVars`, `ContextVars`, `UnscopedVars`), `RunnerOptions` (`Role`, `ReadOnly`, `Unscoped`, `UnscopedReadRole`, `Timeouts`, `SessionKey`, `ExposeTx`), `WithinShared`, `WithinRetry`, `WithinRaw` or `Direct` pools. Plug in array converters for lib/pq. | [stdsql](REFERENCE.md#stdsql) · [pqdriver](REFERENCE.md#pqdriver) |
+| Integrate pgx/v5 | The separate module provides role-bound `Runner`, `WithinShared`, `WithinRetry`, `WithinRaw`, `Session`, `Direct` / `DirectWithConfig`, native array converters and binary `CopyFrom`. Select the matching driver release when pinning modules. | [pgxdriver](REFERENCE.md#pgxdriver) |
+| Handle failures and observe queries | Use `ClassifyError` or `SQLState`, inject `ErrorPolicy`, and use `WithinRetry` or `Retry`. Configure logging, redaction, `Tracer`, `Metrics` and `TagStatements` on `RunnerOptions` or `RegistryConfig`, or plug in the OpenTelemetry adapter module. | [oteltabula](REFERENCE.md#oteltabula) · [Logging and telemetry contract](LOGGING.md) |
+| Protect session settings and provenance | Seal registries with `NewSessionKey`, `RequireSealed` and `Registry.Seal(key)`, let runners enforce built-in guards for managed variables and timeouts, or apply `GuardNoSessionEscape` / `NewSessionGuard`. Use `WithoutTransaction` only for intentional detached transactions. | [Security model](../SECURITY.md) |
 
 ## Verify PostgreSQL
 
@@ -63,7 +65,8 @@ Call the [sqlcheck Go API](REFERENCE.md#sqlcheck) in tests or use the commands b
 | Descriptor and view columns against the installed schema | `VerifySchema`, `VerifyViewSchema` | Go API |
 | Registered SQL or a committed snapshot, optionally as a role | `RenderAllSnapshot`, `ParseSnapshot`, `VerifyStatements`, `VerifyViewStatements` | [check](REFERENCE.md#tabula-check) |
 | Expected table RLS settings | `CheckRLS` | [check-rls](REFERENCE.md#tabula-check-rls) |
-| Handwritten SQL, dynamic calls and reviewed exceptions in Go source | `CollectSQL`, `SQLInventory.BindRoles` | [inventory](REFERENCE.md#tabula-inventory) |
+| Login role hygiene (`NOINHERIT`, memberships, direct grants, ownership, `CREATE`) | `CheckLoginRole` | [check-login-role](REFERENCE.md#tabula-check-login-role) |
+| Handwritten SQL, composed queries, aggregates, security call sites and role bindings | `CollectSQL`, `DefaultSecurityCallTargets`, `SQLInventory.BindRolesWithDefinitions` | [inventory](REFERENCE.md#tabula-inventory) |
 | Whether PostgreSQL can plan each role's own statements | `VerifyRoleStatements` | [verify-roles](REFERENCE.md#tabula-verify-roles) |
 | Required descriptor privileges or exact direct grants on all configured objects | `CollectPrivilegeNeeds` and `CheckRolePrivileges` for descriptors. `CheckGrantManifest` for missing and extra grants with reconciliation SQL. | [grants](REFERENCE.md#tabula-grants) for the manifest |
 | Which grants a tested workload still needs | `MinimizeGrants` | [minimize](REFERENCE.md#tabula-minimize) |

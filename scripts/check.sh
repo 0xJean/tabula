@@ -45,7 +45,7 @@ if [[ -n "$bad_deps" ]]; then
 fi
 
 echo "==> Checking module boundaries (no replace directives, no internal/ imports in submodules)"
-for mod in . pgxdriver benchmarks; do
+for mod in . pgxdriver oteltabula benchmarks; do
   (
     cd "$mod"
     go mod edit -json | jq -e '(.Replace | length) == 0' >/dev/null || {
@@ -63,7 +63,7 @@ for mod in . pgxdriver benchmarks; do
 done
 
 echo "==> Running go vet and building the example"
-for mod in . pgxdriver benchmarks; do
+for mod in . pgxdriver oteltabula benchmarks; do
   (cd "$mod" && go vet -tags=integration ./...)
 done
 go build -o /dev/null ./examples/multitenant
@@ -79,9 +79,10 @@ fi
 echo "==> Running unit tests (-race)"
 go test -race -count=1 ./...
 (cd pgxdriver && go test -race -count=1 ./...)
+(cd oteltabula && go test -race -count=1 ./...)
 
 echo "==> Running fuzz targets (1s each)"
-for target in FuzzParseColumnTag FuzzFilterAnd FuzzOrderSpecResolve FuzzGuardNoSessionEscape; do
+for target in FuzzParseColumnTag FuzzFilterAnd FuzzOrderSpecResolve FuzzGuardNoSessionEscape FuzzCompileQueryFragment; do
   go test -run='^$' -fuzz="^${target}$" -fuzztime=1s .
 done
 go test -run='^$' -fuzz='^FuzzParseSnapshot$' -fuzztime=1s ./sqlcheck
@@ -99,6 +100,7 @@ fi
 echo "==> Running PostgreSQL integration tests (-race) with coverage"
 go test -race -count=1 -tags=integration -coverprofile=coverage.out ./...
 (cd pgxdriver && go test -race -count=1 -tags=integration -coverprofile=coverage.out ./...)
+(cd oteltabula && go test -race -count=1 -coverprofile=coverage.out ./...)
 
 check_cov() {
   local label="$1" file="$2" floor="$3"
@@ -112,7 +114,8 @@ check_cov() {
 }
 check_cov "root" coverage.out 75
 check_cov "pgxdriver" pgxdriver/coverage.out 75
-rm -f coverage.out pgxdriver/coverage.out
+check_cov "oteltabula" oteltabula/coverage.out 75
+rm -f coverage.out pgxdriver/coverage.out oteltabula/coverage.out
 
 echo "==> Running comparison benchmark smoke test"
 (cd benchmarks && go test -run='^$' -bench=. -benchtime=1x -benchmem)

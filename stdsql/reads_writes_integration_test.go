@@ -37,7 +37,12 @@ func TestScopedReadsAndBatchWrites(t *testing.T) {
 	t.Cleanup(func() { _, _ = db.Exec("DROP TABLE " + name) })
 	reg := tabula.NewRegistry(tabula.RegistryConfig[tenant]{})
 	tbl := tabula.Define(reg, tabula.TableSpec[job, int64]{Name: name, Order: "id", AllowDelete: true})
-	router := stdsql.NewRunner(db, stdsql.ScopePolicy[tenant]{IsUnscoped: func(s tenant) bool { return s == "all" }})
+	router, err := stdsql.NewRunner(db, stdsql.ScopePolicy[tenant]{
+		IsUnscoped: func(s tenant) bool { return s == "all" },
+	}, stdsql.RunnerOptions{
+		Unscoped: stdsql.UnscopedReadWrite,
+	})
+	require.NoError(t, err)
 	plan := tbl.DefineUpsert("up", tabula.UpsertSpec{Conflict: []string{"id"}, Update: []string{"attempts"}, Returning: []string{"updated"}})
 	skip := tbl.DefineUpsert("skip", tabula.UpsertSpec{Conflict: []string{"id"}})
 	within := func(scope tenant, fn func(*tabula.Rows[job, int64, tenant]) error) error {
@@ -76,15 +81,19 @@ func TestScopedReadsAndBatchWrites(t *testing.T) {
 		for job, err := range r.Iter(ctx, nil, tabula.Listing{Lock: tabula.LockUpdate, Size: 1}) {
 			require.NoError(t, err)
 			claimed = job.ID
+			_, err = r.Get(ctx, job.ID)
+			require.ErrorIs(t, err, tabula.ErrSessionBusy)
 			break
 		}
 		require.EqualValues(t, 1, claimed)
 		// The first cursor is closed. Its row lock is held until commit.
-		err = within("a", func(worker *tabula.Rows[job, int64, tenant]) error {
-			page, err := worker.ListKeyset(ctx, nil, tabula.KeysetListing{Lock: tabula.LockSkipLocked, Limit: 1})
+		// Open an independent transaction explicitly with WithoutTransaction.
+		err = router.Within(tabula.WithoutTransaction(ctx), "a", func(wCtx context.Context, s *stdsql.Session[tenant]) error {
+			worker := tbl.Bind(s)
+			page, err := worker.ListKeyset(wCtx, nil, tabula.KeysetListing{Lock: tabula.LockSkipLocked, Limit: 1})
 			require.NoError(t, err)
 			require.EqualValues(t, 2, page.Items[0].ID)
-			_, err = worker.Find(ctx, nil, tabula.Listing{Size: 1, Lock: tabula.LockNoWait})
+			_, err = worker.Find(wCtx, nil, tabula.Listing{Size: 1, Lock: tabula.LockNoWait})
 			return err
 		})
 		require.Equal(t, "55P03", tabula.SQLState(err))
@@ -119,7 +128,7 @@ func TestScopedReadsAndBatchWrites(t *testing.T) {
 	err = sess.Scan(ctx, "WITH changed AS (UPDATE "+name+" SET attempts = 0 RETURNING id) SELECT count(*) FROM changed", nil, &n)
 	require.ErrorIs(t, err, tabula.ErrReadOnly)
 	require.Equal(t, "25006", tabula.SQLState(err))
-	_, err = stdsql.Direct("postgres", dsn, stdsql.ScopePolicy[tenant]{SetupTx: func(context.Context, *sql.Tx, tenant) error { return nil }})
+	_, err = stdsql.Direct("postgres", dsn, stdsql.ScopePolicy[tenant]{ManagedVars: []string{"app.tenant"}})
 	require.Error(t, err)
 }
 
@@ -183,7 +192,8 @@ func TestUpsertManyRollsBackEarlierChunks(t *testing.T) {
 	for i := range batch {
 		batch[i] = item{ID: int64(i), Quantity: 1}
 	}
-	runner := stdsql.NewRunner(db, stdsql.NoScopePolicy())
+	runner, err := stdsql.NewRunner(db, stdsql.NoScopePolicy(), stdsql.RunnerOptions{})
+	require.NoError(t, err)
 	save := func() error {
 		return runner.Within(ctx, struct{}{}, func(ctx context.Context, s *stdsql.Session[struct{}]) error {
 			n, err := table.Bind(s).UpsertMany(ctx, plan, batch)
