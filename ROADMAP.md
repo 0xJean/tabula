@@ -54,10 +54,25 @@ Items keep the red lines in [docs/DESIGN.md](docs/DESIGN.md).
 - Snapshot policies, FORCE RLS tables, grants and SECURITY DEFINER routines. Classify policies with application rules, check command coverage and exercise a role/scope/statement matrix.
 - Distinguish RLS and privilege denials, configure session guards and clone content-addressed PostgreSQL test templates through a chosen migration. [Design and configuration](docs/AUTHORIZATION.md)
 
+## v0.4 — planned
+
+Design: [docs/DESIGN-v0.4.md](docs/DESIGN-v0.4.md).
+
+- **Role-bound runners and guarded sessions**: runners pinned to one PostgreSQL role with
+  per-role timeouts, context-derived session variables, scoped and unscoped sessions in
+  one transaction, sealed sessions (`SessionKey`), no raw `Tx()` escape by default,
+  registry capability policy (`Deny`), transaction-level retry, login role hygiene check.
+- **Session-level observability**: tracer, metrics and logger on runners so hand-written
+  SQL is observed too; separate OpenTelemetry module; server-side slow log guidance.
+- **Query composition and aggregates**: single-table `Max`/`Min`/`Sum`/`Exists`/`CountBy`,
+  composed view queries (fixed base SQL plus named filter fragments, sort whitelist,
+  offset or keyset pages) with verifiable variants, embedded `.sql` files. Joins stay
+  hand-written.
+
 ## v1.0 — stability and ecosystem adapters
 
 - API freeze and semver compatibility promise.
-- Optional OpenTelemetry / Prometheus adapter modules over `Tracer` and `Metrics`.
+- Optional Prometheus adapter module over `Metrics` (OpenTelemetry moves to v0.4).
 - Optional prepared-statement cache.
 
 ## Out of scope
