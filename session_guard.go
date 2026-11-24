@@ -8,9 +8,10 @@ import (
 	"github.com/0xJean/tabula/internal/pgstmt"
 )
 
-// SessionGuardConfig selects prohibited session operations. Prefixes name GUC
-// namespaces (for example "scope."). The constructor copies and folds them.
-// Dynamic set_config keys are rejected whenever a namespace is protected.
+// SessionGuardConfig selects prohibited session operations. The constructor
+// copies GUC name prefixes such as "scope.", "session." and "local." and matches
+// them case-insensitively. Dynamic set_config keys are rejected whenever a
+// namespace is protected.
 type SessionGuardConfig struct {
 	VariablePrefixes           []string
 	ForbidRole                 bool
@@ -20,7 +21,8 @@ type SessionGuardConfig struct {
 
 // NewSessionGuard compiles an application GuardQuery for trusted adapter SQL.
 // RESET ALL and DISCARD ALL are rejected if they could reset protected state.
-// Enabling any restriction also rejects Unicode-escaped identifiers.
+// Any active restriction rejects anonymous DO blocks and Unicode-escaped
+// identifiers. A zero config permits all statements.
 func NewSessionGuard(cfg SessionGuardConfig) (func(string) error, error) {
 	prefixes := slices.Clone(cfg.VariablePrefixes)
 	for i, p := range prefixes {
@@ -36,6 +38,7 @@ func NewSessionGuard(cfg SessionGuardConfig) (func(string) error, error) {
 
 func compileSessionGuard(cfg SessionGuardConfig) func([]pgstmt.Token) error {
 	guardsState := cfg.ForbidRole || cfg.ForbidSessionAuthorization || len(cfg.VariablePrefixes) > 0
+	restricted := guardsState || cfg.ForbidSetConfig
 	protected := func(name string) bool {
 		name = strings.ToLower(name)
 		if cfg.ForbidRole && name == "role" || cfg.ForbidSessionAuthorization && name == "session_authorization" {
@@ -59,7 +62,7 @@ func compileSessionGuard(cfg SessionGuardConfig) func([]pgstmt.Token) error {
 		for i, tok := range t {
 			// The server decodes Unicode-escaped identifiers with an optional
 			// UESCAPE clause. Require ordinary identifiers on guarded SQL.
-			if (guardsState || cfg.ForbidSetConfig) && tok == (pgstmt.Token{Kind: pgstmt.Symbol, Text: "u&"}) {
+			if restricted && tok == (pgstmt.Token{Kind: pgstmt.Symbol, Text: "u&"}) {
 				return fmt.Errorf("%w: escaped identifier", ErrForbiddenStatement)
 			}
 			if tok.Kind == pgstmt.Symbol && tok.Text == ";" {
@@ -76,6 +79,9 @@ func compileSessionGuard(cfg SessionGuardConfig) func([]pgstmt.Token) error {
 				continue
 			}
 			start = false
+			if restricted && tok == (pgstmt.Token{Kind: pgstmt.Word, Text: "do"}) {
+				return fmt.Errorf("%w: DO", ErrForbiddenStatement)
+			}
 			op := at(i)
 			if op == "discard" && at(i+1) == "all" && guardsState {
 				return ErrForbiddenStatement
@@ -84,7 +90,7 @@ func compileSessionGuard(cfg SessionGuardConfig) func([]pgstmt.Token) error {
 				continue
 			}
 			n := i + 1
-			if op == "set" && (at(n) == "local" || (at(n) == "session" && at(n+1) != "authorization")) {
+			if op == "set" && hasSetModifier(t[n:]) {
 				n++
 			}
 			name := at(n)
@@ -99,4 +105,20 @@ func compileSessionGuard(cfg SessionGuardConfig) func([]pgstmt.Token) error {
 		}
 		return nil
 	}
+}
+
+// A SET modifier precedes a separate name. A dot after LOCAL or SESSION
+// continues the parameter name, even with intervening whitespace or comments.
+func hasSetModifier(args []pgstmt.Token) bool {
+	if len(args) < 2 || args[1].Kind != pgstmt.Word && args[1].Kind != pgstmt.Quoted {
+		return false
+	}
+	switch args[0] {
+	case pgstmt.Token{Kind: pgstmt.Word, Text: "local"}:
+		return true
+	case pgstmt.Token{Kind: pgstmt.Word, Text: "session"}:
+		// Leave the two keywords of SET SESSION AUTHORIZATION together.
+		return args[1] != (pgstmt.Token{Kind: pgstmt.Word, Text: "authorization"})
+	}
+	return false
 }

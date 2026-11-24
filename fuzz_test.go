@@ -108,7 +108,7 @@ func FuzzOrderSpecResolve(f *testing.F) {
 }
 
 func FuzzGuardNoSessionEscape(f *testing.F) {
-	configured, err := NewSessionGuard(SessionGuardConfig{VariablePrefixes: []string{"scope."}, ForbidRole: true})
+	configured, err := NewSessionGuard(SessionGuardConfig{VariablePrefixes: []string{"scope.", "session.", "local."}, ForbidRole: true})
 	if err != nil {
 		f.Fatal(err)
 	}
@@ -126,12 +126,24 @@ func FuzzGuardNoSessionEscape(f *testing.F) {
 	f.Add(`SELECT U&"lab\0065l" FROM items`)
 	f.Add(`SELECT $body$DISCARD ALL; U&"label"$body$`)
 	f.Add(`SELECT u & "mask" FROM items`)
+	f.Add(`DO $$BEGIN NULL; END;$$`)
+	f.Add(`SELECT E'one; two'; /* block */ DO LANGUAGE plpgsql $body$BEGIN NULL; END;$body$`)
+	f.Add(`SELECT 'DO' AS "do"`)
+	f.Add("INSERT INTO items (id) VALUES (1) ON CONFLICT DO NOTHING")
+	f.Add("SET session.label = 'one'")
+	f.Add("SET local.label TO 'two'")
+	f.Add(`SET "local" /* namespace */ . "label" FROM CURRENT`)
+	f.Add("SET LOCAL session.label TO DEFAULT")
+	f.Add("SET SESSION other.label = 'three'")
 	f.Fuzz(func(t *testing.T, query string) {
 		sessionErr := GuardNoSessionEscape(query)
 		readErr := GuardReadOnly(query)
 		if !errors.Is(readErr, ErrReadOnly) && errors.Is(readErr, ErrForbiddenStatement) != errors.Is(sessionErr, ErrForbiddenStatement) {
 			t.Fatalf("session and read-only guards disagree on %q: %v, %v", query, sessionErr, readErr)
 		}
-		_ = configured(query)
+		protectedHead := strings.HasPrefix(query, "DO ") || strings.HasPrefix(query, "SET session.") || strings.HasPrefix(query, "SET local.")
+		if err := configured(query); protectedHead && !errors.Is(err, ErrForbiddenStatement) {
+			t.Fatalf("configured guard returned %v for %q, want ErrForbiddenStatement", err, query)
+		}
 	})
 }

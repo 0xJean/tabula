@@ -18,7 +18,8 @@ v1.0 a minor version may contain breaking changes.
 
 - PostgreSQL authorization auditing covers typed Go source inventory, per-role workloads, exact direct grant manifests, transactional privilege trials, four catalog snapshots, policy classification, command coverage and rollback-based RLS behavior matrices. The CLI accepts application-owned JSON configurations. [Authorization guide](docs/AUTHORIZATION.md)
 - Added `tabula.NewSessionGuard` and separate SQLSTATE 42501 classes and sentinels for RLS denials and insufficient privileges.
-- The built-in and configurable session guards share one implementation. The built-in guards reject `DISCARD ALL` and Unicode-escaped identifiers. Policy coverage recognizes all four top-level row-locking clauses and handles `FOR` inside expressions such as `substring`.
+- The built-in and configurable session guards share one implementation. The built-in guards reject `DISCARD ALL` and Unicode-escaped identifiers. Any active session restriction rejects anonymous `DO` blocks. GUC prefix matching recognizes names beginning with `session.` or `local.`, including after `SET LOCAL` and `SET SESSION`.
+- Policy coverage recognizes all four top-level row-locking clauses and handles `FOR` inside expressions such as `substring`.
 - The standard-library `postgresfixture` package caches installation templates and clones an isolated database for each test.
 - `PrepareStatement` uses a private prepared statement and releases its savepoint. Application-owned prepared statements survive both successful and failed verification.
 - **Conditional, upsert, delete, expression & batch writes**: `Rows.UpdateWhere`,

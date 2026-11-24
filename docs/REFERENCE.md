@@ -54,10 +54,10 @@ const (
 FUNCTIONS
 
 func GuardNoSessionEscape(query string) error
-    GuardNoSessionEscape rejects role and session-authorization changes,
-    RESET ALL, DISCARD ALL, and calls to set_config. It checks each statement
-    and rejects Unicode-escaped identifiers. Ordinary quoted identifiers,
-    literals and comments follow PostgreSQL token boundaries.
+    GuardNoSessionEscape rejects role and session-authorization changes, RESET
+    ALL, DISCARD ALL, and calls to set_config. It checks each statement and
+    rejects anonymous DO blocks and Unicode-escaped identifiers. Ordinary quoted
+    identifiers, literals and comments follow PostgreSQL token boundaries.
 
     Pass it directly to stdsql.ScopePolicy.GuardQuery or
     pgxdriver.ScopePolicy.GuardQuery.
@@ -111,7 +111,8 @@ func JSON(p any) any
 func NewSessionGuard(cfg SessionGuardConfig) (func(string) error, error)
     NewSessionGuard compiles an application GuardQuery for trusted adapter SQL.
     RESET ALL and DISCARD ALL are rejected if they could reset protected state.
-    Enabling any restriction also rejects Unicode-escaped identifiers.
+    Any active restriction rejects anonymous DO blocks and Unicode-escaped
+    identifiers. A zero config permits all statements.
 
 func RegisterType[S, V any](r *Registry[S], wrap func(*V) any)
     RegisterType registers a converter wrapping a pointer to a value of type T.
@@ -676,9 +677,10 @@ type SessionGuardConfig struct {
 	ForbidSessionAuthorization bool
 	ForbidSetConfig            bool
 }
-    SessionGuardConfig selects prohibited session operations. Prefixes name GUC
-    namespaces (for example "scope."). The constructor copies and folds them.
-    Dynamic set_config keys are rejected whenever a namespace is protected.
+    SessionGuardConfig selects prohibited session operations. The constructor
+    copies GUC name prefixes such as "scope.", "session." and "local." and
+    matches them case-insensitively. Dynamic set_config keys are rejected
+    whenever a namespace is protected.
 
 type SoftDelete struct {
 	// DeletedValue is the sentinel value written to mark a row deleted

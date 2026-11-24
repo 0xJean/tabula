@@ -15,6 +15,8 @@ func TestGuardNoSessionEscape(t *testing.T) {
 		"reset all",
 		"DISCARD ALL",
 		"SELECT 1; /* reset connection */ DISCARD ALL",
+		`DO $$BEGIN NULL; END;$$`,
+		`SELECT E'one; two'; /* next statement */ dO LANGUAGE plpgsql $body$BEGIN NULL; END;$body$`,
 		"SET SESSION AUTHORIZATION DEFAULT",
 		"RESET SESSION AUTHORIZATION",
 		"SELECT set_config('app.current_tenant', 'other', true)",
@@ -37,6 +39,9 @@ func TestGuardNoSessionEscape(t *testing.T) {
 		"SELECT * FROM public.items WHERE note = 'don''t call set_config(1)'",
 		`SELECT E'don\'t; SET ROLE postgres' AS note`,
 		`SELECT $body$; DISCARD ALL; U&"label"$body$`,
+		`SELECT $body$; DO nothing$body$ AS "do" /* DO */`,
+		"INSERT INTO items (id) VALUES (1) ON CONFLICT DO NOTHING",
+		"INSERT INTO items (id) VALUES (1) ON CONFLICT (id) DO UPDATE SET id = excluded.id",
 		`SELECT u & "mask" FROM items`,
 		"-- SET ROLE postgres\nSELECT id FROM public.items",
 		"/* RESET ROLE; set_config('a','b',true) */ SELECT 1",
@@ -47,7 +52,7 @@ func TestGuardNoSessionEscape(t *testing.T) {
 }
 
 func TestGuardReadOnlyStatementAndSessionChecks(t *testing.T) {
-	for _, q := range []string{"DISCARD ALL", "SELECT 1; DISCARD ALL", "DELETE FROM items"} {
+	for _, q := range []string{"DISCARD ALL", "SELECT 1; DISCARD ALL", "DELETE FROM items", `DO $$BEGIN NULL; END;$$`} {
 		require.ErrorIs(t, GuardReadOnly(q), ErrReadOnly, q)
 	}
 	for _, q := range []string{`SELECT U&"label" FROM items`, "WITH x AS (SELECT set_config('scope.id','a',true)) SELECT * FROM x"} {

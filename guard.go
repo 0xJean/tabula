@@ -10,8 +10,8 @@ var checkSessionEscape = compileSessionGuard(SessionGuardConfig{
 
 // GuardNoSessionEscape rejects role and session-authorization changes, RESET ALL,
 // DISCARD ALL, and calls to set_config. It checks each statement and rejects
-// Unicode-escaped identifiers. Ordinary quoted identifiers, literals and comments
-// follow PostgreSQL token boundaries.
+// anonymous DO blocks and Unicode-escaped identifiers. Ordinary quoted
+// identifiers, literals and comments follow PostgreSQL token boundaries.
 //
 // Pass it directly to stdsql.ScopePolicy.GuardQuery or
 // pgxdriver.ScopePolicy.GuardQuery.

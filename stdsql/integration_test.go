@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -49,23 +48,36 @@ func TestRunnerScopeSavepointAndRetry(t *testing.T) {
 	})
 	notes := tabula.Define(reg, tabula.TableSpec[note, int64]{Name: schema + ".notes", Order: "id ASC"})
 
+	guard, err := tabula.NewSessionGuard(tabula.SessionGuardConfig{
+		VariablePrefixes: []string{"session.", "local."},
+		ForbidRole:       true,
+	})
+	require.NoError(t, err)
 	runner := stdsql.NewRunner(db, stdsql.ScopePolicy[tenant]{
 		SetupTx: func(ctx context.Context, tx *sql.Tx, scope tenant) error {
-			return stdsql.SetLocalConfig(ctx, tx, "app.current_tenant", string(scope))
-		},
-		GuardQuery: func(q string) error {
-			if strings.Contains(strings.ToUpper(q), "SET ROLE") {
-				return errors.New("forbidden statement")
+			if err := stdsql.SetLocalConfig(ctx, tx, "session.scope", string(scope)); err != nil {
+				return err
 			}
-			return nil
+			return stdsql.SetLocalConfig(ctx, tx, "local.scope", string(scope))
 		},
+		GuardQuery: guard,
 	})
 
 	// Scope SetupTx + Savepoint rollback keeps outer transaction intact.
 	require.NoError(t, runner.Within(ctx, "t-1", func(ctx context.Context, s *stdsql.Session[tenant]) error {
-		var current string
-		require.NoError(t, s.Scan(ctx, "SELECT current_setting('app.current_tenant')", nil, &current))
-		require.Equal(t, "t-1", current)
+		for _, q := range []string{
+			"SET ROLE postgres",
+			"DO $$BEGIN NULL; END;$$",
+			"SET session.scope = 'other'",
+			"SET local.scope = 'other'",
+		} {
+			_, err := s.Exec(ctx, q)
+			require.ErrorIs(t, err, tabula.ErrForbiddenStatement, q)
+		}
+		var sessionScope, localScope string
+		require.NoError(t, s.Scan(ctx, "SELECT current_setting('session.scope'), current_setting('local.scope')", nil, &sessionScope, &localScope))
+		require.Equal(t, "t-1", sessionScope)
+		require.Equal(t, "t-1", localScope)
 
 		r := notes.Bind(s)
 		first := note{Tenant: "t-1", Body: "kept"}
@@ -78,10 +90,6 @@ func TestRunnerScopeSavepointAndRetry(t *testing.T) {
 			return errors.New("abort inner")
 		})
 		require.ErrorContains(t, spErr, "abort inner")
-
-		// GuardQuery blocks forbidden SQL.
-		_, err := s.Exec(ctx, "SET ROLE postgres")
-		require.ErrorContains(t, err, "forbidden statement")
 
 		all, err := r.Find(ctx, nil, tabula.Listing{})
 		require.NoError(t, err)

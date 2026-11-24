@@ -32,3 +32,42 @@ func TestConfiguredSessionGuard(t *testing.T) {
 	_, err = NewSessionGuard(SessionGuardConfig{VariablePrefixes: []string{" "}})
 	require.Error(t, err)
 }
+
+func TestSessionGuardAnonymousBlock(t *testing.T) {
+	const block = `/* setup */ DO LANGUAGE plpgsql 'BEGIN NULL; END;'`
+	for _, cfg := range []SessionGuardConfig{
+		{VariablePrefixes: []string{"scope."}},
+		{ForbidRole: true},
+		{ForbidSessionAuthorization: true},
+		{ForbidSetConfig: true},
+	} {
+		guard, err := NewSessionGuard(cfg)
+		require.NoError(t, err)
+		require.ErrorIs(t, guard(block), ErrForbiddenStatement, "config %+v", cfg)
+	}
+	guard, err := NewSessionGuard(SessionGuardConfig{})
+	require.NoError(t, err)
+	require.NoError(t, guard(block))
+}
+
+func TestSessionGuardKeywordNamespaces(t *testing.T) {
+	guard, err := NewSessionGuard(SessionGuardConfig{VariablePrefixes: []string{"SESSION.", "local."}})
+	require.NoError(t, err)
+	for _, q := range []string{
+		"SET session.label = 'one'", "SET local.label TO 'two'",
+		`SELECT 1; SET LoCaL /* namespace */ . "label" TO DEFAULT`,
+		`SET "session"."label" = 'one'`, `SET "local.label" FROM CURRENT`,
+		"SET LOCAL session.label = 'one'", "SET SESSION local.label FROM CURRENT",
+		"RESET session.label", `RESET "local"."label"`,
+	} {
+		require.ErrorIs(t, guard(q), ErrForbiddenStatement, q)
+		require.NoError(t, GuardNoSessionEscape(q), "default guard has no protected GUC prefixes: %s", q)
+	}
+	for _, q := range []string{
+		"SET SESSION other.label = 'one'", "SET LOCAL other.label = 'two'",
+		"SET session_extra.label TO DEFAULT", "SET local_extra.label FROM CURRENT",
+		"SET SESSION AUTHORIZATION DEFAULT",
+	} {
+		require.NoError(t, guard(q), q)
+	}
+}
