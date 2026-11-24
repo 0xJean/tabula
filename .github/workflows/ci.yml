@@ -37,7 +37,7 @@ jobs:
     env:
       TABULA_TEST_DSN: postgres://tabula:tabula@localhost:5432/tabula?sslmode=disable
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
         with:
           go-version: ${{ matrix.go }}
@@ -85,7 +85,7 @@ jobs:
       matrix:
         module: [".", "pgxdriver", "benchmarks"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
         with:
           go-version: "1.27.x"
