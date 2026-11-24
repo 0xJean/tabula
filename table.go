@@ -170,7 +170,7 @@ func TryDefine[T, K, S any](r *Registry[S], spec TableSpec[T, K]) (*Table[T, K, 
 		return nil, fail("ReadOnly cannot combine with AllowDelete")
 	}
 	if spec.AllowDelete && r.deny&DenyDelete != 0 {
-		return nil, fmt.Errorf("%w: %s", ErrCapabilityDenied, fail("AllowDelete is denied by registry policy"))
+		return nil, fmt.Errorf("%w: %s.Define %s: AllowDelete is denied by registry policy", ErrCapabilityDenied, r.prefix, spec.Name)
 	}
 	rt := reflect.TypeFor[T]()
 	if rt.Kind() != reflect.Struct {

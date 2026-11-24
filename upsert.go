@@ -60,7 +60,7 @@ func (t *Table[T, K, S]) TryDefineUpsert(key string, spec UpsertSpec, opts ...St
 		return nil, fail("cannot define upsert on a ReadOnly table")
 	}
 	if t.reg.deny&DenyUpsert != 0 {
-		return nil, fmt.Errorf("%w: %s", ErrCapabilityDenied, fail("upsert is denied by registry policy"))
+		return nil, fmt.Errorf("%w: %s.Upsert %s: upsert is denied by registry policy", ErrCapabilityDenied, t.prefix(), t.name)
 	}
 	if key == "" {
 		return nil, fail("statement key is required")

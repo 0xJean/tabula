@@ -131,9 +131,10 @@ func validateCustomGUC(name string) error {
 	}
 	for i := range len(name) {
 		c := name[i]
-		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '.') {
-			return fmt.Errorf("managed GUC %q contains invalid character %q", name, c)
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '.' {
+			continue
 		}
+		return fmt.Errorf("managed GUC %q contains invalid character %q", name, c)
 	}
 	return nil
 }
