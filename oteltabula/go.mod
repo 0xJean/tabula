@@ -3,7 +3,7 @@ module github.com/0xJean/tabula/oteltabula
 go 1.26.0
 
 require (
-	github.com/0xJean/tabula v0.3.7
+	github.com/0xJean/tabula v0.3.8
 	github.com/stretchr/testify v1.12.1
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/metric v1.47.0
