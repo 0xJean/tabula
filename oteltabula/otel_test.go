@@ -80,7 +80,10 @@ func TestTracerRecordsSuccessAndErrorSpans(t *testing.T) {
 	errAttrs := attrMap(errSpan.Attributes())
 	require.Equal(t, string(tabula.ClassUnique), errAttrs["tabula.error_class"].AsString())
 	require.Equal(t, "23505", errAttrs["db.response.status_code"].AsString())
-	require.NotEmpty(t, errSpan.Events(), "RecordError must attach an exception event")
+	events := errSpan.Events()
+	require.Len(t, events, 1)
+	require.Equal(t, "exception", events[0].Name)
+	require.Equal(t, []attribute.KeyValue{attribute.String("exception.type", string(tabula.ClassUnique))}, events[0].Attributes)
 
 	// Nil provider falls back to global provider cleanly.
 	_, endDefault := oteltabula.NewTracer(nil).Start(t.Context(), info)

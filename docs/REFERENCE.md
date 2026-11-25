@@ -30,6 +30,10 @@ package stays decoupled from any application domain or error taxonomy.
 CONSTANTS
 
 const (
+	// ErrCallbackContext means a live runner handle received a context that
+	// does not belong to its callback when RequireCallbackContext is enabled.
+	ErrCallbackContext staticError = "context does not belong to this session callback"
+
 	// ErrCommit marks an error returned by a runner's top-level Commit call.
 	// A lost acknowledgement can leave the outcome unknown. The underlying
 	// driver error and SQLSTATE remain available to determine a known rejection.
@@ -75,6 +79,11 @@ FUNCTIONS
 func Avg[V, T, K, S any](ctx context.Context, rows *Rows[T, K, S], col string, where func(*Filter)) (V, bool, error)
     Avg evaluates SELECT AVG(col) over live rows matching the session scope and
     where filter. See Max for NULL semantics and result-type selection.
+
+func BindCallbackContext(ctx context.Context) (context.Context, func(context.Context) error)
+    BindCallbackContext marks a new runner callback and returns a check for its
+    context and descendants. The check returns ErrCallbackContext for unrelated
+    or detached contexts. It retains only the private identity.
 
 func CountBy[V comparable, T, K, S any](ctx context.Context, rows *Rows[T, K, S], col string, where func(*Filter)) (map[V]int64, error)
     CountBy evaluates SELECT col, count(*) ... GROUP BY col over live rows
@@ -209,7 +218,8 @@ func SQLFingerprint(query string) string
 func SQLState(err error) string
     SQLState returns the five-character PostgreSQL SQLSTATE carried by err
     (compatible with both lib/pq and pgx errors implementing SQLState() string),
-    or "" when err carries none.
+    or "" when the code is absent or contains anything other than five ASCII
+    digits and uppercase letters.
 
 func Sum[V, T, K, S any](ctx context.Context, rows *Rows[T, K, S], col string, where func(*Filter)) (V, bool, error)
     Sum evaluates SELECT SUM(col) over live rows matching the session scope and
@@ -223,8 +233,9 @@ func WithStatementMeta(ctx context.Context, meta StatementMeta) context.Context
     session-level Observer to consume.
 
 func WithoutTransaction(ctx context.Context) context.Context
-    WithoutTransaction clears only the nested-transaction marker on ctx while
-    preserving deadlines, cancellation, tracing spans and request metadata.
+    WithoutTransaction clears the transaction marker and callback ownership
+    while preserving deadlines, cancellation, tracing spans and request
+    metadata.
 
     Use this only when intentionally opening an independent transaction
     inside a runner callback (for example, an out-of-band audit record that
@@ -353,7 +364,9 @@ func ClassifyError(ctx context.Context, err error) (ErrorClass, error)
     (nil for ClassOther).
 
 type ErrorPolicy struct {
-	Classify    func(ctx context.Context, err error) error
+	Classify func(ctx context.Context, err error) error
+	// Sanitize supplies reviewed error text for structured logs. The default
+	// logs the error class. Trace diagnostics always use the class and SQLSTATE.
 	Sanitize    func(err error) string
 	Conflict    error
 	OnceChanged error
@@ -568,10 +581,11 @@ func (o *Observer) TagSQL(ctx context.Context, query string) string
     normalized inline SQL fingerprint otherwise.
 
 type ObserverConfig struct {
-	Role          string
-	Tracer        Tracer
-	Metrics       Metrics
-	Log           LogConfig
+	Role    string
+	Tracer  Tracer
+	Metrics Metrics
+	Log     LogConfig
+	// Sanitize supplies reviewed log text for errors. The default is the error class.
 	Sanitize      func(error) string
 	TagStatements bool
 }
@@ -1310,7 +1324,8 @@ type Tracer interface {
 }
     Tracer starts and ends a span around each statement execution. Passed
     explicitly via RegistryConfig.Tracer or RunnerOptions.Tracer; nil disables
-    tracing.
+    tracing. Finish receives a diagnostic with the error class and SQLSTATE.
+    The driver error and its message are available to the operation's caller.
 
 type UpsertPlan[T, K, S any] struct {
 	// Has unexported fields.
@@ -1460,7 +1475,8 @@ func NewMetrics(mp metric.MeterProvider, opts ...Option) (tabula.Metrics, error)
 func NewTracer(tp trace.TracerProvider, opts ...Option) tabula.Tracer
     NewTracer returns a tabula.Tracer backed by tp (defaulting to
     otel.GetTracerProvider when tp is nil). Attach it to RunnerOptions.Tracer or
-    RegistryConfig.Tracer.
+    RegistryConfig.Tracer. Failures record the error class and SQLSTATE without
+    serializing the driver message in events or status descriptions.
 
 
 TYPES
@@ -1657,6 +1673,9 @@ func (r *Runner[S]) WithinWith(ctx context.Context, scope S, runOpts RunOptions[
     an optional BeforeCommit step executed on a fresh handle before COMMIT.
 
 type RunnerOptions struct {
+	// RequireCallbackContext restricts live sessions to the runner callback's
+	// context and its descendants. The default accepts any context.
+	RequireCallbackContext bool
 	// SingleStatement restricts session SQL to one data statement before driver I/O.
 	SingleStatement bool
 	// Statements restricts commands by method and implies SingleStatement when configured.
@@ -1676,8 +1695,9 @@ type RunnerOptions struct {
 	Tracer           tabula.Tracer
 	Metrics          tabula.Metrics
 	Log              tabula.LogConfig
-	Sanitize         func(error) string
-	TagStatements    bool
+	// Sanitize supplies reviewed log text for errors. The default is the error class.
+	Sanitize      func(error) string
+	TagStatements bool
 }
     RunnerOptions configures a role-bound, guarded pgxdriver.Runner.
 
@@ -1919,6 +1939,15 @@ func CheckSchemaColumns(def tabula.Definition, installed map[string]ColumnInfo, 
     CheckSchemaColumns compares one descriptor Definition against the installed
     PostgreSQL columns for its table or view and returns human-readable mismatch
     lines.
+
+func ClassifyPolicies(policies []Policy, rules []PolicyRule) ([]PolicyClass, []string, error)
+    ClassifyPolicies requires exactly one rule per policy and reports every
+    registered identity that no longer satisfies its rule. It has no built-in
+    roles.
+
+func CollectPrivilegeNeeds(defs []tabula.Definition) (PrivilegeNeeds, []string)
+    CollectPrivilegeNeeds merges the Privileges declared on defs and also
+    reports any definition names that declared zero privileges.
 
 func DefaultTypeFamilies() map[string][]string
     DefaultTypeFamilies returns a fresh copy of the built-in Go-type to
@@ -2163,6 +2192,19 @@ func MinimizeGrants(ctx context.Context, db *sql.DB, cfg MinimizeConfig) (Minimu
     the final workload. A trial that fails for a non-permission reason aborts
     the audit.
 
+type MissingRequirement struct {
+	Kind, Object, Column, Privilege string
+}
+    MissingRequirement identifies one unmet capability. Column is set for a
+    named column grant or its owned sequence. Kind is ROLE, SCHEMA, TABLE,
+    COLUMN, SEQUENCE or FUNCTION. A missing role produces only the ROLE/EXISTS
+    finding.
+
+func CheckReadiness(ctx context.Context, db *sql.DB, role string, needs ...ReadinessNeeds) ([]MissingRequirement, error)
+    CheckReadiness checks the union of all needs for role in one catalog query.
+    It returns sorted missing capabilities, including absent objects. Use
+    CheckRolePrivileges for an audit that also reports extra grants.
+
 type Policy struct {
 	PolicyID
 	Command      string
@@ -2181,11 +2223,6 @@ type PolicyClass struct {
 	Rule string
 }
     PolicyClass records the unique matching rule for a policy.
-
-func ClassifyPolicies(policies []Policy, rules []PolicyRule) ([]PolicyClass, []string, error)
-    ClassifyPolicies requires exactly one rule per policy and reports every
-    registered identity that no longer satisfies its rule. It has no built-in
-    roles.
 
 type PolicyID struct {
 	Relation
@@ -2219,10 +2256,6 @@ type PrivilegeNeeds struct {
     PrivilegeNeeds aggregates column, table-DELETE, sequence, and function
     EXECUTE privileges required across a set of descriptor Definitions.
 
-func CollectPrivilegeNeeds(defs []tabula.Definition) (PrivilegeNeeds, []string)
-    CollectPrivilegeNeeds merges the Privileges declared on defs and also
-    reports any definition names that declared zero privileges.
-
 type RLSExpectation struct {
 	// Schema is the PostgreSQL schema to inspect (defaults to "public").
 	Schema string
@@ -2248,6 +2281,18 @@ type RLSMatrix struct {
 }
     RLSMatrix requires one expectation for every role × scope × statement cell.
     Scopes contain application-owned custom GUC values.
+
+type ReadinessNeeds struct {
+	Privileges      PrivilegeNeeds
+	SchemaUsage     []string
+	AnyColumnSelect []string // SELECT on at least one column of each relation
+	ForceRLS        []string // both ENABLE and FORCE ROW LEVEL SECURITY
+	SequenceUsage   []string // named sequences in addition to column-owned sequences
+}
+    ReadinessNeeds describes minimum capabilities for one role. Privileges
+    accepts the result of CollectPrivilegeNeeds. Relations and function
+    signatures must be schema-qualified. Schema and column names are their exact
+    catalog names.
 
 type Relation struct{ Schema, Table string }
     Relation identifies one schema-qualified PostgreSQL relation.
@@ -2555,6 +2600,9 @@ func (r *Runner[S]) WithinWith(ctx context.Context, scope S, runOpts RunOptions[
     an optional BeforeCommit step executed on a fresh handle before COMMIT.
 
 type RunnerOptions struct {
+	// RequireCallbackContext restricts live sessions to the runner callback's
+	// context and its descendants. The default accepts any context.
+	RequireCallbackContext bool
 	// SingleStatement restricts session SQL to one data statement before driver I/O.
 	SingleStatement bool
 	// Statements restricts commands by method and implies SingleStatement when configured.
@@ -2585,9 +2633,10 @@ type RunnerOptions struct {
 	ExposeTx bool
 	// Tracer, Metrics, Log, Sanitize and TagStatements configure session-level
 	// observability (B1/B3) for both descriptor and hand-written SQL.
-	Tracer        tabula.Tracer
-	Metrics       tabula.Metrics
-	Log           tabula.LogConfig
+	Tracer  tabula.Tracer
+	Metrics tabula.Metrics
+	Log     tabula.LogConfig
+	// Sanitize supplies reviewed log text for errors. The default is the error class.
 	Sanitize      func(error) string
 	TagStatements bool
 }

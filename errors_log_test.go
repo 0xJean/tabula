@@ -46,6 +46,14 @@ func TestErrorClassification(t *testing.T) {
 			require.Equal(t, tc.class, gotClass)
 			require.Equal(t, tc.want, gotSentinel)
 
+			diagnostic := traceError(t.Context(), tc.err)
+			require.Equal(t, string(tc.class), diagnostic.Error())
+			require.Equal(t, SQLState(tc.err), SQLState(diagnostic))
+			require.NotErrorIs(t, diagnostic, tc.err)
+			class, sentinel := ClassifyError(t.Context(), diagnostic)
+			require.Equal(t, tc.class, class)
+			require.Equal(t, tc.want, sentinel)
+
 			wrapped := reg.classifyErr(t.Context(), tc.err)
 			if tc.want != nil {
 				require.ErrorIs(t, wrapped, tc.want)
@@ -59,6 +67,12 @@ func TestErrorClassification(t *testing.T) {
 	gotClass, gotSentinel := ClassifyError(ctx, errors.New("driver closed"))
 	require.Equal(t, ClassCanceled, gotClass)
 	require.Equal(t, ErrCanceled, gotSentinel)
+}
+
+func TestMalformedDiagnosticState(t *testing.T) {
+	for _, state := range []string{"value in state", "12 45", "abcde", "😀x"} {
+		require.Empty(t, SQLState(traceError(t.Context(), pgStateErr{state, "driver detail"})))
+	}
 }
 
 type capturedRecord struct {

@@ -61,7 +61,7 @@ in every application.
 | `tabula.duration_ms` | float | Elapsed time |
 | `tabula.rows` | int | Rows returned or affected, when known |
 | `tabula.error_class` | string | `ErrorClass` returned by `ClassifyError` on failure. [Class constants](REFERENCE.md#tabula) |
-| `tabula.error` | string | Driver error message or the result of `ErrorPolicy.Sanitize` on failure |
+| `tabula.error` | string | Error class by default, or the text returned by the configured `Sanitize` |
 | `tabula.args` | list of strings | Bound arguments when the value policy includes them. See section 4. |
 | `tabula.sql` | string | SQL text when `Level` is `LogAll` and `LogConfig.SQL` is enabled |
 | `tabula.sqlstate` | string | PostgreSQL SQLSTATE, when the driver exposes it |
@@ -79,8 +79,7 @@ in every application.
 - `ValuesAllowed`: arguments are logged, except columns tagged `secret`
   (`db:"password_hash,secret"`) and arguments of statements registered with
   `tabula.Secret()`, which are always replaced by `"[redacted]"`.
-- Error messages from the driver are logged as returned; the `ErrorPolicy` can supply a
-  `Sanitize` function when the database may echo values in error details.
+- Database errors can echo bound values. Statement logs emit the class and SQLSTATE by default. An application can supply reviewed log text through `RunnerOptions.Sanitize` or `ErrorPolicy.Sanitize`. The sanitizer receives the original error and owns the privacy of its returned string.
 
 ## 5. Tracing and metrics
 
@@ -88,6 +87,8 @@ Logging, tracing and metrics share the same statement key, role and action, and 
 configured on `RegistryConfig` or on `RunnerOptions` (`Tracer`, `Metrics`, `Log`, `Sanitize`,
 `TagStatements`). When configured on a runner, hand-written inline SQL receives the key
 `tabula.inline.<fingerprint>` derived from normalized SQL text (never bound argument values).
+
+The tracer finish callback receives an error containing the class and optional SQLSTATE. The operation returns the original driver error to its caller. The OpenTelemetry span records the class as its error status and exception type, and stores SQLSTATE in `db.response.status_code`.
 
 The separate OpenTelemetry module `github.com/0xJean/tabula/oteltabula` implements
 `tabula.Tracer` (`oteltabula.NewTracer`) and `tabula.Metrics` (`oteltabula.NewMetrics`)

@@ -36,6 +36,8 @@ Send the following details to the maintainers. [Report a vulnerability](https://
 - **Sensitive data is never logged by default**: `LogConfig.Values` defaults to
   `ValuesNever`. Columns tagged `db:"...,secret"` and statements registered with
   `tabula.Secret()` are redacted as `"[redacted]"` even when `ValuesAllowed` is enabled.
+- Database errors can echo input values. Both drivers and descriptor registries export the class and SQLSTATE to tracers and default statement logs. Metrics record the class. An application that supplies log text through `Sanitize` owns the content of that field. [Telemetry fields](docs/LOGGING.md)
+- Enable `RequireCallbackContext` to bind session calls to the current runner callback and its derived contexts. Registries can independently require a signed session. Explicit raw driver access is trusted application code.
 - `tabula.GuardNoSessionEscape` blocks role and session-authorization changes, `RESET ALL`,
   `DISCARD ALL`, transaction-ending commands (`COMMIT`, `END`, `ABORT`, non-savepoint
   `ROLLBACK`, `PREPARE TRANSACTION`), and calls to `set_config`. It rejects Unicode-escaped

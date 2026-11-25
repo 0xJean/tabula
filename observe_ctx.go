@@ -63,10 +63,11 @@ func StatementMetaFrom(ctx context.Context) (StatementMeta, bool) {
 
 // ObserverConfig configures a session-level Observer shared by driver runners.
 type ObserverConfig struct {
-	Role          string
-	Tracer        Tracer
-	Metrics       Metrics
-	Log           LogConfig
+	Role    string
+	Tracer  Tracer
+	Metrics Metrics
+	Log     LogConfig
+	// Sanitize supplies reviewed log text for errors. The default is the error class.
 	Sanitize      func(error) string
 	TagStatements bool
 }
@@ -214,7 +215,7 @@ func (o *Observer) Start(ctx context.Context, scopeLabel, query string, args []a
 			dur = o.log.now().Sub(start)
 		}
 		if endTrace != nil {
-			endTrace(rows, err)
+			endTrace(rows, traceError(ctx, err))
 		}
 		if o.metrics != nil {
 			var class ErrorClass

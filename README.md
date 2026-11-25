@@ -112,6 +112,8 @@ Both runners establish read-only transactions before the callback. Select the
 isolation level in the transaction options. For unscoped reads alongside scoped writes in
 one transaction, configure a dedicated reader with `UnscopedReadRole`. [Runner migration notes](docs/MIGRATION.md#from-v030-to-v032)
 
+For startup checks, `sqlcheck.CheckReadiness` verifies the minimum effective grants and RLS flags of a runner role in one catalog query. [Role readiness example](docs/AUTHORIZATION.md#check-a-role-at-startup)
+
 ## Contributing
 
 See the [contributing guide](CONTRIBUTING.md) for local checks and the [code of conduct](CODE_OF_CONDUCT.md) for community expectations and moderation.

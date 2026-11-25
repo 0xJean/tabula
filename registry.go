@@ -38,7 +38,9 @@ type Session[S any] interface {
 // ErrorPolicy maps execution and write-guard failures into the host's own
 // error categories. Nil fields fall back to the package's default sentinels.
 type ErrorPolicy struct {
-	Classify    func(ctx context.Context, err error) error
+	Classify func(ctx context.Context, err error) error
+	// Sanitize supplies reviewed error text for structured logs. The default
+	// logs the error class. Trace diagnostics always use the class and SQLSTATE.
 	Sanitize    func(err error) string
 	Conflict    error
 	OnceChanged error

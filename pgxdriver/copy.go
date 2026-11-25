@@ -28,6 +28,9 @@ func CopyFrom[T, K, S any](ctx context.Context, sess *Session[S], tbl *tabula.Ta
 	if err := bound.CheckCopy(); err != nil {
 		return 0, err
 	}
+	if err := sess.checkContext(ctx); err != nil {
+		return 0, err
+	}
 	if err := sess.tryLock(); err != nil {
 		return 0, err
 	}

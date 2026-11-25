@@ -1,6 +1,7 @@
 package stdsql
 
 import (
+	"context"
 	"database/sql"
 	"sync"
 	"sync/atomic"
@@ -11,6 +12,7 @@ import (
 // statementLock serializes driver calls. An open cursor reserves the transaction
 // while its consumer is running, without holding the mutex across user code.
 type statementLock struct {
+	checkCallback func(context.Context) error
 	sync.Mutex
 	closed atomic.Bool
 	cursor *rowCursor
