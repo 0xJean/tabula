@@ -74,6 +74,9 @@ func NoScopePolicy() ScopePolicy[struct{}] { return ScopePolicy[struct{}]{} }
 
 // RunnerOptions configures a role-bound, guarded stdsql.Runner.
 type RunnerOptions struct {
+	// RequireCallbackContext restricts live sessions to the runner callback's
+	// context and its descendants. The default accepts any context.
+	RequireCallbackContext bool
 	// SingleStatement restricts session SQL to one data statement before driver I/O.
 	SingleStatement bool
 	// Statements restricts commands by method and implies SingleStatement when configured.
@@ -104,9 +107,13 @@ type RunnerOptions struct {
 	ExposeTx bool
 	// Tracer, Metrics, Log, Sanitize and TagStatements configure session-level
 	// observability (B1/B3) for both descriptor and hand-written SQL.
-	Tracer        tabula.Tracer
-	Metrics       tabula.Metrics
-	Log           tabula.LogConfig
+	Tracer  tabula.Tracer
+	Metrics tabula.Metrics
+	Log     tabula.LogConfig
+	// RawErrorDiagnostics passes original errors to the statement tracer. Driver
+	// messages can contain bound values. The default traces the class and SQLSTATE.
+	RawErrorDiagnostics bool
+	// Sanitize supplies reviewed log text for errors. The default is the error class.
 	Sanitize      func(error) string
 	TagStatements bool
 }

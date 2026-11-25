@@ -29,12 +29,13 @@ func NewRunner[S any](db *sql.DB, policy ScopePolicy[S], opts RunnerOptions) (*R
 		return nil, err
 	}
 	obsConfig := tabula.ObserverConfig{
-		Role:          opts.Role,
-		Tracer:        opts.Tracer,
-		Metrics:       opts.Metrics,
-		Log:           opts.Log,
-		Sanitize:      opts.Sanitize,
-		TagStatements: opts.TagStatements,
+		Role:                opts.Role,
+		Tracer:              opts.Tracer,
+		RawErrorDiagnostics: opts.RawErrorDiagnostics,
+		Metrics:             opts.Metrics,
+		Log:                 opts.Log,
+		Sanitize:            opts.Sanitize,
+		TagStatements:       opts.TagStatements,
 	}
 	obs := tabula.NewObserver(obsConfig)
 	var readObs *tabula.Observer
@@ -137,6 +138,14 @@ func (r *Runner[S]) checkMode(readOnly, unscoped bool) error {
 	return nil
 }
 
+func (r *Runner[S]) callbackContext(ctx context.Context, lock *statementLock) context.Context {
+	if r.opts.RequireCallbackContext {
+		ctx, lock.checkCallback = tabula.BindCallbackContext(ctx)
+		return ctx
+	}
+	return tabula.MarkTransaction(ctx)
+}
+
 func (r *Runner[S]) newBoundSession(tx *sql.Tx, scope S, unscoped, readOnly bool) *Session[S] {
 	s := &Session[S]{
 		mu:          new(statementLock),
@@ -215,8 +224,8 @@ func (r *Runner[S]) runTx(
 		return err
 	}
 
-	txCtx := tabula.MarkTransaction(ctx)
 	sess := r.newBoundSession(tx, scope, unscoped, readOnly)
+	txCtx := r.callbackContext(ctx, sess.mu)
 	defer sess.close()
 
 	var raw *RawSession[S]
@@ -233,7 +242,8 @@ func (r *Runner[S]) runTx(
 	if runOpts.BeforeCommit != nil {
 		stepSess := r.newBoundSession(tx, scope, unscoped, readOnly)
 		defer stepSess.close()
-		if err := runOpts.BeforeCommit(txCtx, stepSess); err != nil {
+		stepCtx := r.callbackContext(txCtx, stepSess.mu)
+		if err := runOpts.BeforeCommit(stepCtx, stepSess); err != nil {
 			return err
 		}
 		stepSess.close()
@@ -377,7 +387,8 @@ func (r *Runner[S]) WithinSharedOptions(ctx context.Context, opts *sql.TxOptions
 		readOnly: readOnly,
 	}
 	defer state.closeAll()
-	if err := fn(tabula.MarkTransaction(ctx), &Shared[S]{state: state}); err != nil {
+	txCtx := r.callbackContext(ctx, &state.mu)
+	if err := fn(txCtx, &Shared[S]{state: state}); err != nil {
 		return err
 	}
 	state.closeAll()

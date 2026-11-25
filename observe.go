@@ -14,10 +14,14 @@ type TraceInfo struct {
 	Action string
 	Scope  string
 	Role   string
+	// RawErrorDiagnostics permits the tracer to record the original error text.
+	RawErrorDiagnostics bool
 }
 
 // Tracer starts and ends a span around each statement execution. Passed
 // explicitly via RegistryConfig.Tracer or RunnerOptions.Tracer; nil disables tracing.
+// Finish receives a diagnostic with the error class and SQLSTATE by default.
+// With RawErrorDiagnostics enabled it receives the original error.
 type Tracer interface {
 	Start(ctx context.Context, info TraceInfo) (context.Context, func(rows int64, err error))
 }
@@ -26,6 +30,26 @@ type Tracer interface {
 // execution. Passed explicitly via RegistryConfig.Metrics or RunnerOptions.Metrics; nil disables metrics.
 type Metrics interface {
 	Observe(ctx context.Context, info TraceInfo, duration time.Duration, rows int64, errClass ErrorClass)
+}
+
+// traceDiagnostic carries only classifier output across the telemetry boundary.
+// The optional category is a fixed Tabula sentinel, never a driver error.
+type traceDiagnostic struct {
+	class    ErrorClass
+	state    string
+	category error
+}
+
+func (e traceDiagnostic) Error() string    { return string(e.class) }
+func (e traceDiagnostic) SQLState() string { return e.state }
+func (e traceDiagnostic) Unwrap() error    { return e.category }
+
+func (info TraceInfo) traceError(ctx context.Context, err error) error {
+	if err == nil || info.RawErrorDiagnostics {
+		return err
+	}
+	class, category := ClassifyError(ctx, err)
+	return traceDiagnostic{class: class, state: SQLState(err), category: category}
 }
 
 type opSpan[S any] struct {
@@ -67,10 +91,11 @@ func (r *Registry[S]) startOp(
 		return ctx, opSpan[S]{}
 	}
 	info := TraceInfo{
-		Key:    meta.key,
-		Table:  table,
-		Action: action,
-		Scope:  scopeStr,
+		Key:                 meta.key,
+		Table:               table,
+		Action:              action,
+		Scope:               scopeStr,
+		RawErrorDiagnostics: r.rawErrorDiagnostics,
 	}
 	var start time.Time
 	if logActive || metricsActive {
@@ -104,7 +129,7 @@ func (s opSpan[S]) finish(
 		dur = s.reg.log.now().Sub(s.start)
 	}
 	if s.endTrace != nil {
-		s.endTrace(rows, err)
+		s.endTrace(rows, s.info.traceError(ctx, err))
 	}
 	if s.emitMetrics {
 		var class ErrorClass

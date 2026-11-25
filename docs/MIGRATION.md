@@ -2,6 +2,14 @@
 
 Follow this guide when upgrading an application to v0.3. For the full surface after the upgrade, see the [integration guide](INTEGRATION.md).
 
+## From v0.3.6 to v0.3.7
+
+Custom tracers keep their existing `Tracer.Start` signature. By default, the error passed to their finish function carries the class and SQLSTATE. Retrieve them with `tabula.ClassifyError` and `tabula.SQLState`. Inspect driver types on the error returned by the database operation. Update log queries that relied on driver wording to use `tabula.error_class` or `tabula.sqlstate`. Applications supplying `Sanitize` continue to control the `tabula.error` log field. Set `RawErrorDiagnostics: true` on `stdsql.RunnerOptions`, `pgxdriver.RunnerOptions` or `RegistryConfig` to deliver the original error to its tracer. With this option the OpenTelemetry event and status description contain its text, which can include bound values for 22P02 or 22003. Metrics continue to use the class in either mode. Use keyed literals when constructing `TraceInfo` directly. [Telemetry fields](LOGGING.md)
+
+Set `RequireCallbackContext: true` on either runner to enforce callback ownership. Pass the context received by each callback into session methods. Derived deadlines, tracing spans and cancellation work normally. A retry or pre-commit step receives a fresh context. Savepoint operations use the enclosing callback context, and both handles in a shared callback accept its context. A detached context can start independent work.
+
+At startup, pass descriptor privilege requirements and additional role requirements to `sqlcheck.CheckReadiness`. An empty result and nil error mean all requested capabilities are present. Keep the existing workload, grant and policy audits for deployment verification. [Role readiness](AUTHORIZATION.md#check-a-role-at-startup)
+
 ## From v0.3.5 to v0.3.6
 
 Both drivers expose the same runner options. Set `SingleStatement: true` for a boundary check alone, or configure the methods your application uses.

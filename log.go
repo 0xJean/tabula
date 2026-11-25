@@ -206,7 +206,7 @@ func emitLog(ctx context.Context, ls *logState, logger *slog.Logger, sanitize fu
 		if state := SQLState(ev.err); state != "" {
 			attrs = append(attrs, slog.String("tabula.sqlstate", state))
 		}
-		errMsg := ev.err.Error()
+		errMsg := string(class)
 		if sanitize != nil {
 			errMsg = sanitize(ev.err)
 		}

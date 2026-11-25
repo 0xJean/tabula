@@ -3,6 +3,12 @@
 All notable changes are listed here. The project follows semantic versioning; before
 v1.0 a minor version may contain breaking changes.
 
+## v0.3.7 — 2026-11-25
+
+- By default, statement failures sent to tracers and logs carry the error class and optional SQLSTATE. The opt-in `RawErrorDiagnostics` exposes original errors to custom tracers and driver messages in OpenTelemetry exception events and span status descriptions. Metrics keep bounded labels in either mode. Database calls still return the original error chain. A configured `Sanitize` supplies application-reviewed log text. [Telemetry migration](docs/MIGRATION.md#from-v036-to-v037)
+- `sqlcheck.CheckReadiness` checks minimum effective privileges and required RLS flags for a named role in one catalog query. It reports missing objects alongside missing capabilities. [Startup example](docs/AUTHORIZATION.md#check-a-role-at-startup)
+- Both drivers support opt-in `RunnerOptions.RequireCallbackContext`. A live session paired with an unrelated context returns `tabula.ErrCallbackContext`. [Callback ownership](docs/DESIGN-v0.3.7.md#callback-ownership)
+
 ## v0.3.6 — 2026-11-25
 
 - In both drivers, a failed top-level commit matches `tabula.ErrCommit` and preserves the driver error. This covers ordinary and shared transactions. A PostgreSQL rejection retains its SQLSTATE. A lost reply can leave a successful commit unconfirmed.

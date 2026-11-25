@@ -17,6 +17,10 @@ func (e readOnlyPolicyError) Error() string { return string(e) }
 func (readOnlyPolicyError) Unwrap() error   { return ErrReadOnly }
 
 const (
+	// ErrCallbackContext means a live runner handle received a context that
+	// does not belong to its callback when RequireCallbackContext is enabled.
+	ErrCallbackContext staticError = "context does not belong to this session callback"
+
 	// ErrCommit marks an error returned by a runner's top-level Commit call.
 	// A lost acknowledgement can leave the outcome unknown. The underlying
 	// driver error and SQLSTATE remain available to determine a known rejection.
@@ -76,13 +80,24 @@ const (
 
 // SQLState returns the five-character PostgreSQL SQLSTATE carried by err
 // (compatible with both lib/pq and pgx errors implementing SQLState() string),
-// or "" when err carries none.
+// or "" when the code is absent or contains anything other than five ASCII
+// digits and uppercase letters.
 func SQLState(err error) string {
 	if pg, ok := errors.AsType[interface {
 		error
 		SQLState() string
 	}](err); ok {
-		return pg.SQLState()
+		state := pg.SQLState()
+		if len(state) != 5 {
+			return ""
+		}
+		for i := range len(state) {
+			c := state[i]
+			if (c < '0' || c > '9') && (c < 'A' || c > 'Z') {
+				return ""
+			}
+		}
+		return state
 	}
 	return ""
 }
@@ -99,6 +114,9 @@ func ClassifyError(ctx context.Context, err error) (ErrorClass, error) {
 		errors.Is(err, context.DeadlineExceeded) ||
 		SQLState(err) == "57014" {
 		return ClassCanceled, ErrCanceled
+	}
+	if diagnostic, ok := errors.AsType[traceDiagnostic](err); ok {
+		return diagnostic.class, diagnostic.category
 	}
 	switch SQLState(err) {
 	case "42501":

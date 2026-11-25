@@ -112,6 +112,8 @@ check_cov() {
     exit 1
   }
 }
+go test -race -count=1 -tags=integration ./testdata/integration
+
 check_cov "root" coverage.out 75
 check_cov "pgxdriver" pgxdriver/coverage.out 75
 check_cov "oteltabula" oteltabula/coverage.out 75

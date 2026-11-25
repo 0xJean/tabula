@@ -112,7 +112,9 @@ type otelTracer struct {
 
 // NewTracer returns a tabula.Tracer backed by tp (defaulting to
 // otel.GetTracerProvider when tp is nil). Attach it to RunnerOptions.Tracer or
-// RegistryConfig.Tracer.
+// RegistryConfig.Tracer. Failures record the error class and SQLSTATE.
+// With RawErrorDiagnostics enabled, exception messages and status descriptions
+// also contain the original error text, which may include bound values.
 func NewTracer(tp trace.TracerProvider, opts ...Option) tabula.Tracer {
 	if tp == nil {
 		tp = otel.GetTracerProvider()
@@ -150,8 +152,14 @@ func (t *otelTracer) Start(ctx context.Context, info tabula.TraceInfo) (context.
 				attrs = append(attrs, attribute.String("db.response.status_code", state))
 			}
 			span.SetAttributes(attrs...)
-			span.RecordError(err)
-			span.SetStatus(codes.Error, string(class))
+			description := string(class)
+			if info.RawErrorDiagnostics {
+				span.RecordError(err)
+				description = err.Error()
+			} else {
+				span.AddEvent("exception", trace.WithAttributes(attribute.String("exception.type", string(class))))
+			}
+			span.SetStatus(codes.Error, description)
 		}
 		span.End()
 	}

@@ -2,6 +2,33 @@
 
 Tabula v0.3 lets an application audit its configured SQL call sites against a disposable installation of its PostgreSQL schema. The application owns the roles, the mapping from entry points to roles, the expected grants, policy categories, exceptions and test data. Tabula supplies the collectors, comparators and rollback-based probes.
 
+## Check a role at startup
+
+Pass the actual PostgreSQL role bound by the runner. Combine descriptor requirements with the minimum capabilities that the application needs at startup.
+
+```go
+derived, _ := sqlcheck.CollectPrivilegeNeeds(registry.Defined())
+missing, err := sqlcheck.CheckReadiness(ctx, db, role,
+    sqlcheck.ReadinessNeeds{Privileges: derived},
+    sqlcheck.ReadinessNeeds{
+        SchemaUsage:     []string{"public"},
+        AnyColumnSelect: []string{"public.items"},
+        ForceRLS:        []string{"public.items", "public.notes"},
+        SequenceUsage:   []string{"public.display_order"},
+    },
+)
+if err != nil {
+    return fmt.Errorf("check role %q: %w", role, err)
+}
+if len(missing) > 0 {
+    return fmt.Errorf("role %q lacks required capabilities: %v", role, missing)
+}
+```
+
+One read-only query checks effective grants for the named role, including inherited and PUBLIC grants. It reads PostgreSQL catalogs without assuming that role or executing the named functions. Use qualified relation names and function signatures such as `public.find_item(integer, public.item_kind[])`. Supply schema and column names as they appear in the catalog. Use `Privileges.Columns` for named column grants. `AnyColumnSelect` requires access to at least one column. `ForceRLS` checks the ENABLE and FORCE flags independently of SELECT access. Owned-sequence requirements come from `Privileges.Sequences`.
+
+An absent role returns one role finding. Absent objects and missing grants appear in the sorted results. A canceled query or database error fails the check. The application owns its startup deadline, role selection and response to findings. RLS policy behavior and excess grants have separate audits.
+
 ## Collect the workload
 
 Run `tabula inventory --config inventory.json` in the application checkout. `Dir` is relative to the working directory. For example, this configuration collects the SQL argument of `(*sql.Tx).QueryContext` and `(*sql.Tx).ExecContext`.

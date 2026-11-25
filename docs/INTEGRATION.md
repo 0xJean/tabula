@@ -68,6 +68,7 @@ Call the [sqlcheck Go API](REFERENCE.md#sqlcheck) in tests or use the commands b
 | Login role hygiene (`NOINHERIT`, memberships, direct grants, ownership, `CREATE`) | `CheckLoginRole` | [check-login-role](REFERENCE.md#tabula-check-login-role) |
 | Handwritten SQL, composed queries, aggregates, security call sites and role bindings | `CollectSQL`, `DefaultSecurityCallTargets`, `SQLInventory.BindRolesWithDefinitions` | [inventory](REFERENCE.md#tabula-inventory) |
 | Whether PostgreSQL can plan each role's own statements | `VerifyRoleStatements` | [verify-roles](REFERENCE.md#tabula-verify-roles) |
+| Startup readiness of the runner role | `CheckReadiness` checks effective grants and required table RLS flags in one query. | [Startup example](AUTHORIZATION.md#check-a-role-at-startup) |
 | Required descriptor privileges or exact direct grants on all configured objects | `CollectPrivilegeNeeds` and `CheckRolePrivileges` for descriptors. `CheckGrantManifest` for missing and extra grants with reconciliation SQL. | [grants](REFERENCE.md#tabula-grants) for the manifest |
 | Which grants a tested workload still needs | `MinimizeGrants` | [minimize](REFERENCE.md#tabula-minimize) |
 | Policy definitions, FORCE RLS tables, direct grants and SECURITY DEFINER functions and procedures | `ReadCatalog`, `Catalog.Snapshots` | [catalog](REFERENCE.md#tabula-catalog) |

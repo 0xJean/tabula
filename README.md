@@ -20,9 +20,9 @@ builds joins, never generates DDL, and never runs hidden callbacks.
 
 Read the README at the Git tag or commit your application builds. The [migration guide](docs/MIGRATION.md) covers upgrading to v0.3. The [changelog](CHANGELOG.md) records release status.
 
-## Install v0.3.6
+## Install v0.3.7
 
-Run `go get github.com/0xJean/tabula@v0.3.6` in your application module with Go 1.26 or later. If you use the native pgx/v5 adapter or the OpenTelemetry bridge, also run `go get github.com/0xJean/tabula/pgxdriver@v0.3.6` and/or `go get github.com/0xJean/tabula/oteltabula@v0.3.6`.
+Run `go get github.com/0xJean/tabula@v0.3.7` in your application module with Go 1.26 or later. If you use the native pgx/v5 adapter or the OpenTelemetry bridge, also run `go get github.com/0xJean/tabula/pgxdriver@v0.3.7` and/or `go get github.com/0xJean/tabula/oteltabula@v0.3.7`.
 
 ## Read a row by primary key
 
@@ -111,6 +111,8 @@ binding package of their own to enforce compile-time session/scope invariants.
 Both runners establish read-only transactions before the callback. Select the
 isolation level in the transaction options. For unscoped reads alongside scoped writes in
 one transaction, configure a dedicated reader with `UnscopedReadRole`. [Runner migration notes](docs/MIGRATION.md#from-v030-to-v032)
+
+For startup checks, `sqlcheck.CheckReadiness` verifies the minimum effective grants and RLS flags of a runner role in one catalog query. [Role readiness example](docs/AUTHORIZATION.md#check-a-role-at-startup)
 
 ## Contributing
 

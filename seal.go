@@ -89,6 +89,25 @@ func (r *Registry[S]) checkSession(s Session[S]) error {
 
 type txContextKey struct{}
 
+// A nonzero-sized allocation gives each checked callback a distinct identity.
+type txMarker struct{ callback *byte }
+
+// BindCallbackContext marks a new runner callback and returns a check for its
+// context and descendants. The check returns ErrCallbackContext for unrelated
+// or detached contexts. It retains only the private identity.
+func BindCallbackContext(ctx context.Context) (context.Context, func(context.Context) error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	marker := txMarker{callback: new(byte)}
+	return context.WithValue(ctx, txContextKey{}, marker), func(candidate context.Context) error {
+		if candidate == nil || candidate.Value(txContextKey{}) != marker {
+			return ErrCallbackContext
+		}
+		return nil
+	}
+}
+
 // MarkTransaction marks ctx as running inside an active runner transaction so
 // nested runner entries (across both stdsql and pgxdriver) fail closed with
 // ErrNested before BEGIN.
@@ -96,7 +115,10 @@ func MarkTransaction(ctx context.Context) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return context.WithValue(ctx, txContextKey{}, true)
+	if InTransaction(ctx) {
+		return ctx
+	}
+	return context.WithValue(ctx, txContextKey{}, txMarker{})
 }
 
 // InTransaction reports whether ctx carries an active transaction marker from
@@ -105,11 +127,11 @@ func InTransaction(ctx context.Context) bool {
 	if ctx == nil {
 		return false
 	}
-	active, _ := ctx.Value(txContextKey{}).(bool)
+	_, active := ctx.Value(txContextKey{}).(txMarker)
 	return active
 }
 
-// WithoutTransaction clears only the nested-transaction marker on ctx while
+// WithoutTransaction clears the transaction marker and callback ownership while
 // preserving deadlines, cancellation, tracing spans and request metadata.
 //
 // Use this only when intentionally opening an independent transaction inside a
