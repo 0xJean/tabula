@@ -20,9 +20,9 @@ builds joins, never generates DDL, and never runs hidden callbacks.
 
 Read the README at the Git tag or commit your application builds. The [migration guide](docs/MIGRATION.md) covers upgrading to v0.3. The [changelog](CHANGELOG.md) records release status.
 
-## Install v0.3.4
+## Install v0.3.5
 
-Run `go get github.com/0xJean/tabula@v0.3.4` in your application module with Go 1.26 or later. If you use the native pgx/v5 adapter or the OpenTelemetry bridge, also run `go get github.com/0xJean/tabula/pgxdriver@v0.3.4` and/or `go get github.com/0xJean/tabula/oteltabula@v0.3.4`.
+Run `go get github.com/0xJean/tabula@v0.3.5` in your application module with Go 1.26 or later. If you use the native pgx/v5 adapter or the OpenTelemetry bridge, also run `go get github.com/0xJean/tabula/pgxdriver@v0.3.5` and/or `go get github.com/0xJean/tabula/oteltabula@v0.3.5`.
 
 ## Read a row by primary key
 

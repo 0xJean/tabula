@@ -2,6 +2,12 @@
 
 Follow this guide when upgrading an application to v0.3. For the full surface after the upgrade, see the [integration guide](INTEGRATION.md).
 
+## From v0.3.4 to v0.3.5
+
+- Configure `InventoryConfig.RoutineMethods` (`SQLRoutineMethod`) to inventory database wrappers that call PostgreSQL functions by name with a fixed argument-slice parameter. A nil or dense slice literal supplies its arity, including when variadic result destinations follow. `+` string concatenations involving single-assignment local string variables now also resolve statically in `CollectSQL`.
+- In `tabula check-policies` (`ClassifyPolicies`), `PolicyRule.Expression` and `NotExpression` match or exclude regular expressions across `Using + "\n" + Check` without splitting categories across `USING`-only and `WITH CHECK`-only policies.
+- `CheckPolicyCoverage` now infers single-table access across `IS [NOT] DISTINCT FROM` and parenthesized `FROM` expressions, and accepts `"NoAccess": true` on reviewed complex statements that touch no caller-RLS relations.
+
 ## From v0.3.3 to v0.3.4
 
 Test suites can call `fixture.Prune(ctx, 7*24*time.Hour, currentPlan)` after creating a fixture to retain the current installation and remove idle cached templates. Choose the retention interval in the test suite. Enable pruning once every worker sharing the cache uses v0.3.4 or later and the same maintenance database on the disposable cluster. The maintenance role needs permission to comment on the templates. The host's `Backend.Drop` handles templates, stages and per-test copies, including any template flags or resources it owns.

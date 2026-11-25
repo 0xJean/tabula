@@ -3,6 +3,19 @@
 All notable changes are listed here. The project follows semantic versioning; before
 v1.0 a minor version may contain breaking changes.
 
+## v0.3.5 — 2026-11-25
+
+### Additions
+
+- `sqlcheck.SQLRoutineMethod` and `InventoryConfig.RoutineMethods` collect static `SELECT [* FROM] <schema>.<name>($1, ...)` calls from helper methods that take a compile-time routine name and a fixed argument-slice parameter. A nil or dense slice literal determines the arity. Runtime slices and variadic database inputs remain dynamic.
+- `sqlcheck.PolicyRule.Expression` and `NotExpression` match or exclude Go regular expressions over the combined `USING` and `WITH CHECK` predicates in `ClassifyPolicies` and `tabula check-policies`.
+- `sqlcheck.Statement.NoAccess` and `SQLBinding.NoAccess` declare reviewed complex statements (such as `SECURITY DEFINER` set-returning routine calls) that access zero caller-RLS relations in `CheckPolicyCoverage` and `tabula check-coverage`, while rejecting `NoAccess` on statements with inferred table access.
+
+### Fixes
+
+- `sqlcheck.CollectSQL` resolves `+` string concatenations containing single-assignment local string variables as static SQL, including locals used more than once. Reassigning a parameter in a mixed short declaration keeps it dynamic.
+- `sqlcheck.CheckPolicyCoverage` recognizes `IS [NOT] DISTINCT FROM` predicates and parenthesized `FROM` arguments (such as `EXTRACT` and `TRIM` in `UPDATE`/`DELETE`) as single-table statements. An expression using only parameters or literals in those positions adds no column-read requirement.
+
 ## v0.3.4 — 2026-11-25
 
 ### Additions

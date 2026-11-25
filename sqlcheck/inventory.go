@@ -34,6 +34,22 @@ type SQLMethod struct {
 	Argument         int
 }
 
+// SQLRoutineMethod matches a method call that invokes a PostgreSQL routine by
+// name and positional argument slice rather than raw SQL text. NameArgument and
+// ArgsArgument are zero-based positions of fixed parameters after the receiver.
+// A nil or dense slice literal supplies the arity. Trailing variadic result
+// destinations do not affect it.
+// Schema defaults to "public". When SetReturning is true, static calls emit
+// SELECT * FROM <schema>.<name>($1, ...); otherwise SELECT <schema>.<name>($1, ...).
+type SQLRoutineMethod struct {
+	Receiver     string
+	Method       string
+	NameArgument int
+	ArgsArgument int
+	Schema       string `json:",omitempty"`
+	SetReturning bool   `json:",omitempty"`
+}
+
 // CallTarget matches a Go package-level function (Receiver == ""), method
 // (Receiver != ""), or struct field (Field == true) by canonical package path
 // and symbol name. Field targets also match selections promoted by embedding.
@@ -93,9 +109,10 @@ type InventoryConfig struct {
 	Patterns []string
 	Tags     string
 	// Tests includes internal and external _test.go files in matching packages.
-	Tests      bool
-	Methods    []SQLMethod
-	Exceptions map[string]string
+	Tests          bool
+	Methods        []SQLMethod
+	RoutineMethods []SQLRoutineMethod `json:",omitempty"`
+	Exceptions     map[string]string
 	// CallTargets collects typed references to package-level functions, methods,
 	// and struct fields for review (reported in SQLInventory.CallSites).
 	CallTargets []CallTarget
@@ -145,16 +162,9 @@ type buildPackage struct {
 // Escaping function or method values are flagged accordingly.
 func CollectSQL(ctx context.Context, cfg InventoryConfig) (SQLInventory, error) {
 	var out SQLInventory
-	methods := make(map[[2]string]SQLMethod)
-	for _, m := range cfg.Methods {
-		k := [2]string{m.Receiver, m.Method}
-		if m.Receiver == "" || m.Method == "" || m.Argument < 0 {
-			return out, fmt.Errorf("invalid SQL method %+v", m)
-		}
-		if _, ok := methods[k]; ok {
-			return out, fmt.Errorf("duplicate SQL method %v", k)
-		}
-		methods[k] = m
+	methods, err := compileSQLMethods(cfg.Methods, cfg.RoutineMethods)
+	if err != nil {
+		return out, err
 	}
 	allTargets := slices.Clone(cfg.CallTargets)
 	if cfg.AuditSecurityCalls {
@@ -310,7 +320,7 @@ func (p buildPackage) inventory(
 	ctx context.Context,
 	root string,
 	exports map[string]string,
-	methods map[[2]string]SQLMethod,
+	methods map[[2]string]registeredSQLMethod,
 	targets compiledCallTargets,
 ) ([]SQLSite, []CallSite, error) {
 	fset := token.NewFileSet()
@@ -350,9 +360,14 @@ func (p buildPackage) inventory(
 	var sites []SQLSite
 	var callSites []CallSite
 	counts := map[string]int{}
-	addSite := func(owner string, site SQLSite, expr ast.Expr) {
+	addSite := func(owner string, site SQLSite, exprs ...ast.Expr) {
 		var b bytes.Buffer
-		_ = format.Node(&b, fset, expr)
+		for i, expr := range exprs {
+			if i > 0 {
+				b.WriteByte('\n')
+			}
+			_ = format.Node(&b, fset, expr)
+		}
 		identity := owner + "\n" + site.Receiver + "." + site.Method + "\n" + b.String() + "\n" + site.SQL + "\n" + site.QueryKey
 		if site.Definition != "" {
 			identity += "\n" + site.Definition
@@ -431,22 +446,9 @@ func (p buildPackage) inventory(
 						m, ok = methods[[2]string{sigRecvName, node.Sel.Name}]
 					}
 					if ok {
-						site := SQLSite{File: rel, Line: pos.Line, Method: m.Method, Receiver: m.Receiver, Dynamic: true}
-						var expr ast.Expr = node
-						if c := selectorCalls[node]; c != nil {
-							i := m.Argument
-							if sel.Kind() == types.MethodExpr {
-								i++
-							}
-							if i < len(c.Args) {
-								expr = c.Args[i]
-								if sVal, ok := source.constantString(expr); ok {
-									site.SQL = sVal
-									site.Dynamic = false
-								}
-							}
-						}
-						addSite(owner, site, expr)
+						site, exprs := source.methodSite(m, node, sel, selectorCalls[node])
+						site.File, site.Line = rel, pos.Line
+						addSite(owner, site, exprs...)
 					}
 
 					// 2. Built-in View.DefineQuery / View.TryDefineQuery static site recognition.

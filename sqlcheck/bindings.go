@@ -13,10 +13,11 @@ import (
 // SQLBinding assigns one inventoried site to its execution roles. Definition
 // names the owning table or view when the collector cannot resolve it. Prefix
 // optionally narrows the variants of that one composed query. Manual Variants
-// carry their own Access requirements. Skip requires a registered exception.
+// carry their own Access or NoAccess requirements. Skip requires a registered exception.
 type SQLBinding struct {
 	Roles      []string
 	Access     []PolicyAccess
+	NoAccess   bool `json:",omitempty"`
 	Variants   []Statement
 	Definition string `json:",omitempty"`
 	Prefix     string `json:",omitempty"`
@@ -58,7 +59,7 @@ func (inv SQLInventory) BindRolesWithDefinitions(
 		}
 		seen[site.ID] = true
 		if b.Skip {
-			if strings.TrimSpace(site.Exception) == "" || len(b.Roles)+len(b.Access)+len(b.Variants) != 0 || b.Definition != "" || b.Prefix != "" {
+			if strings.TrimSpace(site.Exception) == "" || len(b.Roles)+len(b.Access)+len(b.Variants) != 0 || b.NoAccess || b.Definition != "" || b.Prefix != "" {
 				return nil, fmt.Errorf("%s: skipped site requires a reviewed exception and no workload", site.ID)
 			}
 			continue
@@ -86,6 +87,9 @@ func (inv SQLInventory) BindRolesWithDefinitions(
 }
 
 func (site SQLSite) bindStatements(b SQLBinding, byName map[string][]tabula.Definition) ([]Statement, error) {
+	if b.NoAccess && len(b.Access) > 0 {
+		return nil, fmt.Errorf("cannot combine NoAccess with Access")
+	}
 	registered := site.Kind == "composed_query" || site.Kind == "aggregate"
 	if site.Dynamic && (strings.TrimSpace(site.Exception) == "" || len(b.Variants) == 0) {
 		return nil, fmt.Errorf("dynamic site needs reviewed variants")
@@ -94,8 +98,8 @@ func (site SQLSite) bindStatements(b SQLBinding, byName map[string][]tabula.Defi
 		if !site.Dynamic && !registered {
 			return nil, fmt.Errorf("static site uses its collected SQL")
 		}
-		if len(b.Access) > 0 {
-			return nil, fmt.Errorf("supply Access on each variant when using Variants")
+		if len(b.Access) > 0 || b.NoAccess {
+			return nil, fmt.Errorf("supply Access or NoAccess on each variant when using Variants")
 		}
 		if b.Definition != "" || b.Prefix != "" {
 			return nil, fmt.Errorf("manual variants cannot also select a definition or prefix")
@@ -116,7 +120,7 @@ func (site SQLSite) bindStatements(b SQLBinding, byName map[string][]tabula.Defi
 		if b.Definition != "" {
 			return nil, fmt.Errorf("binding Definition requires a composed query or aggregate")
 		}
-		return []Statement{{Name: site.ID, SQL: site.SQL, Access: b.Access}}, nil
+		return []Statement{{Name: site.ID, SQL: site.SQL, Access: b.Access, NoAccess: b.NoAccess}}, nil
 	}
 	if site.Method == "TryDefineQuery" {
 		return nil, fmt.Errorf("supply named Variants for %q compiled with TryDefineQuery", site.QueryKey)
@@ -191,7 +195,7 @@ func (site SQLSite) expand(d tabula.Definition, b SQLBinding) ([]Statement, erro
 		if !ok {
 			return nil, fmt.Errorf("missing registered statement %q in definition %q for %q (check the snapshot or supply named Variants)", key, d.Name, site.QueryKey)
 		}
-		stmts = append(stmts, Statement{Name: site.ID + "/" + d.Name + "/" + key, SQL: query, Access: b.Access})
+		stmts = append(stmts, Statement{Name: site.ID + "/" + d.Name + "/" + key, SQL: query, Access: b.Access, NoAccess: b.NoAccess})
 	}
 	return stmts, nil
 }

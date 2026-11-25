@@ -2053,9 +2053,10 @@ type InventoryConfig struct {
 	Patterns []string
 	Tags     string
 	// Tests includes internal and external _test.go files in matching packages.
-	Tests      bool
-	Methods    []SQLMethod
-	Exceptions map[string]string
+	Tests          bool
+	Methods        []SQLMethod
+	RoutineMethods []SQLRoutineMethod `json:",omitempty"`
+	Exceptions     map[string]string
 	// CallTargets collects typed references to package-level functions, methods,
 	// and struct fields for review (reported in SQLInventory.CallSites).
 	CallTargets []CallTarget
@@ -2142,6 +2143,7 @@ type PolicyID struct {
 
 type PolicyRule struct {
 	Name, Command, Using, Check string
+	Expression, NotExpression   string `json:",omitempty"`
 	Permissive                  *bool
 	Roles                       []string
 	Entries                     []PolicyID
@@ -2152,7 +2154,9 @@ type PolicyRule struct {
 }
     PolicyRule matches the conjunction of its nonempty fields. Roles is an exact
     set; Using and Check are Go regular expressions over server-deparsed SQL.
-    Entries, when present, restricts the rule to registered policy identities.
+    Expression and NotExpression match (or exclude) the combined USING and WITH
+    CHECK predicates (Using + "\n" + Check). Entries, when present, restricts
+    the rule to registered policy identities.
 
 type PrivilegeNeeds struct {
 	Columns     map[string]map[string]map[string]bool
@@ -2220,6 +2224,7 @@ type RuntimeProbe struct {
 type SQLBinding struct {
 	Roles      []string
 	Access     []PolicyAccess
+	NoAccess   bool `json:",omitempty"`
 	Variants   []Statement
 	Definition string `json:",omitempty"`
 	Prefix     string `json:",omitempty"`
@@ -2228,7 +2233,8 @@ type SQLBinding struct {
     SQLBinding assigns one inventoried site to its execution roles. Definition
     names the owning table or view when the collector cannot resolve it. Prefix
     optionally narrows the variants of that one composed query. Manual Variants
-    carry their own Access requirements. Skip requires a registered exception.
+    carry their own Access or NoAccess requirements. Skip requires a registered
+    exception.
 
 type SQLInventory struct {
 	Sites     []SQLSite
@@ -2269,6 +2275,22 @@ type SQLMethod struct {
     generic arguments). Argument is the zero-based SQL position in a method
     call.
 
+type SQLRoutineMethod struct {
+	Receiver     string
+	Method       string
+	NameArgument int
+	ArgsArgument int
+	Schema       string `json:",omitempty"`
+	SetReturning bool   `json:",omitempty"`
+}
+    SQLRoutineMethod matches a method call that invokes a PostgreSQL routine by
+    name and positional argument slice rather than raw SQL text. NameArgument
+    and ArgsArgument are zero-based positions of fixed parameters after the
+    receiver. A nil or dense slice literal supplies the arity. Trailing variadic
+    result destinations do not affect it. Schema defaults to "public". When
+    SetReturning is true, static calls emit SELECT * FROM <schema>.<name>($1,
+    ...); otherwise SELECT <schema>.<name>($1, ...).
+
 type SQLSite struct {
 	ID, File         string
 	Line             int
@@ -2288,13 +2310,18 @@ type SQLSite struct {
     or single-table aggregate call. ID is independent of line numbers.
 
 type Statement struct {
-	Name   string
-	SQL    string
-	Access []PolicyAccess `json:",omitempty"`
+	Name     string
+	SQL      string
+	Access   []PolicyAccess `json:",omitempty"`
+	NoAccess bool           `json:",omitempty"`
 }
     Statement is application-owned SQL. Access supplies the complete relation
     and command list for complex statements when checking structural policy
-    coverage.
+    coverage. NoAccess marks a reviewed complex statement (such as a SECURITY
+    DEFINER routine call) that touches no caller-context RLS relations.
+    Coverage rejects an assertion that conflicts with inferred table access.
+    The reviewer checks dependencies inside routines and other SQL outside the
+    inference rules.
 
 ```
 

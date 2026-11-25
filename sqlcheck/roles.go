@@ -14,10 +14,15 @@ import (
 
 // Statement is application-owned SQL. Access supplies the complete relation and
 // command list for complex statements when checking structural policy coverage.
+// NoAccess marks a reviewed complex statement (such as a SECURITY DEFINER
+// routine call) that touches no caller-context RLS relations. Coverage rejects
+// an assertion that conflicts with inferred table access. The reviewer checks
+// dependencies inside routines and other SQL outside the inference rules.
 type Statement struct {
-	Name   string
-	SQL    string
-	Access []PolicyAccess `json:",omitempty"`
+	Name     string
+	SQL      string
+	Access   []PolicyAccess `json:",omitempty"`
+	NoAccess bool           `json:",omitempty"`
 }
 
 // RoleStatements maps each execution role to its own named probes.
@@ -77,6 +82,9 @@ func (r RoleStatements) validate() error {
 			}
 			if _, ok := pgstmt.DML(s.SQL); !ok {
 				return fmt.Errorf("%s/%s: expected one data statement", role, s.Name)
+			}
+			if s.NoAccess && len(s.Access) > 0 {
+				return fmt.Errorf("%s/%s: cannot combine NoAccess with Access", role, s.Name)
 			}
 			names[s.Name] = true
 		}
