@@ -114,6 +114,8 @@ one transaction, configure a dedicated reader with `UnscopedReadRole`. [Runner m
 
 For startup checks, `sqlcheck.CheckReadiness` verifies the minimum effective grants and RLS flags of a runner role in one catalog query. [Role readiness example](docs/AUTHORIZATION.md#check-a-role-at-startup)
 
+Disposable test suites can lease a separate PostgreSQL login for each process and reclaim interrupted workers’ roles through `postgresfixture`. [Process login roles](docs/AUTHORIZATION.md#process-login-roles)
+
 ## Contributing
 
 See the [contributing guide](CONTRIBUTING.md) for local checks and the [code of conduct](CODE_OF_CONDUCT.md) for community expectations and moderation.

@@ -1856,6 +1856,12 @@ type Fixture struct {
 }
     Fixture uses an explicit maintenance database and host-defined backend.
 
+func (f Fixture) AcquireLoginRole(ctx context.Context, opts LoginRoleOptions) (*LoginRole, error)
+    AcquireLoginRole creates a fresh process login. Supply a direct or
+    session-pooled connection to the same maintenance database used by Prune.
+    The host grants CONNECT to the login when preparing each test database.
+    Losing the pinned server connection ends the lease.
+
 func (f Fixture) Clone(ctx context.Context, p Installation) (Database, error)
     Clone installs a template once per digest and clones it for one test.
     A shared advisory lock protects the template through the physical copy,
@@ -1866,8 +1872,16 @@ func (f Fixture) Prune(ctx context.Context, maxIdle time.Duration, keep ...Insta
     staging databases abandoned by interrupted builds, except the templates
     of keep. Each database is dropped through Backend.Drop while holding the
     same advisory lock that Clone holds through the physical copy. Templates
-    with missing or invalid last-use marks are kept. Prune returns the names it
-    dropped, including partial results if another drop failed.
+    with missing or invalid last-use marks are kept. Prune returns the names
+    it dropped, including partial results if another drop failed. It also
+    reaps abandoned process logins. Its result contains only database names;
+    use PruneLoginRoles to run login cleanup alone and collect role names.
+
+func (f Fixture) PruneLoginRoles(ctx context.Context) ([]string, error)
+    PruneLoginRoles removes abandoned fixture logins from this maintenance
+    database's namespace, including logins with no surviving clone. It returns
+    the login names removed by this call and any cleanup errors. Fixture.Prune
+    also performs this cleanup when pruning databases.
 
 type Installation struct {
 	Revision   string
@@ -1884,6 +1898,38 @@ func (p Installation) TemplateName() (string, error)
 func (p Installation) Through(name string) (Installation, error)
     Through returns the inclusive prefix ending at name, preserving install
     order.
+
+type LoginRole struct {
+	// Has unexported fields.
+}
+    LoginRole owns a session advisory lock on a dedicated maintenance
+    connection. It can be used across multiple clones and test cases until
+    Release. The admin pool needs one slot per live login in addition to its
+    working slots.
+
+func (r *LoginRole) Name() string
+    Name returns the generated PostgreSQL login name.
+
+func (r *LoginRole) Password() string
+    Password returns the random login password. It returns an empty string after
+    Release has been called. Pass it directly to the test client's connection
+    settings and keep credentials out of logs and fixture files.
+
+func (r *LoginRole) Release(ctx context.Context) error
+    Release removes the login and its direct database CONNECT grants. Close
+    its business connections first. The first call retires the credentials and
+    disposes of the pinned backend even on error. A later Release or Prune can
+    retry cleanup. Releasing an already removed login succeeds.
+
+type LoginRoleOptions struct {
+	MemberOf        []string
+	Inherit         bool
+	ConnectionLimit *int
+}
+    LoginRoleOptions configures a temporary LOGIN on a disposable cluster.
+    MemberOf lists exact catalog names of existing roles. Inherit defaults
+    to false. ConnectionLimit defaults to unlimited (nil or -1); zero denies
+    ordinary connections. The login receives no administrative attributes.
 
 type Migration struct {
 	Name    string
