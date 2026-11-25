@@ -30,12 +30,13 @@ func NewRunner[S any](pool *pgxpool.Pool, policy ScopePolicy[S], opts RunnerOpti
 		return nil, err
 	}
 	obsConfig := tabula.ObserverConfig{
-		Role:          opts.Role,
-		Tracer:        opts.Tracer,
-		Metrics:       opts.Metrics,
-		Log:           opts.Log,
-		Sanitize:      opts.Sanitize,
-		TagStatements: opts.TagStatements,
+		Role:                opts.Role,
+		Tracer:              opts.Tracer,
+		RawErrorDiagnostics: opts.RawErrorDiagnostics,
+		Metrics:             opts.Metrics,
+		Log:                 opts.Log,
+		Sanitize:            opts.Sanitize,
+		TagStatements:       opts.TagStatements,
 	}
 	obs := tabula.NewObserver(obsConfig)
 	var readObs *tabula.Observer

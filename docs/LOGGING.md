@@ -88,7 +88,9 @@ configured on `RegistryConfig` or on `RunnerOptions` (`Tracer`, `Metrics`, `Log`
 `TagStatements`). When configured on a runner, hand-written inline SQL receives the key
 `tabula.inline.<fingerprint>` derived from normalized SQL text (never bound argument values).
 
-The tracer finish callback receives an error containing the class and optional SQLSTATE. The operation returns the original driver error to its caller. The OpenTelemetry span records the class as its error status and exception type, and stores SQLSTATE in `db.response.status_code`.
+By default the tracer finish callback receives an error containing the class and optional SQLSTATE. The operation returns the original driver error to its caller. The OpenTelemetry span records the class as its error status and exception type, and stores SQLSTATE in `db.response.status_code`.
+
+Set `RawErrorDiagnostics: true` on the runner or registry that supplies the tracer to receive the original error in the finish callback. The OpenTelemetry bridge then records the original text in `exception.message` and the span status description. Errors such as 22P02 and 22003 can quote a bound parameter even with `ValuesNever` and a log sanitizer. Metrics always aggregate failures by class. Logs use the class or the configured `Sanitize` output in both modes.
 
 The separate OpenTelemetry module `github.com/0xJean/tabula/oteltabula` implements
 `tabula.Tracer` (`oteltabula.NewTracer`) and `tabula.Metrics` (`oteltabula.NewMetrics`)

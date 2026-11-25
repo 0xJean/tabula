@@ -366,7 +366,7 @@ func ClassifyError(ctx context.Context, err error) (ErrorClass, error)
 type ErrorPolicy struct {
 	Classify func(ctx context.Context, err error) error
 	// Sanitize supplies reviewed error text for structured logs. The default
-	// logs the error class. Trace diagnostics always use the class and SQLSTATE.
+	// logs the error class. Trace detail is configured separately with RawErrorDiagnostics.
 	Sanitize    func(err error) string
 	Conflict    error
 	OnceChanged error
@@ -581,10 +581,13 @@ func (o *Observer) TagSQL(ctx context.Context, query string) string
     normalized inline SQL fingerprint otherwise.
 
 type ObserverConfig struct {
-	Role    string
-	Tracer  Tracer
-	Metrics Metrics
-	Log     LogConfig
+	// RawErrorDiagnostics passes original errors to the statement tracer. Driver
+	// messages can contain bound values. The default traces the class and SQLSTATE.
+	RawErrorDiagnostics bool
+	Role                string
+	Tracer              Tracer
+	Metrics             Metrics
+	Log                 LogConfig
 	// Sanitize supplies reviewed log text for errors. The default is the error class.
 	Sanitize      func(error) string
 	TagStatements bool
@@ -858,6 +861,9 @@ type RegistryConfig[S any] struct {
 	Log LogConfig
 	// Tracer optionally wraps every statement execution in a tracing span.
 	Tracer Tracer
+	// RawErrorDiagnostics passes original errors to the statement tracer. Driver
+	// messages can contain bound values. The default traces the class and SQLSTATE.
+	RawErrorDiagnostics bool
 	// Metrics optionally records latency, row count, and error class per statement.
 	Metrics Metrics
 	// SessionKey binds the registry at construction so Bind accepts only sessions
@@ -1315,6 +1321,8 @@ type TraceInfo struct {
 	Action string
 	Scope  string
 	Role   string
+	// RawErrorDiagnostics permits the tracer to record the original error text.
+	RawErrorDiagnostics bool
 }
     TraceInfo identifies one statement execution for Tracer and Metrics hooks.
     Statement keys double as span names and metric labels.
@@ -1324,8 +1332,8 @@ type Tracer interface {
 }
     Tracer starts and ends a span around each statement execution. Passed
     explicitly via RegistryConfig.Tracer or RunnerOptions.Tracer; nil disables
-    tracing. Finish receives a diagnostic with the error class and SQLSTATE.
-    The driver error and its message are available to the operation's caller.
+    tracing. Finish receives a diagnostic with the error class and SQLSTATE by
+    default. With RawErrorDiagnostics enabled it receives the original error.
 
 type UpsertPlan[T, K, S any] struct {
 	// Has unexported fields.
@@ -1474,9 +1482,10 @@ func NewMetrics(mp metric.MeterProvider, opts ...Option) (tabula.Metrics, error)
 
 func NewTracer(tp trace.TracerProvider, opts ...Option) tabula.Tracer
     NewTracer returns a tabula.Tracer backed by tp (defaulting to
-    otel.GetTracerProvider when tp is nil). Attach it to RunnerOptions.Tracer or
-    RegistryConfig.Tracer. Failures record the error class and SQLSTATE without
-    serializing the driver message in events or status descriptions.
+    otel.GetTracerProvider when tp is nil). Attach it to RunnerOptions.Tracer
+    or RegistryConfig.Tracer. Failures record the error class and SQLSTATE.
+    With RawErrorDiagnostics enabled, exception messages and status descriptions
+    also contain the original error text, which may include bound values.
 
 
 TYPES
@@ -1695,6 +1704,9 @@ type RunnerOptions struct {
 	Tracer           tabula.Tracer
 	Metrics          tabula.Metrics
 	Log              tabula.LogConfig
+	// RawErrorDiagnostics passes original errors to the statement tracer. Driver
+	// messages can contain bound values. The default traces the class and SQLSTATE.
+	RawErrorDiagnostics bool
 	// Sanitize supplies reviewed log text for errors. The default is the error class.
 	Sanitize      func(error) string
 	TagStatements bool
@@ -2636,6 +2648,9 @@ type RunnerOptions struct {
 	Tracer  tabula.Tracer
 	Metrics tabula.Metrics
 	Log     tabula.LogConfig
+	// RawErrorDiagnostics passes original errors to the statement tracer. Driver
+	// messages can contain bound values. The default traces the class and SQLSTATE.
+	RawErrorDiagnostics bool
 	// Sanitize supplies reviewed log text for errors. The default is the error class.
 	Sanitize      func(error) string
 	TagStatements bool

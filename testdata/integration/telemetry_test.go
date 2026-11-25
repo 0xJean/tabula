@@ -49,6 +49,7 @@ type checkingTracer struct {
 	tabula.Tracer
 	t     *testing.T
 	count int
+	raw   bool
 }
 
 func (p *checkingTracer) Start(ctx context.Context, info tabula.TraceInfo) (context.Context, func(int64, error)) {
@@ -56,11 +57,14 @@ func (p *checkingTracer) Start(ctx context.Context, info tabula.TraceInfo) (cont
 	return ctx, func(rows int64, err error) {
 		p.count++
 		class, _ := tabula.ClassifyError(ctx, err)
-		require.EqualError(p.t, err, string(class))
+		require.Equal(p.t, p.raw, info.RawErrorDiagnostics)
+		if !p.raw {
+			require.EqualError(p.t, err, string(class))
+		}
 		require.NotEmpty(p.t, tabula.SQLState(err))
 		_, pqCause := errors.AsType[*pq.Error](err)
 		_, pgxCause := errors.AsType[*pgconn.PgError](err)
-		require.False(p.t, pqCause || pgxCause)
+		require.Equal(p.t, p.raw, pqCause || pgxCause)
 		finish(rows, err)
 	}
 }
@@ -83,8 +87,8 @@ func TestDatabaseErrorTelemetry(t *testing.T) {
 
 	for _, driver := range []string{"pq", "pgx"} {
 		for _, source := range []string{"runner", "registry"} {
-			for _, reviewed := range []bool{false, true} {
-				t.Run(fmt.Sprintf("%s/%s/sanitize=%t", driver, source, reviewed), func(t *testing.T) {
+			for _, mode := range []struct{ raw, reviewed bool }{{}, {reviewed: true}, {raw: true}, {raw: true, reviewed: true}} {
+				t.Run(fmt.Sprintf("%s/%s/raw=%t/sanitize=%t", driver, source, mode.raw, mode.reviewed), func(t *testing.T) {
 					var logs bytes.Buffer
 					exporter := tracetest.NewInMemoryExporter()
 					tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
@@ -93,12 +97,12 @@ func TestDatabaseErrorTelemetry(t *testing.T) {
 					t.Cleanup(func() { _ = tp.Shutdown(context.Background()); _ = mp.Shutdown(context.Background()) })
 					metrics, err := oteltabula.NewMetrics(mp)
 					require.NoError(t, err)
-					tracer := &checkingTracer{Tracer: oteltabula.NewTracer(tp), t: t}
+					tracer := &checkingTracer{Tracer: oteltabula.NewTracer(tp), t: t, raw: mode.raw}
 					cfg := tabula.RegistryConfig[struct{}]{
-						Tracer: tracer, Metrics: metrics,
+						Tracer: tracer, Metrics: metrics, RawErrorDiagnostics: mode.raw,
 						Log: tabula.LogConfig{Logger: slog.New(slog.NewJSONHandler(&logs, nil)), Level: tabula.LogErrors, Values: tabula.ValuesNever},
 					}
-					if reviewed {
+					if mode.reviewed {
 						cfg.Errors.Sanitize = func(err error) string { return "reviewed " + tabula.SQLState(err) }
 					}
 					regCfg, runnerCfg := cfg, tabula.RegistryConfig[struct{}]{}
@@ -110,13 +114,14 @@ func TestDatabaseErrorTelemetry(t *testing.T) {
 					}
 					view := tabula.DefineView(tabula.NewRegistry(regCfg), tabula.ViewSpec[projection]{Name: table})
 					std, err := stdsql.NewRunner(db, stdsql.NoScopePolicy(), stdsql.RunnerOptions{
-						Tracer: runnerCfg.Tracer, Metrics: runnerCfg.Metrics, Log: runnerCfg.Log, Sanitize: runnerCfg.Errors.Sanitize,
+						Tracer: runnerCfg.Tracer, Metrics: runnerCfg.Metrics, Log: runnerCfg.Log, Sanitize: runnerCfg.Errors.Sanitize, RawErrorDiagnostics: runnerCfg.RawErrorDiagnostics,
 					})
 					require.NoError(t, err)
 					native, err := pgxdriver.NewRunner(pool, pgxdriver.NoScopePolicy(), pgxdriver.RunnerOptions{
-						Tracer: runnerCfg.Tracer, Metrics: runnerCfg.Metrics, Log: runnerCfg.Log, Sanitize: runnerCfg.Errors.Sanitize,
+						Tracer: runnerCfg.Tracer, Metrics: runnerCfg.Metrics, Log: runnerCfg.Log, Sanitize: runnerCfg.Errors.Sanitize, RawErrorDiagnostics: runnerCfg.RawErrorDiagnostics,
 					})
 					require.NoError(t, err)
+					var driverMessages []string
 					for _, tc := range cases {
 						run := func(ctx context.Context, s tabula.Session[struct{}]) error {
 							var value string
@@ -132,6 +137,15 @@ func TestDatabaseErrorTelemetry(t *testing.T) {
 						}
 						require.Error(t, err)
 						require.Equal(t, tc.state, tabula.SQLState(err), "%v", err)
+						if driver == "pgx" {
+							cause, ok := errors.AsType[*pgconn.PgError](err)
+							require.True(t, ok)
+							driverMessages = append(driverMessages, cause.Error())
+						} else {
+							cause, ok := errors.AsType[*pq.Error](err)
+							require.True(t, ok)
+							driverMessages = append(driverMessages, cause.Error())
+						}
 					}
 					require.Equal(t, len(cases), tracer.count)
 					spans := exporter.GetSpans()
@@ -144,7 +158,7 @@ func TestDatabaseErrorTelemetry(t *testing.T) {
 							class = string(tabula.ClassUnique)
 						}
 						require.Equal(t, codes.Error, s.Status.Code)
-						require.Equal(t, class, s.Status.Description)
+
 						attrs := map[string]string{}
 						for _, attr := range s.Attributes {
 							attrs[string(attr.Key)] = attr.Value.AsString()
@@ -153,13 +167,26 @@ func TestDatabaseErrorTelemetry(t *testing.T) {
 						require.Equal(t, class, attrs["tabula.error_class"])
 						require.Len(t, s.Events, 1)
 						require.Equal(t, "exception", s.Events[0].Name)
-						require.Len(t, s.Events[0].Attributes, 1)
-						require.Equal(t, class, s.Events[0].Attributes[0].Value.AsString())
+						if mode.raw {
+							require.Equal(t, driverMessages[i], s.Status.Description)
+							event := map[string]string{}
+							for _, attr := range s.Events[0].Attributes {
+								event[string(attr.Key)] = attr.Value.AsString()
+							}
+							require.Equal(t, driverMessages[i], event["exception.message"])
+							if cases[i].state == "22P02" || cases[i].state == "22003" {
+								require.Contains(t, event["exception.message"], cases[i].marker)
+							}
+						} else {
+							require.Equal(t, class, s.Status.Description)
+							require.Len(t, s.Events[0].Attributes, 1)
+							require.Equal(t, class, s.Events[0].Attributes[0].Value.AsString())
+						}
 						var record map[string]any
 						require.NoError(t, json.Unmarshal([]byte(records[i]), &record))
 						require.Equal(t, cases[i].state, record["tabula.sqlstate"])
 						want := class
-						if reviewed {
+						if mode.reviewed {
 							want = "reviewed " + cases[i].state
 						}
 						require.Equal(t, want, record["tabula.error"])
@@ -168,7 +195,11 @@ func TestDatabaseErrorTelemetry(t *testing.T) {
 					require.NoError(t, reader.Collect(t.Context(), &rm))
 					require.Len(t, rm.ScopeMetrics, 1)
 					require.Len(t, rm.ScopeMetrics[0].Metrics, 2)
-					for _, signal := range []any{spans, rm, logs.String()} {
+					protected := []any{rm, logs.String()}
+					if !mode.raw {
+						protected = append(protected, spans)
+					}
+					for _, signal := range protected {
 						data, err := json.Marshal(signal)
 						require.NoError(t, err)
 						for _, tc := range cases {

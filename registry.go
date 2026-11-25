@@ -40,7 +40,7 @@ type Session[S any] interface {
 type ErrorPolicy struct {
 	Classify func(ctx context.Context, err error) error
 	// Sanitize supplies reviewed error text for structured logs. The default
-	// logs the error class. Trace diagnostics always use the class and SQLSTATE.
+	// logs the error class. Trace detail is configured separately with RawErrorDiagnostics.
 	Sanitize    func(err error) string
 	Conflict    error
 	OnceChanged error
@@ -74,6 +74,9 @@ type RegistryConfig[S any] struct {
 	Log LogConfig
 	// Tracer optionally wraps every statement execution in a tracing span.
 	Tracer Tracer
+	// RawErrorDiagnostics passes original errors to the statement tracer. Driver
+	// messages can contain bound values. The default traces the class and SQLSTATE.
+	RawErrorDiagnostics bool
 	// Metrics optionally records latency, row count, and error class per statement.
 	Metrics Metrics
 	// SessionKey binds the registry at construction so Bind accepts only sessions
@@ -92,19 +95,20 @@ type RegistryConfig[S any] struct {
 // metrics, and the list of defined tables and views. Applications normally
 // declare one package-level Registry and may construct isolated registries in tests.
 type Registry[S any] struct {
-	prefix        string
-	scopeType     reflect.Type
-	scopeID       func(S) any
-	scopeLog      func(S) string
-	arrayArgFn    func(any) any
-	arrayColFn    func(reflect.Type) (func(any) any, error)
-	errors        ErrorPolicy
-	log           *logState
-	tracer        Tracer
-	metrics       Metrics
-	requireSealed bool
-	sessionToken  atomic.Pointer[sessionToken]
-	deny          Capability
+	prefix              string
+	scopeType           reflect.Type
+	scopeID             func(S) any
+	scopeLog            func(S) string
+	arrayArgFn          func(any) any
+	arrayColFn          func(reflect.Type) (func(any) any, error)
+	errors              ErrorPolicy
+	log                 *logState
+	tracer              Tracer
+	rawErrorDiagnostics bool
+	metrics             Metrics
+	requireSealed       bool
+	sessionToken        atomic.Pointer[sessionToken]
+	deny                Capability
 
 	mu    sync.RWMutex
 	types map[reflect.Type]func(any) any
@@ -121,19 +125,20 @@ func NewRegistry[S any](cfg RegistryConfig[S]) *Registry[S] {
 		prefix = "tabula"
 	}
 	r := &Registry[S]{
-		prefix:        prefix,
-		scopeType:     reflect.TypeFor[S](),
-		scopeID:       cfg.ScopeID,
-		scopeLog:      cfg.ScopeLog,
-		arrayArgFn:    cfg.ArrayArg,
-		arrayColFn:    cfg.ArrayColumn,
-		errors:        cfg.Errors,
-		log:           newLogState(cfg.Log),
-		tracer:        cfg.Tracer,
-		metrics:       cfg.Metrics,
-		requireSealed: cfg.RequireSealed,
-		deny:          cfg.Deny,
-		types:         networkTypes(),
+		prefix:              prefix,
+		scopeType:           reflect.TypeFor[S](),
+		scopeID:             cfg.ScopeID,
+		scopeLog:            cfg.ScopeLog,
+		arrayArgFn:          cfg.ArrayArg,
+		arrayColFn:          cfg.ArrayColumn,
+		errors:              cfg.Errors,
+		log:                 newLogState(cfg.Log),
+		tracer:              cfg.Tracer,
+		rawErrorDiagnostics: cfg.RawErrorDiagnostics,
+		metrics:             cfg.Metrics,
+		requireSealed:       cfg.RequireSealed,
+		deny:                cfg.Deny,
+		types:               networkTypes(),
 		zeros: map[reflect.Type]func(any) any{
 			reflect.TypeFor[string]():    zeroOf[string],
 			reflect.TypeFor[bool]():      zeroOf[bool],

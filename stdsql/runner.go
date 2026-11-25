@@ -29,12 +29,13 @@ func NewRunner[S any](db *sql.DB, policy ScopePolicy[S], opts RunnerOptions) (*R
 		return nil, err
 	}
 	obsConfig := tabula.ObserverConfig{
-		Role:          opts.Role,
-		Tracer:        opts.Tracer,
-		Metrics:       opts.Metrics,
-		Log:           opts.Log,
-		Sanitize:      opts.Sanitize,
-		TagStatements: opts.TagStatements,
+		Role:                opts.Role,
+		Tracer:              opts.Tracer,
+		RawErrorDiagnostics: opts.RawErrorDiagnostics,
+		Metrics:             opts.Metrics,
+		Log:                 opts.Log,
+		Sanitize:            opts.Sanitize,
+		TagStatements:       opts.TagStatements,
 	}
 	obs := tabula.NewObserver(obsConfig)
 	var readObs *tabula.Observer

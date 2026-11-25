@@ -63,10 +63,13 @@ func StatementMetaFrom(ctx context.Context) (StatementMeta, bool) {
 
 // ObserverConfig configures a session-level Observer shared by driver runners.
 type ObserverConfig struct {
-	Role    string
-	Tracer  Tracer
-	Metrics Metrics
-	Log     LogConfig
+	// RawErrorDiagnostics passes original errors to the statement tracer. Driver
+	// messages can contain bound values. The default traces the class and SQLSTATE.
+	RawErrorDiagnostics bool
+	Role                string
+	Tracer              Tracer
+	Metrics             Metrics
+	Log                 LogConfig
 	// Sanitize supplies reviewed log text for errors. The default is the error class.
 	Sanitize      func(error) string
 	TagStatements bool
@@ -76,13 +79,14 @@ type ObserverConfig struct {
 // optional SQL comment tagging for both descriptor statements and hand-written
 // inline SQL.
 type Observer struct {
-	role     string
-	tracer   Tracer
-	metrics  Metrics
-	log      *logState
-	sanitize func(error) string
-	tagSQL   bool
-	signals  ObserveMask
+	rawErrorDiagnostics bool
+	role                string
+	tracer              Tracer
+	metrics             Metrics
+	log                 *logState
+	sanitize            func(error) string
+	tagSQL              bool
+	signals             ObserveMask
 }
 
 // NewObserver constructs a session-level Observer from cfg. Returns nil when no
@@ -110,13 +114,14 @@ func NewObserver(cfg ObserverConfig) *Observer {
 		ls = newLogState(cfg.Log)
 	}
 	return &Observer{
-		role:     cfg.Role,
-		tracer:   cfg.Tracer,
-		metrics:  cfg.Metrics,
-		log:      ls,
-		sanitize: cfg.Sanitize,
-		tagSQL:   cfg.TagStatements,
-		signals:  signals,
+		role:                cfg.Role,
+		rawErrorDiagnostics: cfg.RawErrorDiagnostics,
+		tracer:              cfg.Tracer,
+		metrics:             cfg.Metrics,
+		log:                 ls,
+		sanitize:            cfg.Sanitize,
+		tagSQL:              cfg.TagStatements,
+		signals:             signals,
 	}
 }
 
@@ -177,11 +182,12 @@ func (o *Observer) Start(ctx context.Context, scopeLabel, query string, args []a
 		scope = meta.Scope
 	}
 	info := TraceInfo{
-		Key:    key,
-		Table:  table,
-		Action: action,
-		Scope:  scope,
-		Role:   o.role,
+		Key:                 key,
+		Table:               table,
+		Action:              action,
+		Scope:               scope,
+		Role:                o.role,
+		RawErrorDiagnostics: o.rawErrorDiagnostics,
 	}
 	logger := o.log.logger
 	if meta.Logger != nil && o.signals&ObserveLog != 0 {
@@ -215,7 +221,7 @@ func (o *Observer) Start(ctx context.Context, scopeLabel, query string, args []a
 			dur = o.log.now().Sub(start)
 		}
 		if endTrace != nil {
-			endTrace(rows, traceError(ctx, err))
+			endTrace(rows, info.traceError(ctx, err))
 		}
 		if o.metrics != nil {
 			var class ErrorClass

@@ -46,7 +46,7 @@ func TestErrorClassification(t *testing.T) {
 			require.Equal(t, tc.class, gotClass)
 			require.Equal(t, tc.want, gotSentinel)
 
-			diagnostic := traceError(t.Context(), tc.err)
+			diagnostic := (TraceInfo{}).traceError(t.Context(), tc.err)
 			require.Equal(t, string(tc.class), diagnostic.Error())
 			require.Equal(t, SQLState(tc.err), SQLState(diagnostic))
 			require.NotErrorIs(t, diagnostic, tc.err)
@@ -71,7 +71,7 @@ func TestErrorClassification(t *testing.T) {
 
 func TestMalformedDiagnosticState(t *testing.T) {
 	for _, state := range []string{"value in state", "12 45", "abcde", "😀x"} {
-		require.Empty(t, SQLState(traceError(t.Context(), pgStateErr{state, "driver detail"})))
+		require.Empty(t, SQLState((TraceInfo{}).traceError(t.Context(), pgStateErr{state, "driver detail"})))
 	}
 }
 

@@ -110,6 +110,9 @@ type RunnerOptions struct {
 	Tracer  tabula.Tracer
 	Metrics tabula.Metrics
 	Log     tabula.LogConfig
+	// RawErrorDiagnostics passes original errors to the statement tracer. Driver
+	// messages can contain bound values. The default traces the class and SQLSTATE.
+	RawErrorDiagnostics bool
 	// Sanitize supplies reviewed log text for errors. The default is the error class.
 	Sanitize      func(error) string
 	TagStatements bool
