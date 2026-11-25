@@ -65,11 +65,22 @@ func TestLoginWorker(t *testing.T) {
 			fmt.Println("released")
 			return
 		}
-		database, ok := strings.CutPrefix(command, "connect ")
+		method, database, ok := strings.Cut(command, " ")
 		require.True(t, ok)
+		require.Contains(t, []string{"connect", "hold"}, method)
 		db := loginClient(t, database, role)
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		if method == "hold" {
+			_, err = conn.ExecContext(ctx, "SELECT pg_catalog.pg_advisory_lock(pg_catalog.hashtextextended($1,0))", "client:"+role.Name())
+			require.NoError(t, err)
+			fmt.Println("connected")
+			require.True(t, scanner.Scan())
+			require.Equal(t, "resume", scanner.Text())
+		}
 		var user string
-		err = db.QueryRowContext(ctx, "SELECT current_user").Scan(&user)
+		err = conn.QueryRowContext(ctx, "SELECT current_user").Scan(&user)
+		require.NoError(t, conn.Close())
 		require.NoError(t, db.Close())
 		require.NoError(t, err)
 		require.Equal(t, role.Name(), user)
@@ -138,7 +149,11 @@ func TestProcessLoginLifetime(t *testing.T) {
 	require.NoError(t, err)
 	template, err := plan.TemplateName()
 	require.NoError(t, err)
+	var survivor postgresfixture.Database
 	t.Cleanup(func() {
+		if survivor.Name() != "" {
+			require.NoError(t, survivor.Drop(context.Background()))
+		}
 		_, _ = admin.Exec("DROP DATABASE IF EXISTS " + pq.QuoteIdentifier(clone.Name()))
 		_, _ = admin.Exec("DROP DATABASE IF EXISTS " + pq.QuoteIdentifier(template))
 	})
@@ -154,6 +169,7 @@ func TestProcessLoginLifetime(t *testing.T) {
 		var safe bool
 		require.NoError(t, admin.QueryRowContext(ctx, `SELECT r.rolcanlogin AND NOT (r.rolinherit OR r.rolsuper
 			OR r.rolcreatedb OR r.rolcreaterole OR r.rolreplication OR r.rolbypassrls) AND r.rolconnlimit=3
+			AND NOT pg_catalog.pg_has_role(r.oid,$2::text,'USAGE')
 			AND ARRAY(SELECT p.rolname::text FROM pg_catalog.pg_auth_members m
 				JOIN pg_catalog.pg_roles p ON p.oid=m.roleid WHERE m.member=r.oid)=ARRAY[$2::text]
 			FROM pg_catalog.pg_roles r WHERE r.rolname=$1`, name, member).Scan(&safe))
@@ -179,17 +195,20 @@ func TestProcessLoginLifetime(t *testing.T) {
 	require.NoError(t, err)
 	require.NotContains(t, names, a)
 	require.NotContains(t, names, b)
-	first.command(t, "release", "released")
-	require.NoError(t, first.cmd.Wait())
-	require.False(t, roleExists(t, admin, a))
-	second.command(t, "connect "+clone.Name(), "disconnected")
-
-	// Remove the last clone: the role must still be discoverable independently.
+	// Both leases stay live between test cases even after the last clone is gone.
 	require.NoError(t, other.Close())
 	require.NoError(t, clone.Drop(ctx))
 	_, err = f.Prune(ctx, time.Hour, plan)
 	require.NoError(t, err)
+	require.True(t, roleExists(t, admin, a))
 	require.True(t, roleExists(t, admin, b))
+	survivor, err = f.Clone(ctx, plan)
+	require.NoError(t, err)
+	_, err = admin.ExecContext(ctx, "REVOKE ALL ON DATABASE "+pq.QuoteIdentifier(survivor.Name())+" FROM PUBLIC")
+	require.NoError(t, err)
+	_, err = admin.ExecContext(ctx, "GRANT CONNECT ON DATABASE "+pq.QuoteIdentifier(survivor.Name())+" TO "+pq.QuoteIdentifier(a))
+	require.NoError(t, err)
+	first.command(t, "hold "+survivor.Name(), "connected")
 	require.NoError(t, second.cmd.Process.Kill())
 	require.Error(t, second.cmd.Wait())
 	// Synchronize with PostgreSQL noticing the dead worker's socket. This
@@ -212,6 +231,14 @@ func TestProcessLoginLifetime(t *testing.T) {
 	}
 	require.Equal(t, []string{b}, removed)
 	require.False(t, roleExists(t, admin, b))
+	require.True(t, roleExists(t, admin, a))
+	// Execute on the same client connection after the peer was killed and reaped.
+	first.command(t, "resume", "disconnected")
+	_, err = admin.ExecContext(ctx, "SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended($1,0))", "client:"+a)
+	require.NoError(t, err)
+	first.command(t, "release", "released")
+	require.NoError(t, first.cmd.Wait())
+	require.False(t, roleExists(t, admin, a))
 }
 
 func TestLoginReleaseRetriesWithoutDroppingObjects(t *testing.T) {
