@@ -45,7 +45,7 @@ func CopyFrom[T, K, S any](ctx context.Context, sess *Session[S], tbl *tabula.Ta
 		return 0, fmt.Errorf("pgxdriver.CopyFrom %s: table has no insertable columns", tbl.Name())
 	}
 	copySQL := "COPY " + tbl.Name()
-	if err := sess.check(copySQL); err != nil {
+	if err := sess.readQueries.check(copySQL); err != nil {
 		return 0, err
 	}
 	if err := sess.applyScope(ctx); err != nil {

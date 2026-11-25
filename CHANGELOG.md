@@ -3,6 +3,12 @@
 All notable changes are listed here. The project follows semantic versioning; before
 v1.0 a minor version may contain breaking changes.
 
+## v0.3.6 — 2026-11-25
+
+- In both drivers, a failed top-level commit matches `tabula.ErrCommit` and preserves the driver error. This covers ordinary and shared transactions. A PostgreSQL rejection retains its SQLSTATE. A lost reply can leave a successful commit unconfirmed.
+- `RunnerOptions.SingleStatement` checks for one PostgreSQL data statement before session I/O. `RunnerOptions.Statements` adds per-method command allowlists and an optional outer `RETURNING` requirement. A configured method policy includes the single-statement check. Both options default to off. [Migration guide](docs/MIGRATION.md#from-v035-to-v036)
+- Both Direct adapters continue to require a single read query. Literal quotes whose interpretation depends on the connection's backslash setting now require an explicit escape string or a bind value.
+
 ## v0.3.5 — 2026-11-25
 
 ### Additions

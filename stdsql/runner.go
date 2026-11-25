@@ -52,6 +52,7 @@ func NewRunner[S any](db *sql.DB, policy ScopePolicy[S], opts RunnerOptions) (*R
 }
 
 // Within runs fn in a read-write transaction with the database default isolation.
+// A top-level commit error matches tabula.ErrCommit and wraps its driver cause.
 // On a ReadOnly runner, Within returns tabula.ErrReadOnly before BEGIN.
 func (r *Runner[S]) Within(ctx context.Context, scope S, fn func(context.Context, *Session[S]) error) error {
 	return r.WithinWith(ctx, scope, RunOptions[S]{}, fn)
@@ -145,6 +146,7 @@ func (r *Runner[S]) newBoundSession(tx *sql.Tx, scope S, unscoped, readOnly bool
 		readOnly:    readOnly,
 		obs:         r.obs,
 		scopeLog:    r.compiled.policy.ScopeLog,
+		statements:  r.compiled.statements,
 		readQueries: readQueries{db: tx, guard: r.compiled.guard},
 	}
 	s.proof = r.opts.SessionKey.Sign(s)
@@ -241,7 +243,7 @@ func (r *Runner[S]) runTx(
 		return err
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("stdsql: commit tx: %w", err)
+		return fmt.Errorf("stdsql: %w: %w", tabula.ErrCommit, err)
 	}
 	committed = true
 	return nil
@@ -304,6 +306,7 @@ func (st *sharedState[S]) mint(scope S, unscoped bool) *Session[S] {
 		denied:      denied,
 		obs:         obs,
 		scopeLog:    st.runner.compiled.policy.ScopeLog,
+		statements:  st.runner.compiled.statements,
 		shared:      st,
 		readQueries: readQueries{db: st.tx, guard: st.runner.compiled.guard},
 	}
@@ -388,7 +391,7 @@ func (r *Runner[S]) WithinSharedOptions(ctx context.Context, opts *sql.TxOptions
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("stdsql: commit tx: %w", err)
+		return fmt.Errorf("stdsql: %w: %w", tabula.ErrCommit, err)
 	}
 	committed = true
 	return nil

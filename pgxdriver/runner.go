@@ -54,6 +54,7 @@ func NewRunner[S any](pool *pgxpool.Pool, policy ScopePolicy[S], opts RunnerOpti
 
 // Within runs fn in a read-write transaction. On a ReadOnly runner, Within
 // fails closed with tabula.ErrReadOnly before BEGIN.
+// A top-level commit error matches tabula.ErrCommit and wraps its driver cause.
 func (r *Runner[S]) Within(ctx context.Context, scope S, fn func(context.Context, *Session[S]) error) error {
 	return r.WithinWith(ctx, scope, RunOptions[S]{}, fn)
 }
@@ -142,6 +143,7 @@ func (r *Runner[S]) newBoundSession(tx pgx.Tx, scope S, unscoped, readOnly bool)
 		key:         r.opts.SessionKey,
 		obs:         r.obs,
 		scopeLog:    r.compiled.policy.ScopeLog,
+		statements:  r.compiled.statements,
 		readQueries: readQueries{db: tx, guard: r.compiled.guard},
 	}
 	s.proof = r.opts.SessionKey.Sign(s)
@@ -236,7 +238,7 @@ func (r *Runner[S]) runTx(
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("pgxdriver: commit tx: %w", err)
+		return fmt.Errorf("pgxdriver: %w: %w", tabula.ErrCommit, err)
 	}
 	committed = true
 	return nil
@@ -298,6 +300,7 @@ func (st *sharedState[S]) mint(scope S, unscoped bool) *Session[S] {
 		key:         st.runner.opts.SessionKey,
 		obs:         obs,
 		scopeLog:    st.runner.compiled.policy.ScopeLog,
+		statements:  st.runner.compiled.statements,
 		shared:      st,
 		readQueries: readQueries{db: st.tx, guard: st.runner.compiled.guard},
 	}
@@ -381,7 +384,7 @@ func (r *Runner[S]) WithinSharedOptions(ctx context.Context, opts pgx.TxOptions,
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("pgxdriver: commit tx: %w", err)
+		return fmt.Errorf("pgxdriver: %w: %w", tabula.ErrCommit, err)
 	}
 	committed = true
 	return nil

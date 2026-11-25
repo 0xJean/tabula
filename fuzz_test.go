@@ -156,11 +156,26 @@ func FuzzGuardNoSessionEscape(f *testing.F) {
 	f.Add("SELECT 1 AS pg_settings")
 	f.Add("SELECT id pg_settings FROM items ORDER BY pg_settings")
 	f.Add("SELECT 1 AS pg_settings FROM pg_catalog.pg_settings")
+	f.Add("SELECT 'a;b' AS \"semi;colon\"; -- finished")
+	f.Add("WITH x AS (VALUES (1)) SELECT * FROM x; /* end */")
+	f.Add(`SELECT E'can\'t; finish', $note$one;two$note$`)
+	f.Add("SELECT (1) /* unfinished")
+	methods, err := (StatementPolicy{Read: []string{"select", "with"}, Write: []string{"insert"}, RequireReturning: true}).Compile(false)
+	if err != nil {
+		f.Fatal(err)
+	}
 	reads, err := NewSessionGuard(SessionGuardConfig{VariablePrefixes: []string{"scope."}, ForbidVariableReads: true})
 	if err != nil {
 		f.Fatal(err)
 	}
 	f.Fuzz(func(t *testing.T, query string) {
+		single := GuardSingleStatement(query)
+		if single == nil && !errors.Is(GuardSingleStatement(query+"\n; SELECT 2"), ErrForbiddenStatement) {
+			t.Fatal("single statement guard admitted a second command")
+		}
+		if err := methods.Check("Scan", query); err == nil && single != nil {
+			t.Fatal("method policy admitted SQL denied by the single statement guard")
+		}
 		if err := GuardNoSessionEscape("UPDATE pg_settings SET setting = 'x';" + query); !errors.Is(err, ErrForbiddenStatement) {
 			t.Fatalf("session guard allowed a pg_settings update prefix: %v", err)
 		}

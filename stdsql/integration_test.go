@@ -181,3 +181,31 @@ func TestRunnerScopeSavepointAndRetry(t *testing.T) {
 		return nil
 	}))
 }
+
+func TestSingleStatementOption(t *testing.T) {
+	dsn := os.Getenv("TABULA_TEST_DSN")
+	require.NotEmpty(t, dsn)
+	db, err := sql.Open("postgres", dsn)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	for _, tc := range []struct {
+		name   string
+		single bool
+	}{{"default", false}, {"single", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			runner, err := stdsql.NewRunner(db, stdsql.NoScopePolicy(), stdsql.RunnerOptions{SingleStatement: tc.single})
+			require.NoError(t, err)
+			err = runner.Within(t.Context(), struct{}{}, func(ctx context.Context, s *stdsql.Session[struct{}]) error {
+				_, err := s.Exec(ctx, "SELECT 1; SELECT 2")
+				if tc.single {
+					require.ErrorIs(t, err, tabula.ErrForbiddenStatement)
+				} else {
+					require.NoError(t, err)
+				}
+				_, err = s.Exec(ctx, "SELECT 'one;two', $tag$three;four$tag$; -- done")
+				return err
+			})
+			require.NoError(t, err)
+		})
+	}
+}

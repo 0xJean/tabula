@@ -2,6 +2,26 @@
 
 Follow this guide when upgrading an application to v0.3. For the full surface after the upgrade, see the [integration guide](INTEGRATION.md).
 
+## From v0.3.5 to v0.3.6
+
+Both drivers expose the same runner options. Set `SingleStatement: true` for a boundary check alone, or configure the methods your application uses.
+
+```go
+opts := stdsql.RunnerOptions{
+    Statements: tabula.StatementPolicy{
+        Read:             []string{"select"},
+        Write:            []string{"insert", "update", "delete"},
+        RequireReturning: true,
+    },
+}
+```
+
+`Scan` and `Each` use the read list. `Exec` and `Returning` use the write list. A nonempty list activates single-statement checking and denies methods on a side with no allowed commands. To allow CTEs, include `"with"` alongside their outer command. Checks apply to descriptor methods, raw session forwarding methods, shared handles, savepoints and pre-commit steps. Use `policy.Compile(false)` and `guard.Check(method, sql)` for the same checks on an offline SQL inventory. `tabula.GuardSingleStatement` performs the standalone boundary check.
+
+Both Direct pools already enforce a single read query. Their shared guard now rejects ordinary-string quote escapes that depend on `standard_conforming_strings`. Use a bind parameter for that value or an explicit PostgreSQL escape string.
+
+Use `errors.Is(err, tabula.ErrCommit)` to identify an error returned by the outer commit call. The error also wraps the original driver cause. For example, a deferred constraint violation retains its SQLSTATE and PostgreSQL rejected the transaction. After losing a reply, look up the result by the original operation identifier before deciding whether to retry. The default retry policy still uses serialization failures and deadlocks as its criteria.
+
 ## From v0.3.4 to v0.3.5
 
 - Configure `InventoryConfig.RoutineMethods` (`SQLRoutineMethod`) to inventory database wrappers that call PostgreSQL functions by name with a fixed argument-slice parameter. A nil or dense slice literal supplies its arity, including when variadic result destinations follow. `+` string concatenations involving single-assignment local string variables now also resolve statically in `CollectSQL`.

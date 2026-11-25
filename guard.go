@@ -37,7 +37,7 @@ func GuardNoSessionEscape(query string) error {
 // GuardNoSessionEscape. Adapters must also use a read-only PostgreSQL
 // connection to enforce write restrictions inside CTEs and functions.
 func GuardReadOnly(query string) error {
-	tokens, ok := pgstmt.DML(query)
+	tokens, ok := pgstmt.SingleDML(query)
 	if !ok || (tokens[0].Text != "select" && tokens[0].Text != "with") {
 		return ErrReadOnly
 	}

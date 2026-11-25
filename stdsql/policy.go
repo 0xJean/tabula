@@ -74,6 +74,10 @@ func NoScopePolicy() ScopePolicy[struct{}] { return ScopePolicy[struct{}]{} }
 
 // RunnerOptions configures a role-bound, guarded stdsql.Runner.
 type RunnerOptions struct {
+	// SingleStatement restricts session SQL to one data statement before driver I/O.
+	SingleStatement bool
+	// Statements restricts commands by method and implies SingleStatement when configured.
+	Statements tabula.StatementPolicy
 	// Role selects the transaction-local PostgreSQL role during setup when non-empty.
 	Role string
 	// RequireRole fails NewRunner when Role is empty.
@@ -173,6 +177,7 @@ func validateTimeouts(t Timeouts) error {
 }
 
 type compiledPolicy[S any] struct {
+	statements   tabula.StatementGuard
 	policy       ScopePolicy[S]
 	managed      map[string]bool
 	managedOrder []string
@@ -260,11 +265,17 @@ func compilePolicy[S any](policy ScopePolicy[S], opts RunnerOptions) (compiledPo
 	userGuard := policy.GuardQuery
 	combinedGuard := composeGuards(builtInGuard, userGuard)
 
+	statements, err := opts.Statements.Compile(opts.SingleStatement)
+	if err != nil {
+		return compiledPolicy[S]{}, fmt.Errorf("stdsql.NewRunner: %w", err)
+	}
+
 	cp := policy
 	cp.ManagedVars = slices.Clone(managedOrder)
 	cp.UnscopedVars = maps.Clone(policy.UnscopedVars)
 	cp.InactiveVars = maps.Clone(inactive)
 	return compiledPolicy[S]{
+		statements:   statements,
 		policy:       cp,
 		managed:      managed,
 		managedOrder: managedOrder,
