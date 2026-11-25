@@ -181,7 +181,9 @@ import "context"
 type Session struct{}
 func (*Session) Query(ctx context.Context, sql string) {}
 func (*Session) Rows(ctx context.Context, name string, args []any) {}
-func (*Session) Call(ctx context.Context, op, name string, args []any) {}
+func (*Session) Call(ctx context.Context, op, name string, args []any, dest ...any) {}
+func (*Session) Variadic(ctx context.Context, name string, args ...any) {}
+type Embedded struct{ Session }
 type Caller interface { Rows(context.Context, string, []any) }
 `)
 	write("calls.go", `package calls
@@ -206,17 +208,29 @@ func run(ctx context.Context, s *api.Session, iface api.Caller, dynName string, 
 	s.Rows(ctx, dynName, []any{1})
 	s.Rows(ctx, fnName, dynArgs)
 	s.Rows(ctx, fnName, []any{2: "sparse"})
+	s.Rows(ctx, "indexed", []any{1: "b", 0: "a"})
+	s.Call(ctx, "op", "with_dest", []any{1}, dynArgs...)
+	s.Variadic(ctx, "variadic", []any{1, 2})
+	var embedded api.Embedded
+	embedded.Rows(ctx, "SELECT 2", nil)
+	s.Query(ctx, "SELECT " + dynName)
+	dynName, ok := "later", true
+	_ = ok
 	escaped := s.Rows
 	_ = escaped
 }
 `)
 	cfg := InventoryConfig{
-		Dir:     dir,
-		Methods: []SQLMethod{{Receiver: "example.test/routines/api.Session", Method: "Query", Argument: 1}},
+		Dir: dir,
+		Methods: []SQLMethod{
+			{Receiver: "example.test/routines/api.Session", Method: "Query", Argument: 1},
+			{Receiver: "example.test/routines/api.Embedded", Method: "Rows", Argument: 1},
+		},
 		RoutineMethods: []SQLRoutineMethod{
 			{Receiver: "example.test/routines/api.Session", Method: "Rows", NameArgument: 1, ArgsArgument: 2, SetReturning: true},
 			{Receiver: "example.test/routines/api.Caller", Method: "Rows", NameArgument: 1, ArgsArgument: 2, Schema: "app", SetReturning: true},
 			{Receiver: "example.test/routines/api.Session", Method: "Call", NameArgument: 2, ArgsArgument: 3},
+			{Receiver: "example.test/routines/api.Session", Method: "Variadic", NameArgument: 1, ArgsArgument: 2},
 		},
 	}
 	inv, err := CollectSQL(t.Context(), cfg)
@@ -235,9 +249,12 @@ func run(ctx context.Context, s *api.Session, iface api.Caller, dynName string, 
 		`SELECT * FROM "public"."list_items"($1, $2)`,
 		`SELECT * FROM "app"."zero_args"()`,
 		`SELECT "public"."scalar_fn"($1)`,
+		`SELECT * FROM "public"."indexed"($1, $2)`,
+		`SELECT "public"."with_dest"($1)`,
+		"SELECT 2",
 	}, staticSQL)
-	require.Equal(t, 6, dynCount)
-	require.Len(t, inv.Findings, 6)
+	require.Equal(t, 8, dynCount)
+	require.Len(t, inv.Findings, 8)
 
 	for _, bad := range []SQLRoutineMethod{
 		{Method: "Rows", NameArgument: 1, ArgsArgument: 2},

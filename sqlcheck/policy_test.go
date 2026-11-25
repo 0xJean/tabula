@@ -32,11 +32,11 @@ func TestPolicyClassificationDiagnostics(t *testing.T) {
 		_, _, err := ClassifyPolicies(nil, []PolicyRule{rule})
 		require.Error(t, err)
 	}
-	checkOnly := Policy{PolicyID: PolicyID{Relation{"docs", "items"}, "insert_scope"}, Command: "INSERT", Roles: []string{"PUBLIC"}, Check: "(scope = current_setting('app.tenant', true))"}
-	shapeGuard := Policy{PolicyID: PolicyID{Relation{"docs", "items"}, "shape"}, Command: "ALL", Roles: []string{"PUBLIC"}, Using: "(amount >= 0)", Check: "(amount >= 0)"}
+	checkOnly := Policy{PolicyID: PolicyID{Relation{"docs", "items"}, "insert_scope"}, Command: "INSERT", Roles: []string{"PUBLIC"}, Check: "(scope = current_setting('example.scope', true))"}
+	shapeGuard := Policy{PolicyID: PolicyID{Relation{"docs", "items"}, "shape"}, Command: "ALL", Roles: []string{"PUBLIC"}, Using: "(size >= 0)", Check: "(size >= 0)"}
 	classes, f, err = ClassifyPolicies([]Policy{checkOnly, shapeGuard}, []PolicyRule{
-		{Name: "scope", Roles: []string{"PUBLIC"}, Expression: `app\.tenant`},
-		{Name: "shape", Roles: []string{"PUBLIC"}, NotExpression: `app\.tenant`},
+		{Name: "scope", Roles: []string{"PUBLIC"}, Expression: `example\.scope`},
+		{Name: "shape", Roles: []string{"PUBLIC"}, NotExpression: `example\.scope`},
 	})
 	require.NoError(t, err)
 	require.Empty(t, f)
@@ -51,6 +51,12 @@ func TestInferredPolicyAccess(t *testing.T) {
 		{"UPDATE docs.items SET id=$1, stamp=pg_catalog.now(), flag=true WHERE true", []string{"UPDATE"}},
 		{"UPDATE docs.items SET id=$1::pg_catalog.int4, note=coalesce(note, 'x')", []string{"UPDATE", "SELECT"}},
 		{"UPDATE docs.items SET id=extract(epoch FROM pg_catalog.now())::int4 WHERE scope IS NOT DISTINCT FROM $1 RETURNING id", []string{"UPDATE", "SELECT"}},
+		{"UPDATE docs.items SET flag=$1::int IS DISTINCT FROM $2::int", []string{"UPDATE"}},
+		{"DELETE FROM docs.items WHERE extract(epoch FROM $1::timestamp) > 0", []string{"DELETE"}},
+		{"UPDATE docs.items SET note=trim(both ' ' FROM $1::text)", []string{"UPDATE"}},
+		{"UPDATE docs.items SET note=trim(trailing ' ' FROM note)", []string{"UPDATE", "SELECT"}},
+		{"UPDATE docs.items SET id=extract(epoch FROM stamp)", []string{"UPDATE", "SELECT"}},
+		{"UPDATE docs.items SET id=epoch", []string{"UPDATE", "SELECT"}},
 		{"SELECT id FROM docs.items WHERE scope IS DISTINCT FROM $1 AND scope IS NOT DISTINCT FROM $2 FOR UPDATE", []string{"SELECT", "UPDATE"}},
 		{"DELETE FROM docs.items WHERE true", []string{"DELETE"}},
 		{"SELECT 1", nil}, {"VALUES (1)", nil}, {"TABLE docs.items", []string{"SELECT"}},

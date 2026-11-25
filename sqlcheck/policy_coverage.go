@@ -183,6 +183,9 @@ func readsColumn(tokens []pgstmt.Token) bool {
 	sym := func(i int, value string) bool {
 		return i >= 0 && i < len(tokens) && tokens[i] == (pgstmt.Token{Kind: pgstmt.Symbol, Text: value})
 	}
+	word := func(i int, value string) bool {
+		return i >= 0 && i < len(tokens) && tokens[i] == (pgstmt.Token{Kind: pgstmt.Word, Text: value})
+	}
 	for i := 0; i < len(tokens); i++ {
 		if !isID(i) {
 			continue
@@ -195,9 +198,18 @@ func readsColumn(tokens []pgstmt.Token) bool {
 			continue
 		}
 		if i == start && tokens[i].Kind == pgstmt.Word {
+			if sym(i-1, "(") && !sym(i-3, ".") {
+				if word(i-2, "extract") && word(i+1, "from") {
+					continue // The field in EXTRACT(field FROM value) is a unit.
+				}
+				if word(i-2, "trim") && (word(i, "both") || word(i, "leading") || word(i, "trailing")) {
+					continue
+				}
+			}
 			switch tokens[i].Text {
 			case "null", "true", "false", "default", "current_date", "current_time", "current_timestamp", "current_user", "localtime", "localtimestamp",
-				"and", "or", "not", "is", "in", "like", "ilike", "between", "case", "when", "then", "else", "end", "array", "returning":
+				"and", "or", "not", "is", "in", "like", "ilike", "between", "case", "when", "then", "else", "end", "array", "returning",
+				"distinct", "from", "for":
 				continue
 			}
 		}

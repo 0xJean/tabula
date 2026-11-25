@@ -2283,12 +2283,13 @@ type SQLRoutineMethod struct {
 	Schema       string `json:",omitempty"`
 	SetReturning bool   `json:",omitempty"`
 }
-    SQLRoutineMethod matches a method call that invokes a PostgreSQL
-    routine by name and positional argument slice rather than raw SQL text.
-    NameArgument and ArgsArgument are zero-based parameter positions after the
-    method receiver. Schema defaults to "public". When SetReturning is true,
-    static calls emit SELECT * FROM <schema>.<name>($1, ...); otherwise SELECT
-    <schema>.<name>($1, ...).
+    SQLRoutineMethod matches a method call that invokes a PostgreSQL routine by
+    name and positional argument slice rather than raw SQL text. NameArgument
+    and ArgsArgument are zero-based positions of fixed parameters after the
+    receiver. A nil or dense slice literal supplies the arity. Trailing variadic
+    result destinations do not affect it. Schema defaults to "public". When
+    SetReturning is true, static calls emit SELECT * FROM <schema>.<name>($1,
+    ...); otherwise SELECT <schema>.<name>($1, ...).
 
 type SQLSite struct {
 	ID, File         string
@@ -2318,6 +2319,9 @@ type Statement struct {
     and command list for complex statements when checking structural policy
     coverage. NoAccess marks a reviewed complex statement (such as a SECURITY
     DEFINER routine call) that touches no caller-context RLS relations.
+    Coverage rejects an assertion that conflicts with inferred table access.
+    The reviewer checks dependencies inside routines and other SQL outside the
+    inference rules.
 
 ```
 

@@ -15,7 +15,9 @@ import (
 // Statement is application-owned SQL. Access supplies the complete relation and
 // command list for complex statements when checking structural policy coverage.
 // NoAccess marks a reviewed complex statement (such as a SECURITY DEFINER
-// routine call) that touches no caller-context RLS relations.
+// routine call) that touches no caller-context RLS relations. Coverage rejects
+// an assertion that conflicts with inferred table access. The reviewer checks
+// dependencies inside routines and other SQL outside the inference rules.
 type Statement struct {
 	Name     string
 	SQL      string

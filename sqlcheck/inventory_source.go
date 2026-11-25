@@ -64,17 +64,46 @@ func (s inventorySource) literalSliceLen(expr ast.Expr) (int, bool) {
 	if _, isSlice := t.Underlying().(*types.Slice); !isSlice {
 		return 0, false
 	}
+	// Type checking has already rejected duplicate indices. The literal is
+	// dense exactly when every element lands inside the first len(Elts) slots.
+	var index int64
 	for _, elt := range lit.Elts {
-		if _, keyed := elt.(*ast.KeyValueExpr); keyed {
+		if kv, keyed := elt.(*ast.KeyValueExpr); keyed {
+			v := s.info.Types[kv.Key].Value
+			if v == nil {
+				return 0, false
+			}
+			index, ok = constant.Int64Val(constant.ToInt(v))
+			if !ok {
+				return 0, false
+			}
+		}
+		if index < 0 || index >= int64(len(lit.Elts)) {
 			return 0, false
 		}
+		index++
 	}
 	return len(lit.Elts), true
 }
 
-func compileRoutineMethods(methods map[[2]string]SQLMethod, list []SQLRoutineMethod) (map[[2]string]SQLRoutineMethod, error) {
-	out := make(map[[2]string]SQLRoutineMethod, len(list))
-	for _, m := range list {
+type registeredSQLMethod struct {
+	SQLMethod
+	routine *SQLRoutineMethod
+}
+
+func compileSQLMethods(raw []SQLMethod, routines []SQLRoutineMethod) (map[[2]string]registeredSQLMethod, error) {
+	out := make(map[[2]string]registeredSQLMethod, len(raw)+len(routines))
+	for _, m := range raw {
+		if m.Receiver == "" || m.Method == "" || m.Argument < 0 {
+			return nil, fmt.Errorf("invalid SQL method %+v", m)
+		}
+		k := [2]string{m.Receiver, m.Method}
+		if _, dup := out[k]; dup {
+			return nil, fmt.Errorf("duplicate SQL method %v", k)
+		}
+		out[k] = registeredSQLMethod{SQLMethod: m}
+	}
+	for _, m := range routines {
 		if m.Schema == "" {
 			m.Schema = "public"
 		}
@@ -82,15 +111,51 @@ func compileRoutineMethods(methods map[[2]string]SQLMethod, list []SQLRoutineMet
 			return nil, fmt.Errorf("invalid SQL routine method %+v", m)
 		}
 		k := [2]string{m.Receiver, m.Method}
-		if _, dup := methods[k]; dup {
+		if _, dup := out[k]; dup {
 			return nil, fmt.Errorf("duplicate SQL method %v", k)
 		}
-		if _, dup := out[k]; dup {
-			return nil, fmt.Errorf("duplicate SQL routine method %v", k)
-		}
-		out[k] = m
+		out[k] = registeredSQLMethod{SQLMethod{m.Receiver, m.Method, m.NameArgument}, &m}
 	}
 	return out, nil
+}
+
+func (s inventorySource) methodSite(m registeredSQLMethod, node *ast.SelectorExpr, sel *types.Selection, call *ast.CallExpr) (SQLSite, []ast.Expr) {
+	site := SQLSite{Receiver: m.Receiver, Method: m.Method, Dynamic: true}
+	if call == nil {
+		return site, []ast.Expr{node}
+	}
+	args := call.Args
+	if sel.Kind() == types.MethodExpr && len(args) > 0 {
+		args = args[1:]
+	}
+	if m.Argument >= len(args) {
+		return site, []ast.Expr{node}
+	}
+	expr := args[m.Argument]
+	value, known := s.constantString(expr)
+	if m.routine == nil {
+		site.SQL, site.Dynamic = value, !known
+		return site, []ast.Expr{expr}
+	}
+	rm := m.routine
+	if rm.ArgsArgument >= len(args) {
+		return site, []ast.Expr{node}
+	}
+	argSlice := args[rm.ArgsArgument]
+	// A variadic input position is not the wrapper's fixed database-argument
+	// slice. Other variadic parameters, such as result destinations, are fine.
+	sig := sel.Obj().Type().(*types.Signature)
+	fixed := sig.Params().Len()
+	if sig.Variadic() {
+		fixed--
+	}
+	if known && value != "" && !strings.ContainsRune(value, 0) && max(m.Argument, rm.ArgsArgument) < fixed {
+		if n, ok := s.literalSliceLen(argSlice); ok {
+			site.SQL = routineSQL(rm.Schema, value, n, rm.SetReturning)
+			site.Dynamic = false
+		}
+	}
+	return site, []ast.Expr{expr, argSlice}
 }
 
 func routineSQL(schema, name string, arity int, setReturning bool) string {
@@ -201,7 +266,7 @@ func singleInitializers(files []*ast.File, info *types.Info) map[types.Object]as
 			case *ast.AssignStmt:
 				for i, e := range x.Lhs {
 					var v ast.Expr
-					if x.Tok == token.DEFINE && len(x.Rhs) == len(x.Lhs) {
+					if id, ok := e.(*ast.Ident); ok && x.Tok == token.DEFINE && info.Defs[id] != nil && len(x.Rhs) == len(x.Lhs) {
 						v = x.Rhs[i]
 					}
 					record(e, v)

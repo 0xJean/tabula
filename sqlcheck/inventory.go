@@ -36,7 +36,9 @@ type SQLMethod struct {
 
 // SQLRoutineMethod matches a method call that invokes a PostgreSQL routine by
 // name and positional argument slice rather than raw SQL text. NameArgument and
-// ArgsArgument are zero-based parameter positions after the method receiver.
+// ArgsArgument are zero-based positions of fixed parameters after the receiver.
+// A nil or dense slice literal supplies the arity. Trailing variadic result
+// destinations do not affect it.
 // Schema defaults to "public". When SetReturning is true, static calls emit
 // SELECT * FROM <schema>.<name>($1, ...); otherwise SELECT <schema>.<name>($1, ...).
 type SQLRoutineMethod struct {
@@ -160,18 +162,7 @@ type buildPackage struct {
 // Escaping function or method values are flagged accordingly.
 func CollectSQL(ctx context.Context, cfg InventoryConfig) (SQLInventory, error) {
 	var out SQLInventory
-	methods := make(map[[2]string]SQLMethod)
-	for _, m := range cfg.Methods {
-		k := [2]string{m.Receiver, m.Method}
-		if m.Receiver == "" || m.Method == "" || m.Argument < 0 {
-			return out, fmt.Errorf("invalid SQL method %+v", m)
-		}
-		if _, ok := methods[k]; ok {
-			return out, fmt.Errorf("duplicate SQL method %v", k)
-		}
-		methods[k] = m
-	}
-	routines, err := compileRoutineMethods(methods, cfg.RoutineMethods)
+	methods, err := compileSQLMethods(cfg.Methods, cfg.RoutineMethods)
 	if err != nil {
 		return out, err
 	}
@@ -179,7 +170,7 @@ func CollectSQL(ctx context.Context, cfg InventoryConfig) (SQLInventory, error) 
 	if cfg.AuditSecurityCalls {
 		allTargets = append(allTargets, DefaultSecurityCallTargets()...)
 	}
-	if len(methods) == 0 && len(routines) == 0 && len(allTargets) == 0 {
+	if len(methods) == 0 && len(allTargets) == 0 {
 		return out, fmt.Errorf("specify at least one SQL method or call target")
 	}
 	targets, err := compileCallTargets(allTargets)
@@ -232,7 +223,7 @@ func CollectSQL(ctx context.Context, cfg InventoryConfig) (SQLInventory, error) 
 	}
 	seen := map[string]bool{}
 	for _, p := range selected {
-		sites, callSites, err := p.inventory(ctx, root, exports, methods, routines, targets)
+		sites, callSites, err := p.inventory(ctx, root, exports, methods, targets)
 		if err != nil {
 			return out, err
 		}
@@ -329,8 +320,7 @@ func (p buildPackage) inventory(
 	ctx context.Context,
 	root string,
 	exports map[string]string,
-	methods map[[2]string]SQLMethod,
-	routines map[[2]string]SQLRoutineMethod,
+	methods map[[2]string]registeredSQLMethod,
 	targets compiledCallTargets,
 ) ([]SQLSite, []CallSite, error) {
 	fset := token.NewFileSet()
@@ -456,49 +446,9 @@ func (p buildPackage) inventory(
 						m, ok = methods[[2]string{sigRecvName, node.Sel.Name}]
 					}
 					if ok {
-						site := SQLSite{File: rel, Line: pos.Line, Method: m.Method, Receiver: m.Receiver, Dynamic: true}
-						var expr ast.Expr = node
-						if c := selectorCalls[node]; c != nil {
-							i := m.Argument
-							if sel.Kind() == types.MethodExpr {
-								i++
-							}
-							if i < len(c.Args) {
-								expr = c.Args[i]
-								if sVal, ok := source.constantString(expr); ok {
-									site.SQL = sVal
-									site.Dynamic = false
-								}
-							}
-						}
-						addSite(owner, site, expr)
-					}
-
-					// 1b. Registered SQL routine methods.
-					rm, ok := routines[[2]string{recvName, node.Sel.Name}]
-					if !ok && sigRecvName != "" {
-						rm, ok = routines[[2]string{sigRecvName, node.Sel.Name}]
-					}
-					if ok {
-						site := SQLSite{File: rel, Line: pos.Line, Method: rm.Method, Receiver: rm.Receiver, Dynamic: true}
-						idExprs := []ast.Expr{node}
-						if c := selectorCalls[node]; c != nil {
-							offset := 0
-							if sel.Kind() == types.MethodExpr {
-								offset = 1
-							}
-							nameIdx, argsIdx := rm.NameArgument+offset, rm.ArgsArgument+offset
-							if max(nameIdx, argsIdx) < len(c.Args) {
-								idExprs = []ast.Expr{c.Args[nameIdx], c.Args[argsIdx]}
-								name, nameOK := source.constantString(c.Args[nameIdx])
-								arity, argsOK := source.literalSliceLen(c.Args[argsIdx])
-								if nameOK && name != "" && !strings.ContainsRune(name, 0) && !c.Ellipsis.IsValid() && argsOK {
-									site.SQL = routineSQL(rm.Schema, name, arity, rm.SetReturning)
-									site.Dynamic = false
-								}
-							}
-						}
-						addSite(owner, site, idExprs...)
+						site, exprs := source.methodSite(m, node, sel, selectorCalls[node])
+						site.File, site.Line = rel, pos.Line
+						addSite(owner, site, exprs...)
 					}
 
 					// 2. Built-in View.DefineQuery / View.TryDefineQuery static site recognition.
