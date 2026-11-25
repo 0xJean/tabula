@@ -28,10 +28,19 @@ func TestPolicyClassificationDiagnostics(t *testing.T) {
 	_, f, err = ClassifyPolicies([]Policy{p}, rules[:1])
 	require.NoError(t, err)
 	require.Len(t, f, 3)
-	for _, rule := range []PolicyRule{{}, {Name: "bad", Roles: []string{"r", "r"}}, {Name: "bad", Using: "("}, {Name: "bad", Check: "["}, {Name: "bad", Command: "NO"}, {Name: "bad", Entries: []PolicyID{id, id}}} {
+	for _, rule := range []PolicyRule{{}, {Name: "bad", Roles: []string{"r", "r"}}, {Name: "bad", Using: "("}, {Name: "bad", Check: "["}, {Name: "bad", Expression: "("}, {Name: "bad", NotExpression: "["}, {Name: "bad", Command: "NO"}, {Name: "bad", Entries: []PolicyID{id, id}}} {
 		_, _, err := ClassifyPolicies(nil, []PolicyRule{rule})
 		require.Error(t, err)
 	}
+	checkOnly := Policy{PolicyID: PolicyID{Relation{"docs", "items"}, "insert_scope"}, Command: "INSERT", Roles: []string{"PUBLIC"}, Check: "(scope = current_setting('app.tenant', true))"}
+	shapeGuard := Policy{PolicyID: PolicyID{Relation{"docs", "items"}, "shape"}, Command: "ALL", Roles: []string{"PUBLIC"}, Using: "(amount >= 0)", Check: "(amount >= 0)"}
+	classes, f, err = ClassifyPolicies([]Policy{checkOnly, shapeGuard}, []PolicyRule{
+		{Name: "scope", Roles: []string{"PUBLIC"}, Expression: `app\.tenant`},
+		{Name: "shape", Roles: []string{"PUBLIC"}, NotExpression: `app\.tenant`},
+	})
+	require.NoError(t, err)
+	require.Empty(t, f)
+	require.Equal(t, []PolicyClass{{checkOnly.PolicyID, "scope"}, {shapeGuard.PolicyID, "shape"}}, classes)
 }
 
 func TestInferredPolicyAccess(t *testing.T) {
@@ -41,6 +50,8 @@ func TestInferredPolicyAccess(t *testing.T) {
 	}{
 		{"UPDATE docs.items SET id=$1, stamp=pg_catalog.now(), flag=true WHERE true", []string{"UPDATE"}},
 		{"UPDATE docs.items SET id=$1::pg_catalog.int4, note=coalesce(note, 'x')", []string{"UPDATE", "SELECT"}},
+		{"UPDATE docs.items SET id=extract(epoch FROM pg_catalog.now())::int4 WHERE scope IS NOT DISTINCT FROM $1 RETURNING id", []string{"UPDATE", "SELECT"}},
+		{"SELECT id FROM docs.items WHERE scope IS DISTINCT FROM $1 AND scope IS NOT DISTINCT FROM $2 FOR UPDATE", []string{"SELECT", "UPDATE"}},
 		{"DELETE FROM docs.items WHERE true", []string{"DELETE"}},
 		{"SELECT 1", nil}, {"VALUES (1)", nil}, {"TABLE docs.items", []string{"SELECT"}},
 		{"SELECT note FROM docs.items AS i FOR SHARE", []string{"SELECT", "UPDATE"}},
@@ -126,7 +137,13 @@ func TestMatrixRejectsAmbiguousExpectations(t *testing.T) {
 	require.ErrorContains(t, m.validate(), "unknown denial")
 	m.Scopes["a"] = map[string]string{"role": "x"}
 	require.ErrorContains(t, m.validate(), "custom GUC")
-	for _, work := range []RoleStatements{nil, {"": {{Name: "one", SQL: "SELECT 1"}}}, {"r": {}}, {"r": {{Name: "one", SQL: "SELECT 1; SELECT 2"}}}, {"r": {{Name: "one", SQL: "SELECT 1"}, {Name: "one", SQL: "SELECT 2"}}}} {
+	for _, work := range []RoleStatements{nil, {"": {{Name: "one", SQL: "SELECT 1"}}}, {"r": {}}, {"r": {{Name: "one", SQL: "SELECT 1; SELECT 2"}}}, {"r": {{Name: "one", SQL: "SELECT 1"}, {Name: "one", SQL: "SELECT 2"}}}, {"r": {{Name: "one", SQL: "SELECT * FROM f()", NoAccess: true, Access: []PolicyAccess{{"docs.items", "SELECT"}}}}}} {
 		require.Error(t, work.validate())
 	}
+	inv := SQLInventory{Sites: []SQLSite{{ID: "fn", SQL: "SELECT * FROM f()"}}}
+	bound, err := inv.BindRoles(map[string]SQLBinding{"fn": {Roles: []string{"r"}, NoAccess: true}})
+	require.NoError(t, err)
+	require.True(t, bound["r"][0].NoAccess)
+	_, err = inv.BindRoles(map[string]SQLBinding{"fn": {Roles: []string{"r"}, NoAccess: true, Access: []PolicyAccess{{"docs.items", "SELECT"}}}})
+	require.ErrorContains(t, err, "NoAccess")
 }

@@ -43,8 +43,8 @@ func inferAccess(query string) ([]PolicyAccess, error) {
 		case "select", "join", "using", "with", "table", "union", "intersect", "except":
 			return nil, needsAccess
 		case "from":
-			if op == "select" && depth > 0 {
-				continue // e.g. substring(note FROM 1 FOR 3)
+			if depth > 0 || isDistinctFrom(word, i) {
+				continue // e.g. substring(note FROM 1 FOR 3), extract(epoch FROM ts), a IS [NOT] DISTINCT FROM b
 			}
 			if from >= 0 || op != "select" && op != "delete" {
 				return nil, needsAccess
@@ -170,6 +170,10 @@ func inferAccess(query string) ([]PolicyAccess, error) {
 	return out, nil
 }
 
+func isDistinctFrom(word func(int) string, i int) bool {
+	return word(i-1) == "distinct" && (word(i-2) == "is" || word(i-2) == "not" && word(i-3) == "is")
+}
+
 // readsColumn conservatively recognizes references in simple DML expressions.
 // Function names and casts name catalog objects rather than row inputs.
 func readsColumn(tokens []pgstmt.Token) bool {
@@ -222,6 +226,12 @@ func CheckPolicyCoverage(ctx context.Context, db *sql.DB, work RoleStatements) (
 		}
 		for _, s := range stmts {
 			auto, err := inferAccess(s.SQL)
+			if s.NoAccess {
+				if len(auto) > 0 {
+					findings = append(findings, fmt.Sprintf("%s/%s: NoAccess cannot override inferred table access", role, s.Name))
+				}
+				continue
+			}
 			if err != nil && len(s.Access) == 0 {
 				findings = append(findings, fmt.Sprintf("%s/%s: %v", role, s.Name, err))
 				continue

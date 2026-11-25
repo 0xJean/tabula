@@ -8,9 +8,12 @@ import (
 
 // PolicyRule matches the conjunction of its nonempty fields. Roles is an exact
 // set; Using and Check are Go regular expressions over server-deparsed SQL.
-// Entries, when present, restricts the rule to registered policy identities.
+// Expression and NotExpression match (or exclude) the combined USING and WITH
+// CHECK predicates (Using + "\n" + Check). Entries, when present, restricts the
+// rule to registered policy identities.
 type PolicyRule struct {
 	Name, Command, Using, Check string
+	Expression, NotExpression   string `json:",omitempty"`
 	Permissive                  *bool
 	Roles                       []string
 	Entries                     []PolicyID
@@ -31,9 +34,9 @@ type PolicyClass struct {
 func ClassifyPolicies(policies []Policy, rules []PolicyRule) ([]PolicyClass, []string, error) {
 	type rule struct {
 		PolicyRule
-		using, check        *regexp.Regexp
-		schema, table, name *regexp.Regexp
-		entries             map[PolicyID]bool
+		using, check, expr, notExpr *regexp.Regexp
+		schema, table, name         *regexp.Regexp
+		entries                     map[PolicyID]bool
 	}
 	var compiled []rule
 	names := map[string]bool{}
@@ -53,6 +56,17 @@ func ClassifyPolicies(policies []Policy, rules []PolicyRule) ([]PolicyClass, []s
 		c, err := regexp.Compile(r.Check)
 		if err != nil {
 			return nil, nil, err
+		}
+		exprRE, err := regexp.Compile(r.Expression)
+		if err != nil {
+			return nil, nil, err
+		}
+		var notExprRE *regexp.Regexp
+		if r.NotExpression != "" {
+			notExprRE, err = regexp.Compile(r.NotExpression)
+			if err != nil {
+				return nil, nil, err
+			}
 		}
 		var selectors [3]*regexp.Regexp
 		for i, pattern := range []string{r.SchemaPattern, r.TablePattern, r.NamePattern} {
@@ -81,18 +95,19 @@ func ClassifyPolicies(policies []Policy, rules []PolicyRule) ([]PolicyClass, []s
 			entries[id] = false
 			registered[id] = true
 		}
-		compiled = append(compiled, rule{r, u, c, selectors[0], selectors[1], selectors[2], entries})
+		compiled = append(compiled, rule{r, u, c, exprRE, notExprRE, selectors[0], selectors[1], selectors[2], entries})
 	}
 	var classes []PolicyClass
 	var findings []string
 	for _, p := range policies {
 		var matches []string
 		roles := slices.Sorted(slices.Values(p.Roles))
+		combined := p.Using + "\n" + p.Check
 		for _, r := range compiled {
 			if r.Command != "" && r.Command != p.Command || r.Permissive != nil && *r.Permissive != p.Permissive || len(r.Roles) > 0 && !slices.Equal(r.Roles, roles) {
 				continue
 			}
-			if !r.using.MatchString(p.Using) || !r.check.MatchString(p.Check) || !r.schema.MatchString(p.Schema) || !r.table.MatchString(p.Table) || !r.name.MatchString(p.Name) {
+			if !r.using.MatchString(p.Using) || !r.check.MatchString(p.Check) || !r.expr.MatchString(combined) || (r.notExpr != nil && r.notExpr.MatchString(combined)) || !r.schema.MatchString(p.Schema) || !r.table.MatchString(p.Table) || !r.name.MatchString(p.Name) {
 				continue
 			}
 			if r.UnregisteredOnly && registered[p.PolicyID] {

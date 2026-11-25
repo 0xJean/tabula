@@ -196,6 +196,17 @@ func TestAuthorizationWorkflow(t *testing.T) {
 	findings, err = CheckPolicyCoverage(ctx, db, RoleStatements{reader: {cte}})
 	require.NoError(t, err)
 	require.Empty(t, findings)
+	srf := Statement{Name: "definer_srf", SQL: "SELECT * FROM " + ns + ".f(1)"}
+	findings, err = CheckPolicyCoverage(ctx, db, RoleStatements{reader: {srf}})
+	require.NoError(t, err)
+	require.Len(t, findings, 1)
+	srf.NoAccess = true
+	findings, err = CheckPolicyCoverage(ctx, db, RoleStatements{reader: {srf}})
+	require.NoError(t, err)
+	require.Empty(t, findings)
+	findings, err = CheckPolicyCoverage(ctx, db, RoleStatements{reader: {{Name: "bad_no_access", SQL: "SELECT id FROM " + tbl, NoAccess: true}}})
+	require.NoError(t, err)
+	require.Contains(t, strings.Join(findings, " "), "NoAccess cannot override")
 
 	matrix := RLSMatrix{Roles: []string{reader, writer}, Scopes: map[string]map[string]string{"a": {"example.scope": "a"}, "b": {"example.scope": "b"}}, Statements: map[string]BehaviorStatement{"read": {SQL: "SELECT id,note FROM " + tbl}, "write": {SQL: ins.SQL, Args: []any{3, "a"}}}}
 	a, b, note := "1", "2", "two"

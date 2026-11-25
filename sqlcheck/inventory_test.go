@@ -166,3 +166,87 @@ func captions(d *Alias, p Panel, s Shadow, c Copy) {
 	}
 	require.Equal(t, []int{9, 10, 11}, lines)
 }
+
+func TestCollectSQL_RoutineMethodsAndLocalConcatenations(t *testing.T) {
+	t.Setenv("GOWORK", "off")
+	dir := t.TempDir()
+	write := func(name, data string) {
+		path := filepath.Join(dir, name)
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0700))
+		require.NoError(t, os.WriteFile(path, []byte(data), 0600))
+	}
+	write("go.mod", "module example.test/routines\n\ngo 1.26\n")
+	write("api/session.go", `package api
+import "context"
+type Session struct{}
+func (*Session) Query(ctx context.Context, sql string) {}
+func (*Session) Rows(ctx context.Context, name string, args []any) {}
+func (*Session) Call(ctx context.Context, op, name string, args []any) {}
+type Caller interface { Rows(context.Context, string, []any) }
+`)
+	write("calls.go", `package calls
+import (
+	"context"
+	"example.test/routines/api"
+)
+const fnName = "list_items"
+var pkgVar = "FROM mutable"
+func run(ctx context.Context, s *api.Session, iface api.Caller, dynName string, dynArgs []any) {
+	from := "FROM items"
+	where := " WHERE active"
+	s.Query(ctx, "SELECT id " + from + where)
+	s.Query(ctx, "SELECT id " + pkgVar)
+	reassigned := "FROM items"
+	reassigned = "FROM other"
+	s.Query(ctx, "SELECT id " + reassigned)
+
+	s.Rows(ctx, fnName, []any{1, "a"})
+	iface.Rows(ctx, "zero_args", nil)
+	(*api.Session).Call(s, ctx, "op", "scalar_fn", []any{42})
+	s.Rows(ctx, dynName, []any{1})
+	s.Rows(ctx, fnName, dynArgs)
+	s.Rows(ctx, fnName, []any{2: "sparse"})
+	escaped := s.Rows
+	_ = escaped
+}
+`)
+	cfg := InventoryConfig{
+		Dir:     dir,
+		Methods: []SQLMethod{{Receiver: "example.test/routines/api.Session", Method: "Query", Argument: 1}},
+		RoutineMethods: []SQLRoutineMethod{
+			{Receiver: "example.test/routines/api.Session", Method: "Rows", NameArgument: 1, ArgsArgument: 2, SetReturning: true},
+			{Receiver: "example.test/routines/api.Caller", Method: "Rows", NameArgument: 1, ArgsArgument: 2, Schema: "app", SetReturning: true},
+			{Receiver: "example.test/routines/api.Session", Method: "Call", NameArgument: 2, ArgsArgument: 3},
+		},
+	}
+	inv, err := CollectSQL(t.Context(), cfg)
+	require.NoError(t, err)
+	var staticSQL []string
+	var dynCount int
+	for _, s := range inv.Sites {
+		if s.Dynamic {
+			dynCount++
+		} else {
+			staticSQL = append(staticSQL, s.SQL)
+		}
+	}
+	require.ElementsMatch(t, []string{
+		"SELECT id FROM items WHERE active",
+		`SELECT * FROM "public"."list_items"($1, $2)`,
+		`SELECT * FROM "app"."zero_args"()`,
+		`SELECT "public"."scalar_fn"($1)`,
+	}, staticSQL)
+	require.Equal(t, 6, dynCount)
+	require.Len(t, inv.Findings, 6)
+
+	for _, bad := range []SQLRoutineMethod{
+		{Method: "Rows", NameArgument: 1, ArgsArgument: 2},
+		{Receiver: "r", NameArgument: 1, ArgsArgument: 2},
+		{Receiver: "r", Method: "Rows", NameArgument: 1, ArgsArgument: 1},
+		{Receiver: "r", Method: "Rows", NameArgument: -1, ArgsArgument: 2},
+		{Receiver: "example.test/routines/api.Session", Method: "Query", NameArgument: 1, ArgsArgument: 2},
+	} {
+		_, err := CollectSQL(t.Context(), InventoryConfig{Dir: dir, Methods: cfg.Methods, RoutineMethods: []SQLRoutineMethod{bad}})
+		require.Error(t, err)
+	}
+}

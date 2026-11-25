@@ -1,10 +1,13 @@
 package sqlcheck
 
 import (
+	"fmt"
 	"go/ast"
 	"go/constant"
 	"go/token"
 	"go/types"
+	"strconv"
+	"strings"
 )
 
 type inventorySource struct {
@@ -13,16 +16,93 @@ type inventorySource struct {
 }
 
 func (s inventorySource) constantString(expr ast.Expr) (string, bool) {
-	value := s.info.Types[expr].Value
-	if id, ok := ast.Unparen(expr).(*ast.Ident); ok && value == nil {
-		if v, ok := s.info.Uses[id].(*types.Var); ok && v.Pkg() != nil && v.Parent() != v.Pkg().Scope() {
-			value = s.info.Types[s.initializers[v]].Value
-		}
-	}
-	if value == nil || value.Kind() != constant.String {
+	return s.evalString(expr, 0)
+}
+
+func (s inventorySource) evalString(expr ast.Expr, depth int) (string, bool) {
+	if expr == nil || depth > 32 {
 		return "", false
 	}
-	return constant.StringVal(value), true
+	expr = ast.Unparen(expr)
+	if value := s.info.Types[expr].Value; value != nil && value.Kind() == constant.String {
+		return constant.StringVal(value), true
+	}
+	switch x := expr.(type) {
+	case *ast.Ident:
+		if v, ok := s.info.Uses[x].(*types.Var); ok && v.Pkg() != nil && v.Parent() != v.Pkg().Scope() {
+			return s.evalString(s.initializers[v], depth+1)
+		}
+	case *ast.BinaryExpr:
+		if x.Op == token.ADD {
+			left, ok := s.evalString(x.X, depth+1)
+			if !ok {
+				return "", false
+			}
+			right, ok := s.evalString(x.Y, depth+1)
+			if !ok {
+				return "", false
+			}
+			return left + right, true
+		}
+	}
+	return "", false
+}
+
+func (s inventorySource) literalSliceLen(expr ast.Expr) (int, bool) {
+	expr = ast.Unparen(expr)
+	if id, ok := expr.(*ast.Ident); ok && s.info.Uses[id] == types.Universe.Lookup("nil") {
+		return 0, true
+	}
+	lit, ok := expr.(*ast.CompositeLit)
+	if !ok {
+		return 0, false
+	}
+	t := s.info.TypeOf(lit)
+	if t == nil {
+		return 0, false
+	}
+	if _, isSlice := t.Underlying().(*types.Slice); !isSlice {
+		return 0, false
+	}
+	for _, elt := range lit.Elts {
+		if _, keyed := elt.(*ast.KeyValueExpr); keyed {
+			return 0, false
+		}
+	}
+	return len(lit.Elts), true
+}
+
+func compileRoutineMethods(methods map[[2]string]SQLMethod, list []SQLRoutineMethod) (map[[2]string]SQLRoutineMethod, error) {
+	out := make(map[[2]string]SQLRoutineMethod, len(list))
+	for _, m := range list {
+		if m.Schema == "" {
+			m.Schema = "public"
+		}
+		if m.Receiver == "" || m.Method == "" || m.NameArgument < 0 || m.ArgsArgument < 0 || m.NameArgument == m.ArgsArgument || strings.ContainsRune(m.Schema, 0) {
+			return nil, fmt.Errorf("invalid SQL routine method %+v", m)
+		}
+		k := [2]string{m.Receiver, m.Method}
+		if _, dup := methods[k]; dup {
+			return nil, fmt.Errorf("duplicate SQL method %v", k)
+		}
+		if _, dup := out[k]; dup {
+			return nil, fmt.Errorf("duplicate SQL routine method %v", k)
+		}
+		out[k] = m
+	}
+	return out, nil
+}
+
+func routineSQL(schema, name string, arity int, setReturning bool) string {
+	holders := make([]string, arity)
+	for i := range holders {
+		holders[i] = "$" + strconv.Itoa(i+1)
+	}
+	call := quoteIdent(schema) + "." + quoteIdent(name) + "(" + strings.Join(holders, ", ") + ")"
+	if setReturning {
+		return "SELECT * FROM " + call
+	}
+	return "SELECT " + call
 }
 
 // Follow direct declarations and Table.Bind through single-assignment handles.
