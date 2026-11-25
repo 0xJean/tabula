@@ -17,6 +17,11 @@ func (e readOnlyPolicyError) Error() string { return string(e) }
 func (readOnlyPolicyError) Unwrap() error   { return ErrReadOnly }
 
 const (
+	// ErrCommit marks an error returned by a runner's top-level Commit call.
+	// A lost acknowledgement can leave the outcome unknown. The underlying
+	// driver error and SQLSTATE remain available to determine a known rejection.
+	ErrCommit staticError = "transaction commit failed (outcome may be unknown)"
+
 	// Write-guard and optimistic concurrency sentinel errors (used when
 	// ErrorPolicy leaves the corresponding slot nil).
 	ErrConflict           staticError = "row conflict or lost update"

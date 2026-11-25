@@ -44,7 +44,8 @@ func quoteIdent(ident string) string {
 // exposing the raw transaction. Overlapping statements or savepoint requests
 // on the transaction return tabula.ErrSessionBusy, including inside Each.
 type Session[S any] struct {
-	mu *statementLock // shared by handles on the same transaction
+	statements tabula.StatementGuard
+	mu         *statementLock // shared by handles on the same transaction
 	readQueries
 	tx       *sql.Tx
 	scope    S
@@ -201,17 +202,24 @@ func wrapReadOnlyErr(err error) error {
 	return err
 }
 
-func (s *Session[S]) check(query string) error {
-	if s.readRole {
-		if err := tabula.GuardReadOnly(query); err != nil {
-			return err
-		}
-	} else if s.readOnly {
-		if err := tabula.GuardReadOnlyTransaction(query); err != nil {
-			return err
-		}
+func (s *Session[S]) check(method, query string) error {
+	if err := s.checkReadOnly(query); err != nil {
+		return err
+	}
+	if err := s.statements.Check(method, query); err != nil {
+		return err
 	}
 	return s.readQueries.check(query)
+}
+
+func (s *Session[S]) checkReadOnly(query string) error {
+	if s.readRole {
+		return tabula.GuardReadOnly(query)
+	}
+	if s.readOnly {
+		return tabula.GuardReadOnlyTransaction(query)
+	}
+	return nil
 }
 
 func (s readQueries) check(query string) error {
@@ -229,7 +237,7 @@ func (s *Session[S]) Exec(ctx context.Context, query string, args ...any) (int64
 		}
 		return 0, tabula.ErrReadOnly
 	}
-	if err := s.check(query); err != nil {
+	if err := s.check("Exec", query); err != nil {
 		return 0, err
 	}
 	if err := s.tryLock(); err != nil {
@@ -254,7 +262,11 @@ func (s *Session[S]) Exec(ctx context.Context, query string, args ...any) (int64
 
 // Scan executes a single-row query and scans into dest.
 func (s *Session[S]) Scan(ctx context.Context, query string, args []any, dest ...any) error {
-	if err := s.check(query); err != nil {
+	return s.scan(ctx, "Scan", query, args, dest...)
+}
+
+func (s *Session[S]) scan(ctx context.Context, method, query string, args []any, dest ...any) error {
+	if err := s.check(method, query); err != nil {
 		return err
 	}
 	if err := s.tryLock(); err != nil {
@@ -279,13 +291,13 @@ func (s *Session[S]) Returning(ctx context.Context, query string, args []any, de
 		}
 		return tabula.ErrReadOnly
 	}
-	return s.Scan(ctx, query, args, dest...)
+	return s.scan(ctx, "Returning", query, args, dest...)
 }
 
 // Each streams rows through decode. The runner closes an unfinished cursor at
 // transaction or savepoint exit. A resumed consumer receives ErrSessionClosed.
 func (s *Session[S]) Each(ctx context.Context, query string, args []any, decode func(func(...any) error) error) error {
-	if err := s.check(query); err != nil {
+	if err := s.check("Each", query); err != nil {
 		return err
 	}
 	if err := s.tryLock(); err != nil {

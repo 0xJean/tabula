@@ -49,6 +49,8 @@ if err := reg.Seal(key); err != nil {
 
 For single-scope applications, pass `stdsql.NoScopePolicy()` and `stdsql.RunnerOptions{}` with scope type `struct{}`.
 
+A runner that accepts only application reads and writes can set `RunnerOptions.Statements`. For example, allow `select` on `Scan` and `Each`, and `insert`, `update` and `delete` on `Exec` and `Returning`. Set `RequireReturning` when a write that scans a row must explicitly return one. The runner checks each statement locally, including descriptor-generated SQL. [Configuration example](MIGRATION.md#from-v035-to-v036)
+
 ## 2. Single-table CRUD with optimistic locking and `once` protection
 
 ```go

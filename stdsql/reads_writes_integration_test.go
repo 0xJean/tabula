@@ -41,8 +41,25 @@ func TestScopedReadsAndBatchWrites(t *testing.T) {
 		IsUnscoped: func(s tenant) bool { return s == "all" },
 	}, stdsql.RunnerOptions{
 		Unscoped: stdsql.UnscopedReadWrite,
+		Statements: tabula.StatementPolicy{
+			Read: []string{"select"}, Write: []string{"insert", "update", "delete"}, RequireReturning: true,
+		},
 	})
 	require.NoError(t, err)
+	require.NoError(t, router.Within(ctx, "a", func(ctx context.Context, s *stdsql.Session[tenant]) error {
+		for _, args := range [][]any{nil, {1}} {
+			query := "SELECT 1; SELECT 2"
+			if len(args) > 0 {
+				query = "SELECT $1::int; SELECT 2"
+			}
+			_, err := s.Exec(ctx, query, args...)
+			require.ErrorIs(t, err, tabula.ErrForbiddenStatement)
+			require.ErrorIs(t, s.Scan(ctx, query, args, new(int)), tabula.ErrForbiddenStatement)
+			require.ErrorIs(t, s.Each(ctx, query, args, nil), tabula.ErrForbiddenStatement)
+			require.ErrorIs(t, s.Returning(ctx, query, args, new(int)), tabula.ErrForbiddenStatement)
+		}
+		return s.Scan(ctx, "SELECT 1", nil, new(int))
+	}))
 	plan := tbl.DefineUpsert("up", tabula.UpsertSpec{Conflict: []string{"id"}, Update: []string{"attempts"}, Returning: []string{"updated"}})
 	skip := tbl.DefineUpsert("skip", tabula.UpsertSpec{Conflict: []string{"id"}})
 	within := func(scope tenant, fn func(*tabula.Rows[job, int64, tenant]) error) error {
@@ -103,6 +120,24 @@ func TestScopedReadsAndBatchWrites(t *testing.T) {
 		return nil
 	}))
 
+	require.NoError(t, within("a", func(r *tabula.Rows[job, int64, tenant]) error {
+		row := job{ID: 5, Tenant: "a"}
+		require.NoError(t, r.Insert(ctx, &row))
+		row.Attempts = 7
+		require.NoError(t, r.SaveReturning(ctx, &row, "attempts"))
+		changed, err := r.Upsert(ctx, plan, &row)
+		require.NoError(t, err)
+		require.True(t, changed)
+		got, ok, err := tabula.Max[int](ctx, r, "attempts", nil)
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Equal(t, 7, got)
+		list, _, err := r.List(ctx, nil, tabula.Listing{Size: 10})
+		require.NoError(t, err)
+		require.NotEmpty(t, list)
+		return r.Delete(ctx, row.ID)
+	}))
+
 	direct, err := stdsql.Direct("postgres", dsn, stdsql.ScopePolicy[tenant]{})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = direct.Close() })
@@ -112,6 +147,7 @@ func TestScopedReadsAndBatchWrites(t *testing.T) {
 	direct.SetConnMaxIdleTime(time.Minute)
 	require.Equal(t, 4, direct.Stats().MaxOpenConnections)
 	sess := direct.Session("a")
+	require.ErrorIs(t, sess.Scan(ctx, "SELECT 1; SELECT 2", nil), tabula.ErrReadOnly)
 	r := tbl.Bind(sess)
 	got, err := r.Get(ctx, 3)
 	require.NoError(t, err)

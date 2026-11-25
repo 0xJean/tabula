@@ -30,6 +30,11 @@ package stays decoupled from any application domain or error taxonomy.
 CONSTANTS
 
 const (
+	// ErrCommit marks an error returned by a runner's top-level Commit call.
+	// A lost acknowledgement can leave the outcome unknown. The underlying
+	// driver error and SQLSTATE remain available to determine a known rejection.
+	ErrCommit staticError = "transaction commit failed (outcome may be unknown)"
+
 	// Write-guard and optimistic concurrency sentinel errors (used when
 	// ErrorPolicy leaves the corresponding slot nil).
 	ErrConflict           staticError = "row conflict or lost update"
@@ -101,6 +106,14 @@ func GuardReadOnlyTransaction(query string) error
     Calls to set_config require a literal unprotected key. Savepoints remain
     available. Use it with an established PostgreSQL READ ONLY transaction to
     enforce access inside functions and other indirect SQL.
+
+func GuardSingleStatement(query string) error
+    GuardSingleStatement admits one SELECT, VALUES, TABLE, INSERT, UPDATE,
+    DELETE, MERGE or WITH in UTF-8 SQL, optionally terminated by a semicolon.
+    It rejects incomplete lexical boundaries and ordinary string quote escapes
+    whose interpretation depends on connection settings. Use bind parameters or
+    explicit E strings for those values. PostgreSQL validates the grammar and
+    authorizes data and function access.
 
 func InTransaction(ctx context.Context) bool
     InTransaction reports whether ctx carries an active transaction marker from
@@ -1134,6 +1147,21 @@ const (
 	SortAsc
 	SortDesc
 )
+type StatementGuard struct {
+	// Has unexported fields.
+}
+    StatementGuard is the compiled, immutable policy for driver sessions and
+    offline inventories. Its zero value leaves SQL unrestricted.
+
+func (g StatementGuard) Check(method, query string) error
+    Check applies the guard to a Scan, Each, Exec or Returning call. A rejection
+    matches ErrForbiddenStatement. The read methods reject SELECT INTO and
+    data-modifying CTEs. Access inside functions still depends on database
+    grants.
+
+func (g StatementGuard) Enabled() bool
+    Enabled reports whether the guard enforces statement boundaries.
+
 type StatementMeta struct {
 	Key        string
 	Table      string
@@ -1163,6 +1191,25 @@ func Quiet() StatementOption
 func Secret() StatementOption
     Secret forces every bound argument of a registered statement to be redacted
     as "[redacted]" even when LogConfig.Values is ValuesAllowed.
+
+type StatementPolicy struct {
+	Read, Write []string
+	// RequireReturning requires an outer RETURNING clause for the Returning method.
+	RequireReturning bool
+}
+    StatementPolicy lists the PostgreSQL commands accepted by session methods.
+    Read applies to Scan and Each (select, table, values). Write applies to
+    Exec and Returning (insert, update, delete, merge). Include with in the
+    corresponding list to permit a WITH prefix on an otherwise allowed command.
+    Command names are case-insensitive. With an active policy, an empty list
+    permits no methods on that side. Empty lists with RequireReturning false
+    leave both sides unrestricted.
+
+func (p StatementPolicy) Compile(singleStatement bool) (StatementGuard, error)
+    Compile validates the allowlists and takes a copy of their contents.
+    A configured policy implies singleStatement. With only singleStatement
+    enabled, the guard checks statement boundaries without restricting the
+    method.
 
 type Table[T, K, S any] struct {
 	descriptor[T, S]
@@ -1568,7 +1615,8 @@ func NewRunner[S any](pool *pgxpool.Pool, policy ScopePolicy[S], opts RunnerOpti
 
 func (r *Runner[S]) Within(ctx context.Context, scope S, fn func(context.Context, *Session[S]) error) error
     Within runs fn in a read-write transaction. On a ReadOnly runner, Within
-    fails closed with tabula.ErrReadOnly before BEGIN.
+    fails closed with tabula.ErrReadOnly before BEGIN. A top-level commit error
+    matches tabula.ErrCommit and wraps its driver cause.
 
 func (r *Runner[S]) WithinRaw(ctx context.Context, scope S, fn func(context.Context, *RawSession[S]) error) error
     WithinRaw runs fn with a *RawSession[S] exposing Tx() pgx.Tx. Requires
@@ -1609,6 +1657,10 @@ func (r *Runner[S]) WithinWith(ctx context.Context, scope S, runOpts RunOptions[
     an optional BeforeCommit step executed on a fresh handle before COMMIT.
 
 type RunnerOptions struct {
+	// SingleStatement restricts session SQL to one data statement before driver I/O.
+	SingleStatement bool
+	// Statements restricts commands by method and implies SingleStatement when configured.
+	Statements  tabula.StatementPolicy
 	Role        string
 	RequireRole bool
 	ReadOnly    bool
@@ -2456,7 +2508,8 @@ func NewRunner[S any](db *sql.DB, policy ScopePolicy[S], opts RunnerOptions) (*R
 
 func (r *Runner[S]) Within(ctx context.Context, scope S, fn func(context.Context, *Session[S]) error) error
     Within runs fn in a read-write transaction with the database default
-    isolation. On a ReadOnly runner, Within returns tabula.ErrReadOnly before
+    isolation. A top-level commit error matches tabula.ErrCommit and wraps its
+    driver cause. On a ReadOnly runner, Within returns tabula.ErrReadOnly before
     BEGIN.
 
 func (r *Runner[S]) WithinIsolation(ctx context.Context, scope S, level sql.IsolationLevel, fn func(context.Context, *Session[S]) error) error
@@ -2502,6 +2555,10 @@ func (r *Runner[S]) WithinWith(ctx context.Context, scope S, runOpts RunOptions[
     an optional BeforeCommit step executed on a fresh handle before COMMIT.
 
 type RunnerOptions struct {
+	// SingleStatement restricts session SQL to one data statement before driver I/O.
+	SingleStatement bool
+	// Statements restricts commands by method and implies SingleStatement when configured.
+	Statements tabula.StatementPolicy
 	// Role selects the transaction-local PostgreSQL role during setup when non-empty.
 	Role string
 	// RequireRole fails NewRunner when Role is empty.
