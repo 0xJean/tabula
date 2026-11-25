@@ -22,6 +22,18 @@ import (
 
 const loginWorkerEnv = "TABULA_FIXTURE_LOGIN_WORKER"
 
+func loginClient(t *testing.T, database string, login *postgresfixture.LoginRole) *sql.DB {
+	t.Helper()
+	cfg, err := pq.NewConfig(os.Getenv("TABULA_TEST_DSN"))
+	require.NoError(t, err)
+	cfg.Database, cfg.User, cfg.Password = database, login.Name(), login.Password()
+	connector, err := pq.NewConnectorConfig(cfg)
+	require.NoError(t, err)
+	db := sql.OpenDB(connector)
+	t.Cleanup(func() { _ = db.Close() })
+	return db
+}
+
 func loginFixture(t *testing.T) (*sql.DB, postgresfixture.Fixture) {
 	t.Helper()
 	dsn := os.Getenv("TABULA_TEST_DSN")
@@ -55,12 +67,7 @@ func TestLoginWorker(t *testing.T) {
 		}
 		database, ok := strings.CutPrefix(command, "connect ")
 		require.True(t, ok)
-		cfg, err := pq.NewConfig(os.Getenv("TABULA_TEST_DSN"))
-		require.NoError(t, err)
-		cfg.Database, cfg.User, cfg.Password = database, role.Name(), role.Password()
-		connector, err := pq.NewConnectorConfig(cfg)
-		require.NoError(t, err)
-		db := sql.OpenDB(connector)
+		db := loginClient(t, database, role)
 		var user string
 		err = db.QueryRowContext(ctx, "SELECT current_user").Scan(&user)
 		require.NoError(t, db.Close())
@@ -125,7 +132,7 @@ func TestProcessLoginLifetime(t *testing.T) {
 	member := fmt.Sprintf("tabula_member_%d", time.Now().UnixNano())
 	_, err := admin.ExecContext(ctx, "CREATE ROLE "+member)
 	require.NoError(t, err)
-	t.Cleanup(func() { _, _ = f.PruneLoginRoles(context.Background()); _, _ = admin.Exec("DROP ROLE " + member) })
+	t.Cleanup(func() { _, _ = f.PruneLoginRoles(context.Background(), 0); _, _ = admin.Exec("DROP ROLE " + member) })
 	plan := postgresfixture.Installation{Revision: t.TempDir(), Base: []byte("SELECT 1")}
 	clone, err := f.Clone(ctx, plan)
 	require.NoError(t, err)
@@ -160,14 +167,15 @@ func TestProcessLoginLifetime(t *testing.T) {
 	// Advisory locks are database-local while login roles are cluster-wide.
 	other, err := (&installer{dsn: os.Getenv("TABULA_TEST_DSN")}).open(clone.Name())
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = other.Close() })
 	foreign := postgresfixture.Fixture{Admin: other}
-	names, err := foreign.PruneLoginRoles(ctx)
+	names, err := foreign.PruneLoginRoles(ctx, 0)
 	require.NoError(t, err)
 	require.NotContains(t, names, a)
 	require.NotContains(t, names, b)
 	require.True(t, roleExists(t, admin, a))
 	require.True(t, roleExists(t, admin, b))
-	names, err = f.PruneLoginRoles(ctx)
+	names, err = f.PruneLoginRoles(ctx, 0)
 	require.NoError(t, err)
 	require.NotContains(t, names, a)
 	require.NotContains(t, names, b)
@@ -194,7 +202,7 @@ func TestProcessLoginLifetime(t *testing.T) {
 	}
 	done := make(chan result, 2)
 	for range 2 {
-		go func() { names, err := f.PruneLoginRoles(ctx); done <- result{names, err} }()
+		go func() { names, err := f.PruneLoginRoles(ctx, 0); done <- result{names, err} }()
 	}
 	var removed []string
 	for range 2 {
@@ -218,7 +226,7 @@ func TestLoginReleaseRetriesWithoutDroppingObjects(t *testing.T) {
 	execSQL("CREATE TABLE " + name + " (id int)")
 	t.Cleanup(func() {
 		_, _ = admin.Exec("DROP TABLE IF EXISTS " + name)
-		_, _ = f.PruneLoginRoles(context.Background())
+		_, _ = f.PruneLoginRoles(context.Background(), 0)
 	})
 	r, err := f.AcquireLoginRole(ctx, postgresfixture.LoginRoleOptions{Inherit: true})
 	require.NoError(t, err)
@@ -263,10 +271,42 @@ func TestFixturePruneReapsLoginAndKeepsUnmarkedRole(t *testing.T) {
 	require.NoError(t, admin.QueryRowContext(ctx, "SELECT current_database()").Scan(&database))
 	_, err = admin.ExecContext(ctx, "GRANT CONNECT ON DATABASE "+pq.QuoteIdentifier(database)+" TO "+r.Name())
 	require.NoError(t, err)
+	client := loginClient(t, database, r)
 	stopped, cancel := context.WithCancel(ctx)
 	cancel()
 	require.ErrorIs(t, r.Release(stopped), context.Canceled)
 	require.True(t, roleExists(t, admin, r.Name()))
+	readMark := func() string {
+		t.Helper()
+		var mark string
+		require.NoError(t, admin.QueryRowContext(ctx, "SELECT pg_catalog.shobj_description(oid,'pg_authid') FROM pg_catalog.pg_roles WHERE rolname=$1", r.Name()).Scan(&mark))
+		return mark
+	}
+	base := readMark()
+	_, err = f.Prune(ctx, time.Hour)
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(readMark(), base+" idle "))
+	_, err = f.Prune(ctx, time.Hour)
+	require.NoError(t, err)
+	require.True(t, roleExists(t, admin, r.Name()))
+
+	// An observed client clears the clock, even when an immediate sweep is requested.
+	clientKey := "client:" + r.Name()
+	_, err = client.ExecContext(ctx, "SELECT pg_catalog.pg_advisory_lock(pg_catalog.hashtextextended($1,0))", clientKey)
+	require.NoError(t, err)
+	_, err = f.PruneLoginRoles(ctx, 0)
+	require.NoError(t, err)
+	require.Equal(t, base, readMark())
+	require.NoError(t, client.Close())
+	_, err = admin.ExecContext(ctx, "SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended($1,0))", clientKey)
+	require.NoError(t, err)
+
+	_, err = f.Prune(ctx, time.Hour)
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(readMark(), base+" idle "))
+	// Backdate this fixture's mark to exercise expiry without an hour-long test.
+	_, err = admin.ExecContext(ctx, "COMMENT ON ROLE "+pq.QuoteIdentifier(r.Name())+" IS "+pq.QuoteLiteral(base+" idle 2000-01-01T00:00:00Z"))
+	require.NoError(t, err)
 	databases, err := f.Prune(ctx, time.Hour)
 	require.NoError(t, err)
 	require.NotContains(t, databases, r.Name())

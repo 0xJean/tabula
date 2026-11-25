@@ -5,7 +5,7 @@ v1.0 a minor version may contain breaking changes.
 
 ## v0.3.8 — unreleased
 
-- A disposable `postgresfixture.Fixture` can acquire a distinct login per test process. A dedicated maintenance session protects it while business connections are idle. `Release` and `Prune` remove ended leases and residual database CONNECT grants. [Fixture login lifecycle](docs/DESIGN-v0.3.8.md)
+- A disposable `postgresfixture.Fixture` can acquire a distinct login per test process. A dedicated maintenance session protects it while business connections are idle. `Release` removes the login and its database CONNECT grants at shutdown. `Prune` reclaims abandoned logins after the configured idle interval. [Fixture login lifecycle](docs/DESIGN-v0.3.8.md)
 
 ## v0.3.7 — 2026-11-25
 

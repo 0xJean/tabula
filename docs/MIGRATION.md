@@ -4,7 +4,7 @@ Follow this guide when upgrading an application to v0.3. For the full surface af
 
 ## Process fixture logins in v0.3.8
 
-A test suite that shares a disposable PostgreSQL cluster can acquire a login per process. Use `Fixture.AcquireLoginRole` with the exact member roles, retain the handle for the suite lifetime, and grant CONNECT to its generated name on each clone. Close the client pools, then call `Release` at suite shutdown. An explicit `Prune` on the same maintenance database also reaps roles left by interrupted workers. Its return value still lists database names. Use `PruneLoginRoles` to collect role names from a standalone login cleanup. [Example and connection requirements](AUTHORIZATION.md#process-login-roles)
+A test suite that shares a disposable PostgreSQL cluster can acquire a login per process. Use `Fixture.AcquireLoginRole` with the exact member roles, retain the handle for the suite lifetime, and grant CONNECT to its generated name on each clone. Close the client pools, then call `Release` at suite shutdown. An explicit `Prune` on the same maintenance database also reaps roles left by interrupted workers once they have been observed idle for maxIdle. Its return value still lists database names. Use `PruneLoginRoles` to collect role names from a standalone login cleanup. [Example and connection requirements](AUTHORIZATION.md#process-login-roles)
 
 ## From v0.3.6 to v0.3.7
 

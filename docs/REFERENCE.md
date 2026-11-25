@@ -1873,15 +1873,18 @@ func (f Fixture) Prune(ctx context.Context, maxIdle time.Duration, keep ...Insta
     of keep. Each database is dropped through Backend.Drop while holding the
     same advisory lock that Clone holds through the physical copy. Templates
     with missing or invalid last-use marks are kept. Prune returns the names
-    it dropped, including partial results if another drop failed. It also
-    reaps abandoned process logins. Its result contains only database names;
-    use PruneLoginRoles to run login cleanup alone and collect role names.
+    it dropped, including partial results if another drop failed. It also reaps
+    process logins observed idle for maxIdle. Its result contains only database
+    names; use PruneLoginRoles to run login cleanup alone and collect role
+    names.
 
-func (f Fixture) PruneLoginRoles(ctx context.Context) ([]string, error)
+func (f Fixture) PruneLoginRoles(ctx context.Context, maxIdle time.Duration) ([]string, error)
     PruneLoginRoles removes abandoned fixture logins from this maintenance
-    database's namespace, including logins with no surviving clone. It returns
-    the login names removed by this call and any cleanup errors. Fixture.Prune
-    also performs this cleanup when pruning databases.
+    database's namespace, including logins with no surviving clone. A positive
+    maxIdle starts at the first prune that observes both the lease and all
+    client sessions gone. Zero reclaims them immediately. It returns the names
+    removed by this call and any cleanup errors. Fixture.Prune applies its own
+    maxIdle.
 
 type Installation struct {
 	Revision   string

@@ -150,11 +150,16 @@ func createLogin(ctx context.Context, conn *sql.Conn, name, attrs, verifier stri
 		CROSS JOIN pg_catalog.pg_database d WHERE r.rolname=$1 AND d.datname=pg_catalog.current_database()`, name).Scan(&oid, &dbOID); err != nil {
 		return 0, err
 	}
-	mark := fmt.Sprintf("COMMENT ON ROLE %s IS '%s%d/%d'", name, loginMark, dbOID, oid)
-	if _, err = tx.ExecContext(ctx, mark); err != nil {
+	if err = commentLogin(ctx, tx, name, fmt.Sprintf("%s%d/%d", loginMark, dbOID, oid)); err != nil {
 		return 0, err
 	}
 	return oid, tx.Commit()
+}
+
+// Only validated fixture names, numeric OIDs and server timestamps enter marks.
+func commentLogin(ctx context.Context, tx *sql.Tx, name, mark string) error {
+	_, err := tx.ExecContext(ctx, "COMMENT ON ROLE "+quoteLoginIdent(name)+" IS '"+mark+"'")
+	return err
 }
 
 // Release removes the login and its direct database CONNECT grants. Close
@@ -183,7 +188,7 @@ func (r *LoginRole) Release(ctx context.Context) error {
 		}
 		defer func() { _ = conn.Close() }()
 	}
-	_, err := removeLogin(ctx, conn, loginCandidate{name: r.name, oid: l.oid}, false)
+	_, err := removeLogin(ctx, conn, loginCandidate{name: r.name, oid: l.oid}, nil)
 	l.released = err == nil
 	return err
 }

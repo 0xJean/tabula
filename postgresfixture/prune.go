@@ -65,7 +65,7 @@ func (c pruneCandidate) eligible(maxIdle time.Duration) bool {
 // advisory lock that Clone holds through the physical copy. Templates with
 // missing or invalid last-use marks are kept. Prune returns the names it
 // dropped, including partial results if another drop failed. It also reaps
-// abandoned process logins. Its result contains only database names; use
+// process logins observed idle for maxIdle. Its result contains only database names; use
 // PruneLoginRoles to run login cleanup alone and collect role names.
 func (f Fixture) Prune(ctx context.Context, maxIdle time.Duration, keep ...Installation) ([]string, error) {
 	if f.Admin == nil || f.Backend == nil {
@@ -87,7 +87,7 @@ func (f Fixture) Prune(ctx context.Context, maxIdle time.Duration, keep ...Insta
 		return nil, err
 	}
 	defer func() { _ = conn.Close() }()
-	_, loginErr := pruneLogins(ctx, conn)
+	_, loginErr := pruneLogins(ctx, conn, maxIdle)
 	candidates, err := pruneCandidates(ctx, conn)
 	if err != nil {
 		return nil, errors.Join(loginErr, err)
