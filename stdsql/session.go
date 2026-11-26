@@ -352,7 +352,7 @@ func (s readQueries) Each(ctx context.Context, query string, args []any, decode 
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		if err := decode(rows.Scan); err != nil {
-			return err
+			return callbackReadError(rows, err)
 		}
 	}
 	return wrapReadOnlyErr(rows.Err())

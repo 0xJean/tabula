@@ -61,7 +61,7 @@ func (q ReadSelect) checkGrouping(c *typedCompiler) ([]*fieldRef, bool, error) {
 	return fields, aggregate, nil
 }
 
-func (q ReadSelect) render(c *typedCompiler, owner *registration, sources []rowSource) (string, StatementShape, error) {
+func (q ReadSelect) render(c *typedCompiler, owner *registration, sources []rowSource, take *typedInput) (string, StatementShape, error) {
 	groups, aggregate, err := q.checkGrouping(c)
 	if err != nil {
 		return "", StatementShape{}, err
@@ -121,6 +121,11 @@ func (q ReadSelect) render(c *typedCompiler, owner *registration, sources []rowS
 		}
 		query += order
 	}
+	limit, err := renderSingleLimit(c, take)
+	if err != nil {
+		return "", StatementShape{}, err
+	}
+	query += limit
 	meta, err := c.readRequirements()
 	if err != nil {
 		return "", StatementShape{}, err

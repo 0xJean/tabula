@@ -314,6 +314,28 @@ tabula test-rls --config behavior.json
 
 Generate `statements.sql` from the tables and views used by the assigned roles. A missing descriptor or aggregate makes `inventory` exit with the affected site ID. Review each unregistered dynamic site and each extra grant before changing the application's grant declarations. [Full JSON examples and interpretation](AUTHORIZATION.md)
 
+## Physical sources with column grants
+
+This declaration permits a plan to update `rank` when it finds a matching key. A role with schema usage, `SELECT(id)` and `UPDATE(rank)` can execute it.
+
+```go
+type Item struct {
+	ID   int64 `db:"id,key"`
+	Rank int32 `db:"rank"`
+}
+items := tabula.DefinePlanSource(reg, tabula.TableSpec[Item, int64]{
+	Name: "public.items", RelationScope: tabula.Global(),
+	WriteMode: tabula.WriteUpdateOnly, UpdateColumns: []string{"rank"},
+})
+i := tabula.FromTable(items, "i", tabula.Global())
+id, rank := tabula.FieldOf(i, "id", tabula.Int8()), tabula.FieldOf(i, "rank", tabula.Int4())
+key, value := tabula.Input("id", tabula.Int8()), tabula.Input("value", tabula.Int4())
+change := tabula.DefineUpdateMany(tabula.RowsFrom(items, i), "change",
+	tabula.MutationSpec{RowFilter: tabula.RowFilter{Where: tabula.Eq(id.Expr(), key.Expr())}},
+	tabula.RowSet{Name: "rank", Assignments: []tabula.RowAssignment{tabula.Assign(rank, value.Expr())}})
+n, err := change.Bind(session).UpdateMany(ctx, "rank", nil, tabula.BindValue(key, 1), tabula.BindValue(value, 5))
+```
+
 ## Registered single-table reads and writes
 
 Declare a physical table and an output view at startup. This example uses
@@ -401,6 +423,62 @@ and one count per scope and predicate combination on ordinary reads. Enabling
 contributes its own shape. `TryDefineRows`, `TryDefineUpdateMany` and
 `TryDefineDeleteMany` return declaration errors before publishing the family.
 
+### Mapped table reads
+
+Map the physical descriptor once, then name an occurrence for each operand. A field resolves against the same table registration each time. Declare a shared catalog default for a named Go type or override a single column when constructing the layout.
+
+```go
+type GroupID string
+type Item struct {
+    ID    int64   `db:"id,key"`
+    Group GroupID `db:"group_id"`
+    Note  *string `db:"note"`
+}
+
+reg := q.NewRegistry(q.RegistryConfig[struct{}]{
+    Deny: q.DenyLegacySQL,
+    DefaultTypes: []q.TypeDefault{q.TypeMapping(pg.UUID[GroupID]())},
+})
+items := q.DefinePlanSource(reg, q.TableSpec[Item, int64]{Name: "public.items", RelationScope: q.ByRLS()})
+layout := q.MapTable(items)
+src := layout.As("i")
+group := q.MappedColumn[GroupID](layout, "group_id")
+key := group.Input("group")
+filter := q.RowFilter{Where: q.Eq(group.On(src.Rel()).Expr(), key.Expr())}
+
+plan := q.DefineTableRows(src, "items_by_group", q.RowsSpec{RowFilter: filter}, q.SelectAll())
+exists := q.DefineExists(src, "has_group", filter)
+value := q.BindValue(key, groupID)
+rows, err := plan.Bind(session).Find(ctx, q.RowChoice{}, value)
+if err != nil {
+    return err
+}
+found, err := exists.Bind(session).Exists(ctx, nil, value)
+```
+
+Here `q` denotes the root package and `pg` denotes `github.com/0xJean/tabula/pgtype`. Supply the request's `groupID` and handle each call's error before continuing. `SelectAll()` expands the table's declared fields. For a narrow read, pass `SelectColumns(field.On(src.Rel()).Column(), ...)`. The result has type `Item`, with unselected fields left at their Go zero values. A field requested by a predicate or an order still contributes its physical read grant. A self-join uses a second `layout.As("peer")` and the same field declarations on that occurrence.
+
+| Read method | Empty result | Multiple matches |
+| --- | --- | --- |
+| `One` | `ErrNotFound`, which matches `sql.ErrNoRows` | `ErrMultipleRows` |
+| `MaybeOne` | Zero value, false, nil | `ErrMultipleRows` |
+| `First` | `ErrNotFound` | First row under the declared ordering policy |
+| `MaybeFirst` | Zero value, false, nil | Same first row, true, nil |
+
+Use `ReadForms{Exact: true, First: OrderedFirst}` with a declared order to bound the read on the server. Exact calls take up to two rows to detect duplicates. First calls take one. With both enabled, the methods share one registered shape per filter, order and scope. Supply the order name in `RowChoice` and omit pagination fields. To take any row of an unordered read, explicitly declare `UnorderedFirst`. Joined reads opt in with `ReadSelect.WithForms` and their bound methods use the statement's fixed order.
+
+An unlocked, unpaged read can also call `One` or `MaybeOne` on its existing statement. It stops visiting rows at the second match. If PostgreSQL reports an error while the cursor closes, both drivers return that error with its SQLSTATE.
+
+### PostgreSQL types and binding values
+
+A layout first applies an explicit `ColumnType`, then checks for an exact registered Go type and finally uses a conventional built-in mapping. A nullable pointer may use its element's mapping. Declare named scalars, JSON, SQL arrays, enums and domains explicitly when the physical type is ambiguous. A table override can select `pg.Varchar(n)` to verify a length, or `pg.Varchar()` to check only the type OID. Select integer widths explicitly and use `pg.Numeric[string]()` to bind decimal text with its original precision.
+
+Use `pg.JSONB[V]()` or `pg.JSON[V]()` for JSON input. A Go string encodes as a JSON string. To supply serialized JSON, use `json.RawMessage`. A nil raw message binds SQL NULL and a raw message containing `null` binds JSON null. `pg.Bytea()` handles binary data. `pg.ArrayOf(element)` declares a PostgreSQL array and selects the configured driver array adapter.
+
+`BindValue` applies the slot's encoder once. Reuse the resulting binding for the data page, count, existence check or another session using the same slot. Built-in arrays and bytes preserve their input buffers. A custom `WithEncoder` function owns the stability of the value it returns. Keep its result independent of later changes to the caller's objects.
+
+A column mapping selects its PostgreSQL type and input encoder. Results use the table field's scan target. For a `time` or `timetz` result, a field scanner can accept `time.Time` from lib/pq and clock text from pgx, including PostgreSQL's `24:00` boundary. An interval field can use `sql.NullString` to receive interval text with either driver.
+
 ## Explicit joins
 
 Suppose `groups` and `jobs` are scoped table descriptors with bigint keys, and `out` is a view with `GroupID int64` and `JobID *int64`. Each call to `FromTable` creates a distinct occurrence. A self-join uses two occurrences of the same descriptor. Here the scope uses the named Go type `ScopeID` and the PostgreSQL type `bigint`.
@@ -428,6 +506,8 @@ rows, err := plan.Bind(session).Find(ctx, q.BindValue(keys, []int64{1, 2}))
 
 The right occurrence's scope and soft-delete conditions belong in `ON`. A group with only hidden jobs still produces one row with a nil job ID. A `Where` condition on the right occurrence filters the joined result after matching. To count visible jobs, project `CountOf(jobID.Expr())` and group by `groupID.Expr()`. Configure `RegistryConfig.ArrayArg` with `pqdriver.Array` for lib/pq, or use native slice encoding with pgx. An empty array matches zero rows.
 
+Column-scoped occurrences in a join share one scope parameter. Use the same PostgreSQL scope type throughout the query. If it has a custom encoder, reuse the same type declaration across occurrences or set `RegistryConfig.ScopeID` for the registry.
+
 ## Registered locks and functions
 
 These examples use `q` for the root package, a global `public.items` table and a one-column view named `entries` with an `int64` field tagged `db:"id"`. Configure the session adapter with the registry's `SQLAuthority()`. Execute locking reads inside a writable transaction.
@@ -446,7 +526,7 @@ choice := q.RowChoice{Order: "by_id", Page: q.FirstPage, Limit: 1}
 rows, err := locked.Bind(session).Find(ctx, choice, q.BindValue(key, int64(7)))
 ```
 
-This reads the first visible, available row at or above the bound key. `SkipLocked` moves past conflicting rows in the declared order. `NoWait` returns SQLSTATE `55P03` on conflict. `Wait` waits for acquisition. A locking plan registers data pages only. Grouped or aggregate projections and `WithExists` fail at declaration. `Count`, `List` and `Exists` return `ErrOperationDenied` before executing a statement.
+This reads the first visible, available row at or above the bound key. `SkipLocked` moves past conflicting rows in the declared order. `NoWait` returns SQLSTATE `55P03` on conflict. `Wait` waits for acquisition. For a single locking read, declare `OrderedFirst` to lock at most one row or `Exact` to check up to two matches. Grouped or aggregate projections and `WithExists` fail at declaration. `Count`, `List` and `Exists` return `ErrOperationDenied` before executing a statement.
 
 Column-scoped, RLS-enforced and soft-deleting tables use the same `RowsFrom` declaration for locking and ordinary reads. Pass `FieldOf(...).Column()` for a nonstandard scope or status type. Configured status values bind internally and are redacted. Boolean and timestamp markers use `= FALSE` and `IS NULL`.
 

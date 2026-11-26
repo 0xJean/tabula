@@ -67,7 +67,7 @@ func (c *typedCompiler) scopePredicate(src *occurrence, kind catalogType) (strin
 	if !c.params.scoped || src.scope != ByScopeColumn() {
 		return "", nil
 	}
-	if kind.goType == nil || kind.goType != src.scopeGoType || (c.scopeType.goType != nil && !sameSQLType(c.scopeType, kind)) {
+	if !matchesColumnType(src.scopeGoType, kind.goType) || (c.scopeType.goType != nil && !sameSQLType(c.scopeType, kind)) {
 		return "", fmt.Errorf("tabula: incompatible PostgreSQL type for scope column on %q", src.alias)
 	}
 	col := physicalColumn{src.table, src.scopeColumn}

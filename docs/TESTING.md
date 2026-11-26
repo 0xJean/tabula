@@ -46,6 +46,8 @@ TABULA_TEST_DSN='postgres://...' scripts/check.sh --all  # full gate including P
 
 The full gate also runs the workspace integration package in `testdata/integration`. It checks both drivers with minimum append and update grants, verifies registered plans, exercises serial inserts, and revokes individual column and sequence grants to check denials. It also checks callback ownership and exports real PostgreSQL statement failures through OpenTelemetry and structured logs.
 
+The typed read tests compare projected fields and PostgreSQL parameter types, exercise zero, one and multiple matching rows, and run existence checks under narrow column grants. They reuse a single binding across statements and separate sessions with both drivers.
+
 CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) additionally runs:
 
 - **Matrix**: Go `1.26.x` and `1.27.x` × PostgreSQL `14`, `15`, `16`, `17`

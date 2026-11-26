@@ -122,7 +122,7 @@ func FromTable[T, K, S any](t *Table[T, K, S], alias string, scope RelationScope
 		src.scopeSecret = t.cols[t.scope].secret
 		src.scopeGoType = t.cols[t.scope].goType
 	}
-	return Rel[T]{source: src, rows: func() (rowSource, error) { return tableRowSource(t, src, nil) }, column: func(name string) (column[T], bool) {
+	return Rel[T]{source: src, rows: func() (rowSource, error) { return tableRowSource(t, src, nil, nil) }, column: func(name string) (column[T], bool) {
 		i, ok := t.byName[name]
 		if !ok {
 			return column[T]{}, false
@@ -168,6 +168,10 @@ type Field[V any] struct {
 	kind PGType[V]
 }
 
+func matchesColumnType(field, value reflect.Type) bool {
+	return field != nil && value != nil && (field == value || field.Kind() == reflect.Pointer && field.Elem() == value)
+}
+
 // FieldOf resolves a descriptor column at definition time. The Go value type
 // must match. A pointer field may be read as its nullable element type.
 func FieldOf[R, V any](r Rel[R], name string, kind PGType[V]) Field[V] {
@@ -178,9 +182,8 @@ func FieldOf[R, V any](r Rel[R], name string, kind PGType[V]) Field[V] {
 	if !ok || !typedIdent(name) {
 		panic(fmt.Sprintf("tabula.FieldOf: unknown column %q", name))
 	}
-	match := c.goType == kind.id.goType || (c.goType.Kind() == reflect.Pointer && c.goType.Elem() == kind.id.goType)
-	if !match {
+	if !matchesColumnType(c.goType, kind.id.goType) {
 		panic(fmt.Sprintf("tabula.FieldOf: column %q holds %v, declared %v", name, c.goType, kind.id.goType))
 	}
-	return Field[V]{&fieldRef{r.source, name, kind.id, c.nullable, c.secret}, kind}
+	return Field[V]{ref: c.typedRef(r.source, kind.id), kind: kind}
 }

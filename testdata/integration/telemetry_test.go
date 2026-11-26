@@ -47,9 +47,10 @@ func databases(t *testing.T) (*sql.DB, *pgxpool.Pool) {
 // Inspect the public hook before the OpenTelemetry adapter receives it.
 type checkingTracer struct {
 	tabula.Tracer
-	t     *testing.T
-	count int
-	raw   bool
+	t          *testing.T
+	count      int
+	raw        bool
+	constraint string
 }
 
 func (p *checkingTracer) Start(ctx context.Context, info tabula.TraceInfo) (context.Context, func(int64, error)) {
@@ -62,6 +63,11 @@ func (p *checkingTracer) Start(ctx context.Context, info tabula.TraceInfo) (cont
 			require.EqualError(p.t, err, string(class))
 		}
 		require.NotEmpty(p.t, tabula.SQLState(err))
+		if p.raw && tabula.SQLState(err) == "23505" {
+			require.Equal(p.t, p.constraint, tabula.ConstraintName(err))
+		} else {
+			require.Empty(p.t, tabula.ConstraintName(err))
+		}
 		_, pqCause := errors.AsType[*pq.Error](err)
 		_, pgxCause := errors.AsType[*pgconn.PgError](err)
 		require.Equal(p.t, p.raw, pqCause || pgxCause)
@@ -73,7 +79,8 @@ func TestDatabaseErrorTelemetry(t *testing.T) {
 	db, pool := databases(t)
 	ctx := t.Context()
 	table := fmt.Sprintf("tabula_diag_%d", time.Now().UnixNano())
-	_, err := db.ExecContext(ctx, "CREATE TABLE "+table+" (label text UNIQUE, short varchar(2))")
+	constraint := table + "_Label"
+	_, err := db.ExecContext(ctx, "CREATE TABLE "+table+` (label text CONSTRAINT "`+constraint+`" UNIQUE, short varchar(2))`)
 	require.NoError(t, err)
 	t.Cleanup(func() { _, _ = db.Exec("DROP TABLE " + table) })
 	cases := []struct{ state, marker, query string }{
@@ -97,7 +104,7 @@ func TestDatabaseErrorTelemetry(t *testing.T) {
 					t.Cleanup(func() { _ = tp.Shutdown(context.Background()); _ = mp.Shutdown(context.Background()) })
 					metrics, err := oteltabula.NewMetrics(mp)
 					require.NoError(t, err)
-					tracer := &checkingTracer{Tracer: oteltabula.NewTracer(tp), t: t, raw: mode.raw}
+					tracer := &checkingTracer{Tracer: oteltabula.NewTracer(tp), t: t, raw: mode.raw, constraint: constraint}
 					cfg := tabula.RegistryConfig[struct{}]{
 						Tracer: tracer, Metrics: metrics, RawErrorDiagnostics: mode.raw,
 						Log: tabula.LogConfig{Logger: slog.New(slog.NewJSONHandler(&logs, nil)), Level: tabula.LogErrors, Values: tabula.ValuesNever},
@@ -202,6 +209,7 @@ func TestDatabaseErrorTelemetry(t *testing.T) {
 					for _, signal := range protected {
 						data, err := json.Marshal(signal)
 						require.NoError(t, err)
+						require.NotContains(t, string(data), constraint)
 						for _, tc := range cases {
 							require.NotContains(t, string(data), tc.marker)
 						}

@@ -59,7 +59,7 @@ func (site SQLSite) bindRowPlan(b SQLBinding, defs map[string][]tabula.Definitio
 		if prefix != "" && key != prefix && !strings.HasPrefix(key, prefix+".") {
 			continue
 		}
-		if !site.matchesTypedShape(key, plan, shape) {
+		if !site.matchesTypedShape(key, plan, shape, d) {
 			continue
 		}
 		selected[key] = true
@@ -147,20 +147,22 @@ func matchesRowMethod(key, plan, method string) bool {
 	}
 	_, rest, _ = strings.Cut(rest, ".")
 	form, _, _ := strings.Cut(rest, ".")
-	switch method {
+	switch strings.TrimPrefix(method, "Try") {
 	case "Count":
 		return form == "count"
-	case "Find", "DefineRead", "TryDefineRead":
+	case "Find":
 		return form == "data"
-	case "Exists":
+	case "DefineRead":
+		return form == "data" || boundedRowForm(form)
+	case "Exists", "DefineExists":
 		return form == "exists"
-	case "DefineRows", "TryDefineRows":
-		return form == "count" || form == "data" || form == "exists"
+	case "DefineRows", "DefineRowsWithForms", "DefineTableRows":
+		return form == "count" || form == "data" || form == "exists" || boundedRowForm(form)
 	case "List":
 		return form == "count" || form == "data"
-	case "UpdateMany", "DefineUpdateMany", "TryDefineUpdateMany":
+	case "UpdateMany", "DefineUpdateMany":
 		return form == "set"
-	case "DeleteMany", "DefineDeleteMany", "TryDefineDeleteMany":
+	case "DeleteMany", "DefineDeleteMany":
 		return form == "delete"
 	default:
 		return false
@@ -204,6 +206,13 @@ func (r RoleStatements) Readiness(role string) (ReadinessNeeds, error) {
 	return n, nil
 }
 
+// A registered physical source has a key and an explicitly empty grant list.
+// Views with unspecified grants keep their existing inventory diagnostics.
+func planSourceDefinition(d tabula.Definition) bool {
+	return d.Privileges != nil && len(d.Privileges) == 0 &&
+		slices.ContainsFunc(d.Columns, func(c tabula.DefinedColumn) bool { return c.Role == "key" })
+}
+
 // Typed grants use quoted physical names. Retain the table spelling callers
 // already use to look up grants on the same descriptor.
 func grantTableNames(defs []tabula.Definition) map[string]string {
@@ -211,12 +220,18 @@ func grantTableNames(defs []tabula.Definition) map[string]string {
 		return nil
 	}
 	names := make(map[string]string)
+	record := func(name string) {
+		obj, err := resolveReadinessItem(MissingRequirement{Kind: "TABLE", Object: name})
+		if err == nil {
+			names[quoteIdent(obj.Schema)+"."+quoteIdent(obj.Name)] = name
+		}
+	}
 	for _, d := range defs {
+		if planSourceDefinition(d) {
+			record(d.Name)
+		}
 		for _, grant := range d.Privileges {
-			obj, err := resolveReadinessItem(MissingRequirement{Kind: "TABLE", Object: grant.Table})
-			if err == nil {
-				names[quoteIdent(obj.Schema)+"."+quoteIdent(obj.Name)] = grant.Table
-			}
+			record(grant.Table)
 		}
 	}
 	return names

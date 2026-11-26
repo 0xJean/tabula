@@ -3,6 +3,13 @@
 All notable changes are listed here. The project follows semantic versioning; before
 v1.0 a minor version may contain breaking changes.
 
+## v0.4.2 — 2026-11-27
+
+- `DefinePlanSource` and `TryDefinePlanSource` register a physical table for typed plans. The declared plans determine its SQL and grants, including column-level updates and locking reads on composite keys. Legacy `Rows` calls return `ErrOperationDenied` before database I/O. [Physical plan sources](docs/AUTHORIZATION.md#physical-sources-for-typed-plans)
+- `MapTable` reuses physical field declarations and result decoders across query aliases. Set registry-wide Go type defaults with `TypeMapping` and override individual columns with `ColumnType`. `DefineTableRows` returns a full or partial table record. `DefineExists` registers just the boolean query. [Mapped table reads](docs/COOKBOOK.md#mapped-table-reads)
+- Single-table and joined reads support `One` and `MaybeOne` for exact cardinality. Opt in to `First` and `MaybeFirst` with an ordered or explicitly unordered bounded shape. Both optional methods distinguish an absent row from a present zero value. [Read forms](docs/MIGRATION.md#from-v041-to-v042)
+- The `pgtype` package supplies PostgreSQL types for typed columns and bindings. Built-in slice bindings preserve their contents across executions. `ConstraintName` extracts a structured constraint name from a wrapped driver error. [Type and binding examples](docs/COOKBOOK.md#postgresql-types-and-binding-values)
+
 ## v0.4.1 — 2026-11-26
 
 - `DefineRead` registers explicit inner, left and cross joins, including self-joins. A left join keeps right-side scope and live-row filters in its match condition. Each occurrence contributes its column grants and row-security requirements. [Explicit joins](docs/COOKBOOK.md#explicit-joins)

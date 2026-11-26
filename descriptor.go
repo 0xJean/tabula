@@ -9,12 +9,13 @@ import (
 
 // descriptor contains the compiled column set and a reference to its registry entry.
 type descriptor[T, S any] struct {
-	reg    *Registry[S]
-	name   string
-	cols   []column[T]
-	byName map[string]int
-	entry  *registration
-	fixed  map[string]*compiledShape
+	reg       *Registry[S]
+	name      string
+	cols      []column[T]
+	byName    map[string]int
+	entry     *registration
+	fixed     map[string]*compiledShape
+	plansOnly bool
 }
 
 func newDescriptor[T, S any](reg *Registry[S], name string) descriptor[T, S] {
@@ -56,6 +57,9 @@ func (d *descriptor[T, S]) Definition() Definition {
 // Statement registers hand-written SQL for verification and observation.
 // Keys are unique within a table or view.
 func (d *descriptor[T, S]) Statement(key, query string, opts ...StatementOption) string {
+	if d.plansOnly {
+		panic(ErrOperationDenied)
+	}
 	if d.reg != nil && d.reg.deny&DenyLegacySQL != 0 {
 		panic(ErrLegacySQL)
 	}
@@ -111,6 +115,9 @@ func (d *descriptor[T, S]) lookupMeta(query, action string) stmtMeta {
 }
 
 func (d *descriptor[T, S]) require(p DefinedPrivilege, err error) {
+	if d.plansOnly {
+		panic(ErrOperationDenied)
+	}
 	if err != nil {
 		panic(fmt.Sprintf("%s.Requires %s: %v", d.prefix(), d.name, err))
 	}

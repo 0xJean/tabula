@@ -18,6 +18,8 @@ Explicit joined reads apply each occurrence's declared scope and live-row policy
 
 ## Security Design Guarantees
 
+Tables declared with `DefinePlanSource` contribute only the privileges of their typed plans. Select narrow projections and bind the relevant read and mutation shapes to each PostgreSQL role. A mapped field retains its table registration and its occurrence in the query. Registry defaults select column types at declaration and grant no execution rights. [Physical sources and minimum grants](docs/AUTHORIZATION.md#physical-sources-for-typed-plans)
+
 - Registered physical row locks require writable transactions. Advisory locks require explicit transactions. Direct rejects both lock effects and function calls declared writable. Read declarations require a reviewed function body and a matching catalog contract. The executing role, server transaction mode and session guards apply to the call. [Role verification](docs/AUTHORIZATION.md#check-a-role-at-startup)
 
 - **Identifiers never come from untrusted input**: table, column, and sort identifiers are

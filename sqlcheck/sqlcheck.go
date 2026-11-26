@@ -236,8 +236,10 @@ type PrivilegeNeeds struct {
 }
 
 // CollectPrivilegeNeeds merges descriptor and typed-shape grants and reports
-// definitions with no explicit grants. Use RoleStatements.Readiness for a
-// role's selected shapes, including any-column, schema and RLS requirements.
+// definitions with unspecified grants. A plan source explicitly declares
+// zero baseline grants, including when all its reads belong to views.
+// Use RoleStatements.Readiness for a role's selected shapes, including
+// any-column, schema and RLS requirements.
 func CollectPrivilegeNeeds(defs []tabula.Definition) (PrivilegeNeeds, []string) {
 	n := PrivilegeNeeds{
 		Columns:     map[string]map[string]map[string]bool{},
@@ -257,7 +259,9 @@ func CollectPrivilegeNeeds(defs []tabula.Definition) (PrivilegeNeeds, []string) 
 			}
 		}
 		if len(grants) == 0 {
-			empty = append(empty, d.Name)
+			if !planSourceDefinition(d) {
+				empty = append(empty, d.Name)
+			}
 			continue
 		}
 		for _, p := range grants {

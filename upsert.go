@@ -58,6 +58,9 @@ func (t *Table[T, K, S]) DefineUpsert(key string, spec UpsertSpec, opts ...State
 // TryDefineUpsert validates spec and builds an UpsertPlan without recording it
 // in the Registry.
 func (t *Table[T, K, S]) TryDefineUpsert(key string, spec UpsertSpec, opts ...StatementOption) (*UpsertPlan[T, K, S], error) {
+	if t.plansOnly {
+		return nil, ErrOperationDenied
+	}
 	if t.reg == nil {
 		return nil, errors.New("tabula.Upsert " + t.name + ": table is not defined")
 	}

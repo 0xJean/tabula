@@ -5,6 +5,7 @@ This reference belongs to the same revision as the code. Start with the [integra
 
 - [tabula](#tabula)
 - [oteltabula](#oteltabula)
+- [pgtype](#pgtype)
 - [pgxdriver](#pgxdriver)
 - [postgresfixture](#postgresfixture)
 - [pqdriver](#pqdriver)
@@ -53,7 +54,8 @@ const (
 	ErrSessionClosed      staticError = "session is closed"
 	ErrCapabilityDenied   staticError = "operation denied by registry capability policy"
 
-	// ErrOperationDenied means the declared WriteMode forbids an operation or column.
+	// ErrOperationDenied means the table declaration forbids an operation or column,
+	// including legacy Rows methods on a source declared with DefinePlanSource.
 	ErrOperationDenied staticError = "operation denied by table write mode"
 
 	// ErrUnscopedRequiresReadOnly reports that UnscopedReadOnly denied access
@@ -76,6 +78,13 @@ const (
 	ErrInsufficientPrivilege staticError = "insufficient PostgreSQL privilege"
 	ErrCanceled              staticError = "statement canceled"
 )
+const (
+	// ErrNotFound means One or First found no matching result row.
+	// It also matches database/sql.ErrNoRows with errors.Is.
+	ErrNotFound notFoundError = "tabula: no matching result row"
+	// ErrMultipleRows means an exact read found a second result row.
+	ErrMultipleRows staticError = "tabula: more than one matching result row"
+)
 const ErrLegacySQL legacySQLDenial = "tabula: this operation requires a registered statement"
     ErrLegacySQL means the operation needs hand-written SQL or a shape that has
     not been registered. It also matches ErrCapabilityDenied.
@@ -95,6 +104,17 @@ func BindCallbackContext(ctx context.Context) (context.Context, func(context.Con
     BindCallbackContext marks a new runner callback and returns a check for its
     context and descendants. The check returns ErrCallbackContext for unrelated
     or detached contexts. It retains only the private identity.
+
+func ClassifyError(ctx context.Context, err error) (ErrorClass, error)
+    ClassifyError inspects ctx and err (by context cancellation or PostgreSQL
+    SQLSTATE) and returns its ErrorClass plus the matching tabula sentinel error
+    (nil for ClassOther).
+
+func ConstraintName(err error) string
+    ConstraintName returns the structured PostgreSQL constraint name from the
+    diagnostic selected by SQLState. It returns "" for a missing name or state.
+    It recognizes ConstraintName() string and the exported driver diagnostic
+    fields Constraint and ConstraintName. The database error text is untouched.
 
 func CountBy[V comparable, T, K, S any](ctx context.Context, rows *Rows[T, K, S], col string, where func(*Filter)) (map[V]int64, error)
     CountBy evaluates SELECT col, count(*) ... GROUP BY col over live rows
@@ -180,6 +200,11 @@ func JSON(p any) any
     JSON addresses a json/jsonb column held as any Go value (text in and out).
     NULL reads as the zero value; a nil pointer value writes NULL.
 
+func LoadSQLFiles(fsys fs.FS, dir string) (*SQLFiles, error)
+    LoadSQLFiles reads every `.sql` file under dir in fsys (recursively, keyed
+    by slash-separated paths relative to dir). Empty or missing directories
+    return an error.
+
 func MarkTransaction(ctx context.Context) context.Context
     MarkTransaction marks ctx as running inside an active runner transaction so
     nested runner entries (across both stdsql and pgxdriver) fail closed with
@@ -239,6 +264,56 @@ func Sum[V, T, K, S any](ctx context.Context, rows *Rows[T, K, S], col string, w
 func TagSQL(query, key string) string
     TagSQL prefixes query with a sanitized `/* tabula:<key> */ ` comment.
 
+func TryDefine[T, K, S any](r *Registry[S], spec TableSpec[T, K]) (*Table[T, K, S], error)
+    TryDefine validates spec and returns a compiled table without registering
+    it.
+
+func TryDefineAdvisoryLock[T, S any](view *View[T, S], key string, lock AdvisoryLock) (*AdvisoryLockPlan[T, S], error)
+    TryDefineAdvisoryLock registers the complete operation or returns an error.
+
+func TryDefineDeleteMany[T, S any](src RowSource[T, S], name string, spec MutationSpec) (*MutationPlan[T, S], error)
+    TryDefineDeleteMany atomically registers a predicate-based DELETE.
+
+func TryDefineExists[T, S any](src RowSource[T, S], name string, filter RowFilter) (*ExistsPlan[S], error)
+    TryDefineExists registers every allowed existence probe on the source table.
+    A rejected declaration publishes no shapes.
+
+func TryDefinePlanSource[T, K, S any](r *Registry[S], spec TableSpec[T, K]) (*Table[T, K, S], error)
+    TryDefinePlanSource returns a registered source ready for FromTable
+    and RowsFrom. An invalid spec returns an error and leaves the registry
+    untouched. WriteMode, ReadOnly, AllowDelete and UpdateColumns constrain the
+    plans. Order, GroupBy and Aggregates belong on the individual plans.
+
+func TryDefineRead[T, S any](out *View[T, S], name string, query ReadSelect, observe ...StatementOption) (*ReadPlan[T, S], error)
+    TryDefineRead registers every permitted scope variant together. No shape is
+    published when a declaration fails.
+
+func TryDefineRoutine[T, S, V any](view *View[T, S], key string, r *Routine[V], args ...RoutineArgument) (*RoutinePlan[T, S], error)
+    TryDefineRoutine registers the complete call or returns a declaration error.
+
+func TryDefineRows[T, R, S any](out *View[T, S], name string, src RowSource[R, S], spec RowsSpec, project ...Projection) (*RowsPlan[T, S], error)
+    TryDefineRows registers the complete read plan or returns an error without
+    publishing any shape. The projection covers the view in descriptor order.
+
+func TryDefineRowsWithForms[T, R, S any](out *View[T, S], name string, src RowSource[R, S], spec RowsSpec, forms ReadForms, project ...Projection) (*RowsPlan[T, S], error)
+    TryDefineRowsWithForms registers the data, summary and requested bounded
+    forms together. A rejected declaration publishes no shapes.
+
+func TryDefineTableRows[T, S any](src RowSource[T, S], name string, spec RowsSpec, columns TableSelection, forms ...ReadForms) (*RowsPlan[T, S], error)
+    TryDefineTableRows registers every shape of a table-backed read together.
+    An invalid source, selection or plan leaves the registry untouched.
+
+func TryDefineUpdateMany[T, S any](src RowSource[T, S], name string, spec MutationSpec, sets ...RowSet) (*MutationPlan[T, S], error)
+    TryDefineUpdateMany atomically registers a predicate-based UPDATE.
+
+func TryDefineView[T, S any](r *Registry[S], spec ViewSpec[T]) (*View[T, S], error)
+    TryDefineView validates v without recording it in r.
+
+func TryMapTable[T, K, S any](table *Table[T, K, S], overrides ...ColumnMapping) (*TableLayout[T, S], error)
+    TryMapTable checks column overrides and resolves conventional types. Fields
+    without a mapping can be omitted from a projection. A scope or soft-delete
+    field used by the source must have a mapping.
+
 func WithStatementMeta(ctx context.Context, meta StatementMeta) context.Context
     WithStatementMeta attaches descriptor statement metadata to ctx for a
     session-level Observer to consume.
@@ -283,9 +358,6 @@ type AdvisoryLockPlan[T, S any] struct {
 func DefineAdvisoryLock[T, S any](view *View[T, S], key string, lock AdvisoryLock) *AdvisoryLockPlan[T, S]
     DefineAdvisoryLock registers a transaction lock independently of any table
     access. The output view has one boolean column indicating acquisition.
-
-func TryDefineAdvisoryLock[T, S any](view *View[T, S], key string, lock AdvisoryLock) (*AdvisoryLockPlan[T, S], error)
-    TryDefineAdvisoryLock registers the complete operation or returns an error.
 
 func (p *AdvisoryLockPlan[T, S]) Bind(s Session[S]) *BoundAdvisoryLockPlan[T, S]
     Bind attaches the advisory lock plan to a session from its registry.
@@ -348,10 +420,13 @@ func (c AuthorizedStatement) Method() CallMethod
 type Binding struct {
 	// Has unexported fields.
 }
-    Binding supplies the value of one Slot to an execution.
+    Binding supplies the canonical value of one Slot. It can be reused across
+    statements and sessions. Byte and array inputs snapshot their slice
+    containers. Custom encoders own the stability of other returned values.
 
 func BindValue[V any](slot Slot[V], value V) Binding
-    BindValue pairs an input with a value of its declared Go type.
+    BindValue pairs an input with a value of its declared Go type, running its
+    encoder once. An encoding error is reported before a statement uses it.
 
 type BoundAdvisoryLockPlan[T, S any] struct {
 	// Has unexported fields.
@@ -363,6 +438,15 @@ func (b *BoundAdvisoryLockPlan[T, S]) Acquire(ctx context.Context, args ...Bindi
     Acquire reports whether this transaction holds the requested lock. Wait
     returns true on success. Try returns false while another transaction holds a
     conflicting lock. Direct rejects both modes.
+
+type BoundExistsPlan[S any] struct {
+	// Has unexported fields.
+}
+    BoundExistsPlan executes the existence probe on one authorized session.
+
+func (b *BoundExistsPlan[S]) Exists(ctx context.Context, filters []string, values ...Binding) (bool, error)
+    Exists reports whether a visible row matches the selected filters. Supply
+    only the bindings used by those filters.
 
 type BoundMutationPlan[T, S any] struct {
 	rowExecution[T, S]
@@ -380,12 +464,32 @@ func (b *BoundMutationPlan[T, S]) UpdateMany(ctx context.Context, set string, fi
     affected row count, including zero. The filter list selects optional
     predicates.
 
-type BoundReadPlan[T, S any] struct{ rowExecution[T, S] }
+type BoundReadPlan[T, S any] struct {
+	rowExecution[T, S]
+	// Has unexported fields.
+}
     BoundReadPlan runs an explicit SELECT through the registry-authorized
     session.
 
 func (b *BoundReadPlan[T, S]) Find(ctx context.Context, values ...Binding) ([]T, error)
     Find decodes all matching result rows. Each caller input must be bound once.
+
+func (b *BoundReadPlan[T, S]) First(ctx context.Context, values ...Binding) (T, error)
+    First returns the first result under the declared first-row policy,
+    or ErrNotFound on an empty result. PostgreSQL returns at most one row.
+
+func (b *BoundReadPlan[T, S]) MaybeFirst(ctx context.Context, values ...Binding) (T, bool, error)
+    MaybeFirst returns the first result and true under the declared first-row
+    policy. An empty result returns the zero T, false and nil.
+
+func (b *BoundReadPlan[T, S]) MaybeOne(ctx context.Context, values ...Binding) (T, bool, error)
+    MaybeOne returns the only result row and true. An empty result returns the
+    zero T, false and nil. A second match returns ErrMultipleRows.
+
+func (b *BoundReadPlan[T, S]) One(ctx context.Context, values ...Binding) (T, error)
+    One returns the only result row of the SELECT. It returns ErrNotFound on an
+    empty result and ErrMultipleRows on a second match. An unlocked SELECT can
+    reuse its data statement. WithForms can register a server limit of two.
 
 type BoundRoutinePlan[T, S any] struct {
 	// Has unexported fields.
@@ -416,11 +520,28 @@ func (b *BoundRowsPlan[T, S]) Exists(ctx context.Context, filters []string, valu
 func (b *BoundRowsPlan[T, S]) Find(ctx context.Context, choice RowChoice, values ...Binding) ([]T, error)
     Find returns the selected data page. It executes one registered statement.
 
+func (b *BoundRowsPlan[T, S]) First(ctx context.Context, choice RowChoice, values ...Binding) (T, error)
+    First returns the first row under the declared first-row policy. PostgreSQL
+    returns at most one row. An empty result returns ErrNotFound.
+
 func (b *BoundRowsPlan[T, S]) List(ctx context.Context, choice RowChoice, values ...Binding) ([]T, int64, error)
     List returns a data page and the exact count before pagination.
     The two statements bind the inputs they need from the supplied values.
     Both are validated before the first execution. A locking plan returns
     ErrOperationDenied.
+
+func (b *BoundRowsPlan[T, S]) MaybeFirst(ctx context.Context, choice RowChoice, values ...Binding) (T, bool, error)
+    MaybeFirst returns the first row and true under the declared first-row
+    policy. An empty result returns the zero T, false and nil.
+
+func (b *BoundRowsPlan[T, S]) MaybeOne(ctx context.Context, choice RowChoice, values ...Binding) (T, bool, error)
+    MaybeOne returns the only matching row and true. An empty result returns the
+    zero T, false and nil. A second match returns ErrMultipleRows.
+
+func (b *BoundRowsPlan[T, S]) One(ctx context.Context, choice RowChoice, values ...Binding) (T, error)
+    One returns the only matching row. It returns ErrNotFound on an empty result
+    and ErrMultipleRows on a second match. Declare Exact to limit PostgreSQL to
+    two rows. Unlocked, unpaged reads can reuse their existing data statement.
 
 type CallMethod uint8
     CallMethod is the driver operation authorized for one execution.
@@ -476,6 +597,16 @@ func (c Column[T]) Secret() Column[T]
     Secret marks a column's values as redacted in statement logs even when
     LogConfig.Values is ValuesAllowed.
 
+type ColumnMapping struct {
+	// Has unexported fields.
+}
+    ColumnMapping overrides one table column's type. Construct it with
+    ColumnType.
+
+func ColumnType[V any](name string, kind PGType[V]) ColumnMapping
+    ColumnType declares the exact PostgreSQL type and input codec of a column.
+    Its Go type must match the field or the element of a pointer field.
+
 type CountMode int
     CountMode controls how Rows.List obtains the total row count.
 
@@ -526,6 +657,8 @@ type Definition struct {
 	Name       string
 	Columns    []DefinedColumn
 	Statements map[string]string
+	// Privileges lists grants required by the descriptor itself. A plan
+	// source declares an empty slice, with each plan's grants in StatementShapes.
 	Privileges []DefinedPrivilege
 	// StatementQueries records the owner of each composed-query variant and
 	// registered scalar aggregate (for example, sum_rank belongs to sum:rank).
@@ -551,11 +684,6 @@ const (
 	ClassInsufficientPrivilege ErrorClass = "insufficient_privilege"
 	ClassOther                 ErrorClass = "other"
 )
-func ClassifyError(ctx context.Context, err error) (ErrorClass, error)
-    ClassifyError inspects ctx and err (by context cancellation or PostgreSQL
-    SQLSTATE) and returns its ErrorClass plus the matching tabula sentinel error
-    (nil for ClassOther).
-
 type ErrorPolicy struct {
 	Classify func(ctx context.Context, err error) error
 	// Sanitize supplies reviewed error text for structured logs. The default
@@ -568,6 +696,19 @@ type ErrorPolicy struct {
 }
     ErrorPolicy maps execution and write-guard failures into the host's own
     error categories. Nil fields fall back to the package's default sentinels.
+
+type ExistsPlan[S any] struct {
+	// Has unexported fields.
+}
+    ExistsPlan owns an independent boolean probe on a physical row source.
+    Each selected filter and scope has one registered statement.
+
+func DefineExists[T, S any](src RowSource[T, S], name string, filter RowFilter) *ExistsPlan[S]
+    DefineExists registers a SELECT EXISTS for the source's visible rows.
+    It panics on a declaration error.
+
+func (p *ExistsPlan[S]) Bind(s Session[S]) *BoundExistsPlan[S]
+    Bind attaches the probe to a session issued for the source registry.
 
 type Expr[V any] struct {
 	// Has unexported fields.
@@ -659,6 +800,17 @@ func (f *Filter) Range(column string, from, to any)
 func (f *Filter) Where() string
     Where returns the predicates as " AND (p1) AND (p2)", or "" when none.
 
+type FirstMode uint8
+    FirstMode declares how a read plan may select its first result.
+
+const (
+	// FirstDisabled leaves first-row selection disabled.
+	FirstDisabled FirstMode = iota
+	// OrderedFirst requires a declared order for first-row selection.
+	OrderedFirst
+	// UnorderedFirst permits the first row of an explicitly unordered read.
+	UnorderedFirst
+)
 type Formal[V any] struct {
 	// Has unexported fields.
 }
@@ -823,12 +975,6 @@ func DefineUpdateMany[T, S any](src RowSource[T, S], name string, spec MutationS
     DefineUpdateMany registers the permitted sets of assignments. It panics on
     declaration errors.
 
-func TryDefineDeleteMany[T, S any](src RowSource[T, S], name string, spec MutationSpec) (*MutationPlan[T, S], error)
-    TryDefineDeleteMany atomically registers a predicate-based DELETE.
-
-func TryDefineUpdateMany[T, S any](src RowSource[T, S], name string, spec MutationSpec, sets ...RowSet) (*MutationPlan[T, S], error)
-    TryDefineUpdateMany atomically registers a predicate-based UPDATE.
-
 func (p *MutationPlan[T, S]) Bind(s Session[S]) *BoundMutationPlan[T, S]
     Bind attaches this mutation plan to one session.
 
@@ -949,6 +1095,14 @@ func Varchar(n int) PGType[string]
     characters. Verification checks the column modifier. The parameter uses
     unbounded varchar so comparisons preserve the entire value and PostgreSQL
     applies its native length rules on assignment.
+
+func (t PGType[V]) WithEncoder(encode func(V) (any, error)) PGType[V]
+    WithEncoder returns this catalog type with a replacement input encoder.
+    BindValue runs the encoder once. A binding retains its error until an
+    operation uses it. The encoder owns the stability of custom values it
+    returns. Field decoding continues to use the descriptor's scanner. Joined
+    scope columns sharing a parameter must reuse the same encoder declaration
+    unless RegistryConfig.ScopeID supplies the session's scope argument.
 
 type Pred = Expr[bool]
     Pred is a PostgreSQL boolean expression. A nullable predicate follows SQL
@@ -1201,6 +1355,13 @@ type QuerySpec struct {
     CountBase. Filter fragments use fragment-local $1..$m numbering rebased at
     compile time.
 
+type ReadForms struct {
+	Exact bool
+	First FirstMode
+}
+    ReadForms registers a bounded read for exact or first-row selection.
+    Exact and First share one shape per eligible filter, order and scope.
+
 type ReadPlan[T, S any] struct {
 	// Has unexported fields.
 }
@@ -1209,10 +1370,6 @@ type ReadPlan[T, S any] struct {
 func DefineRead[T, S any](out *View[T, S], name string, query ReadSelect, observe ...StatementOption) *ReadPlan[T, S]
     DefineRead registers an explicit typed SELECT. It panics on a declaration
     error.
-
-func TryDefineRead[T, S any](out *View[T, S], name string, query ReadSelect, observe ...StatementOption) (*ReadPlan[T, S], error)
-    TryDefineRead registers every permitted scope variant together. No shape is
-    published when a declaration fails.
 
 func (p *ReadPlan[T, S]) Bind(s Session[S]) *BoundReadPlan[T, S]
     Bind attaches the plan to a session from its registry.
@@ -1259,6 +1416,10 @@ func (q ReadSelect) OrderBy(terms ...RowTerm) ReadSelect
 func (q ReadSelect) Where(terms ...Pred) ReadSelect
     Where restricts rows before grouping. Multiple terms are combined with AND.
 
+func (q ReadSelect) WithForms(forms ReadForms) ReadSelect
+    WithForms selects the permitted bounded reads. OrderedFirst requires OrderBy
+    and UnorderedFirst requires an unordered SELECT.
+
 type ReadSource interface {
 	// Has unexported methods.
 }
@@ -1276,7 +1437,8 @@ type Registry[S any] struct {
 
 func NewRegistry[S any](cfg RegistryConfig[S]) *Registry[S]
     NewRegistry creates a Registry preloaded with built-in scalar zero
-    converters (string, bool, int, int32, int64, float64, time.Time).
+    converters (string, bool, int, int32, int64, float64, time.Time). Invalid or
+    duplicate DefaultTypes declarations cause a panic.
 
 func (r *Registry[S]) Defined() []Definition
     Defined lists every table defined in r in definition order. The returned
@@ -1349,6 +1511,9 @@ type RegistryConfig[S any] struct {
 	// Deny forbids selected table capabilities (such as DenyDelete, DenyUpsert,
 	// DenyUnscopedWrites, DenyCopy) across all descriptors in this registry.
 	Deny Capability
+	// DefaultTypes supplies the PostgreSQL type and input codec for exact Go
+	// types used in table layouts. ColumnType overrides the registry default.
+	DefaultTypes []TypeDefault
 }
     RegistryConfig configures one isolated Registry for scope type S.
 
@@ -1441,9 +1606,6 @@ func DefineRoutine[T, S, V any](view *View[T, S], key string, r *Routine[V], arg
     DefineRoutine registers a standalone call to a declared function. Each input
     needs exactly one Arg. Values bind in signature order. The output view must
     have one column compatible with the declared result.
-
-func TryDefineRoutine[T, S, V any](view *View[T, S], key string, r *Routine[V], args ...RoutineArgument) (*RoutinePlan[T, S], error)
-    TryDefineRoutine registers the complete call or returns a declaration error.
 
 func (p *RoutinePlan[T, S]) Bind(s Session[S]) *BoundRoutinePlan[T, S]
     Bind attaches the function plan to a session from its registry.
@@ -1575,6 +1737,10 @@ func RowsFrom[T, K, S any](table *Table[T, K, S], rel Rel[T], columns ...RowColu
     RowsFrom uses the same occurrence as FieldOf. Supply the catalog type of
     a scope or deleted field with field.Column() when its Go type needs an
     explicit mapping. ByRLS and Global need no scope field.
+
+func (src RowSource[T, S]) Rel() Rel[T]
+    Rel returns this source's occurrence with its declared scope and live-row
+    policy. Repeated calls identify the same occurrence.
 
 type RowTerm struct {
 	// Has unexported fields.
@@ -1761,15 +1927,20 @@ func (r *Rows[T, K, S]) WithLogger(logger *slog.Logger) *Rows[T, K, S]
 type RowsPlan[T, S any] struct {
 	// Has unexported fields.
 }
-    RowsPlan owns the registered read shapes for one output view.
+    RowsPlan owns the registered read shapes for one result descriptor.
 
 func DefineRows[T, R, S any](out *View[T, S], name string, src RowSource[R, S], spec RowsSpec, project ...Projection) *RowsPlan[T, S]
     DefineRows registers a named single-table read. It panics on declaration
     errors.
 
-func TryDefineRows[T, R, S any](out *View[T, S], name string, src RowSource[R, S], spec RowsSpec, project ...Projection) (*RowsPlan[T, S], error)
-    TryDefineRows registers the complete read plan or returns an error without
-    publishing any shape. The projection covers the view in descriptor order.
+func DefineRowsWithForms[T, R, S any](out *View[T, S], name string, src RowSource[R, S], spec RowsSpec, forms ReadForms, project ...Projection) *RowsPlan[T, S]
+    DefineRowsWithForms registers a single-table read with the declared bounded
+    single-row forms. It panics on a declaration error.
+
+func DefineTableRows[T, S any](src RowSource[T, S], name string, spec RowsSpec, columns TableSelection, forms ...ReadForms) *RowsPlan[T, S]
+    DefineTableRows registers a read owned by its physical table and decodes
+    into that table's row type. Supply at most one ReadForms declaration.
+    It panics on a declaration error.
 
 func (p *RowsPlan[T, S]) Bind(s Session[S]) *BoundRowsPlan[T, S]
     Bind attaches this read plan to a session from the same registry.
@@ -1784,8 +1955,8 @@ type RowsSpec struct {
 	GroupBy []RowColumn
 	Orders  []RowOrder
 	Pages   RowPages
-	// Lock applies to every data page. A locking plan supports Find only
-	// and requires an ungrouped, non-aggregate projection.
+	// Lock applies to every data page and bounded single-row form. It
+	// requires an ungrouped, non-aggregate projection and excludes summaries.
 	Lock RowLock
 	// WithExists registers a boolean existence check for each filter and
 	// scope choice of an unlocked, non-aggregate plan.
@@ -1816,11 +1987,6 @@ type SQLFiles struct {
 }
     SQLFiles holds preloaded `.sql` files from an fs.FS (typically embed.FS) so
     long joins can live in dedicated files and fail at start-up when missing.
-
-func LoadSQLFiles(fsys fs.FS, dir string) (*SQLFiles, error)
-    LoadSQLFiles reads every `.sql` file under dir in fsys (recursively, keyed
-    by slash-separated paths relative to dir). Empty or missing directories
-    return an error.
 
 func MustSQLFiles(fsys fs.FS, dir string) *SQLFiles
     MustSQLFiles calls LoadSQLFiles and panics on error at package
@@ -2067,19 +2233,22 @@ type Table[T, K, S any] struct {
     access modes are fixed by Define.
 
 func Define[T, K, S any](r *Registry[S], spec TableSpec[T, K]) *Table[T, K, S]
-    Define validates spec against r (panicking on declaration mistakes at
-    package initialization), derives its statements and column privileges,
-    and records it in r.
+    Define validates spec, derives its fixed statements and column privileges,
+    and records the table in r. Use DefinePlanSource for typed plans alone.
 
-func TryDefine[T, K, S any](r *Registry[S], spec TableSpec[T, K]) (*Table[T, K, S], error)
-    TryDefine validates spec and returns a compiled table without registering
-    it.
+func DefinePlanSource[T, K, S any](r *Registry[S], spec TableSpec[T, K]) *Table[T, K, S]
+    DefinePlanSource registers a physical table for typed plans. The source
+    contributes its column and key metadata. Each plan declares its own SQL and
+    privileges. Calls through Table.Bind return ErrOperationDenied. It panics on
+    invalid declarations.
 
 func (t *Table[T, K, S]) AllowsDelete() bool
     AllowsDelete reports whether the table permits physical deletes.
 
 func (t *Table[T, K, S]) Bind(s Session[S]) *Rows[T, K, S]
-    Bind binds the table to a transaction session.
+    Bind binds the table's fixed and legacy operations to a session. A table
+    registered with DefinePlanSource returns ErrOperationDenied from these
+    operations. Bind its typed plans directly to the session.
 
 func (t *Table[T, K, S]) Cols() string
     Cols is the select list, for hand-written statements scanned with
@@ -2121,6 +2290,50 @@ func (d *Table) Statement(key, query string, opts ...StatementOption) string
 func (t *Table[T, K, S]) TryDefineUpsert(key string, spec UpsertSpec, opts ...StatementOption) (*UpsertPlan[T, K, S], error)
     TryDefineUpsert validates spec and builds an UpsertPlan without recording it
     in the Registry.
+
+type TableField[T, V any] struct {
+	// Has unexported fields.
+}
+    TableField identifies a typed column of one registered table across aliases.
+
+func MappedColumn[V, T, S any](layout *TableLayout[T, S], name string) TableField[T, V]
+    MappedColumn resolves a layout field once. V must match its declared value
+    type. A pointer field mapped through its element is referenced with that
+    element type and retains its SQL nullability.
+
+func (f TableField[T, V]) Input(name string) Slot[V]
+    Input creates a distinct input with the field's declared type, codec and
+    secret flag, including when its expression is used on another relation.
+
+func (f TableField[T, V]) On(rel Rel[T]) Field[V]
+    On selects this column on an occurrence of the same registered table.
+
+type TableLayout[T, S any] struct {
+	// Has unexported fields.
+}
+    TableLayout holds the column types and scan targets of one registered table.
+    Multiple aliases share the immutable layout and have distinct occurrences.
+
+func MapTable[T, K, S any](table *Table[T, K, S], overrides ...ColumnMapping) *TableLayout[T, S]
+    MapTable declares a layout for a registered physical table. It panics on
+    invalid declarations. Mapping or aliasing a table registers no statements.
+
+func (layout *TableLayout[T, S]) As(alias string) RowSource[T, S]
+    As creates a fresh occurrence using the table's declared scope and live-row
+    policy. Reuse the returned source for fields, projections and joins.
+
+type TableSelection struct {
+	// Has unexported fields.
+}
+    TableSelection is an ordered projection into a physical row struct.
+    Construct it with SelectAll or SelectColumns.
+
+func SelectAll() TableSelection
+    SelectAll projects every physical column in descriptor order.
+
+func SelectColumns(first RowColumn, rest ...RowColumn) TableSelection
+    SelectColumns projects distinct columns of one occurrence in the supplied
+    order. Each returned row has zero values for its unselected fields.
 
 type TableSpec[T, K any] struct {
 	// RelationScope declares how a typed query may access this physical table.
@@ -2173,6 +2386,16 @@ type Tracer interface {
     tracing. Finish receives a diagnostic with the error class and SQLSTATE by
     default. With RawErrorDiagnostics enabled it receives the original error.
 
+type TypeDefault struct {
+	// Has unexported fields.
+}
+    TypeDefault declares a registry's exact PostgreSQL type for a Go value type.
+    Construct it with TypeMapping.
+
+func TypeMapping[V any](kind PGType[V]) TypeDefault
+    TypeMapping retains the catalog identity and input codec of kind as a
+    registry default for V. A nullable *V field can use the same declaration.
+
 type UpsertPlan[T, K, S any] struct {
 	// Has unexported fields.
 }
@@ -2207,9 +2430,6 @@ type View[T, S any] struct {
 func DefineView[T, S any](r *Registry[S], spec ViewSpec[T]) *View[T, S]
     DefineView validates v against r (panicking on declaration mistakes at
     package initialization) and records it in r.DefinedViews().
-
-func TryDefineView[T, S any](r *Registry[S], spec ViewSpec[T]) (*View[T, S], error)
-    TryDefineView validates v without recording it in r.
 
 func (v *View[T, S]) Bind(s Session[S]) *ViewRows[T, S]
     Bind binds this projection to the scope of s.
@@ -2356,6 +2576,108 @@ func WithInstrumentationName(name string) Option
 
 func WithInstrumentationVersion(version string) Option
     WithInstrumentationVersion attaches an instrumentation scope version.
+
+```
+
+## pgtype
+
+```text
+package pgtype // import "github.com/0xJean/tabula/pgtype"
+
+Package pgtype declares PostgreSQL catalog types for typed Tabula fields,
+expressions and parameters. Each constructor returns a tabula.PGType.
+
+FUNCTIONS
+
+func ArrayOf[V any](element tabula.PGType[V]) tabula.PGType[[]V]
+    ArrayOf declares a one-dimensional PostgreSQL array of the given element
+    type. Its driver array adapter handles the elements.
+
+func BPChar() tabula.PGType[string]
+    BPChar declares PostgreSQL's blank-padded character catalog type.
+
+func Bool() tabula.PGType[bool]
+    Bool declares a PostgreSQL boolean.
+
+func Bytea() tabula.PGType[[]byte]
+    Bytea declares a PostgreSQL byte string. A nil slice binds SQL NULL and a
+    non-nil empty slice binds an empty byte string.
+
+func CIDR() tabula.PGType[netip.Prefix]
+    CIDR declares a PostgreSQL cidr network. PostgreSQL requires zero host bits.
+    An invalid prefix binds SQL NULL.
+
+func Date() tabula.PGType[time.Time]
+    Date declares a PostgreSQL date using the year, month and day in the Go
+    value's location.
+
+func Float4() tabula.PGType[float32]
+    Float4 declares a PostgreSQL real.
+
+func Float8() tabula.PGType[float64]
+    Float8 declares a PostgreSQL double precision value.
+
+func Inet() tabula.PGType[netip.Addr]
+    Inet declares an inet host address. An invalid address binds SQL NULL.
+
+func InetPrefix() tabula.PGType[netip.Prefix]
+    InetPrefix declares an inet address with its network prefix length.
+    An invalid prefix binds SQL NULL.
+
+func Int2() tabula.PGType[int16]
+    Int2 declares a PostgreSQL smallint.
+
+func Int4() tabula.PGType[int32]
+    Int4 declares a PostgreSQL integer.
+
+func Int8() tabula.PGType[int64]
+    Int8 declares a PostgreSQL bigint.
+
+func Interval() tabula.PGType[string]
+    Interval declares a PostgreSQL interval using text. The value can contain
+    calendar months, days and fractional seconds.
+
+func JSON[V any]() tabula.PGType[V]
+    JSON declares a PostgreSQL json value. Bindings marshal structured values
+    and strings using encoding/json. A json.RawMessage is a serialized document.
+    Nil pointers, maps, slices and interfaces bind SQL NULL. A raw document
+    containing null binds JSON null.
+
+func JSONB[V any]() tabula.PGType[V]
+    JSONB declares a PostgreSQL jsonb value with the same input rules as JSON.
+
+func Numeric[V any]() tabula.PGType[V]
+    Numeric declares a PostgreSQL numeric. Numeric[string] binds decimal text
+    with its original precision and scale. Driver values and custom encoders can
+    supply other exact representations.
+
+func OID() tabula.PGType[uint32]
+    OID declares a PostgreSQL object identifier.
+
+func Text() tabula.PGType[string]
+    Text declares PostgreSQL text.
+
+func Time() tabula.PGType[string]
+    Time declares PostgreSQL time without time zone using time-of-day text.
+
+func Timestamp() tabula.PGType[time.Time]
+    Timestamp declares a PostgreSQL timestamp without time zone using the civil
+    date and clock fields in the Go value's location.
+
+func Timestamptz() tabula.PGType[time.Time]
+    Timestamptz declares a PostgreSQL timestamp with time zone for an instant.
+
+func Timetz() tabula.PGType[string]
+    Timetz declares PostgreSQL time with time zone using time-of-day text with
+    an explicit UTC offset.
+
+func UUID[V any]() tabula.PGType[V]
+    UUID declares a PostgreSQL uuid. Use UUID[string] for UUID text or supply a
+    Go representation supported by the driver or a custom input encoder.
+
+func Varchar(length ...int) tabula.PGType[string]
+    Varchar declares PostgreSQL character varying. Supply one length to verify
+    the column's character limit. A parameter always uses base varchar.
 
 ```
 
@@ -2915,8 +3237,10 @@ func ClassifyPolicies(policies []Policy, rules []PolicyRule) ([]PolicyClass, []s
 
 func CollectPrivilegeNeeds(defs []tabula.Definition) (PrivilegeNeeds, []string)
     CollectPrivilegeNeeds merges descriptor and typed-shape grants and reports
-    definitions with no explicit grants. Use RoleStatements.Readiness for a
-    role's selected shapes, including any-column, schema and RLS requirements.
+    definitions with unspecified grants. A plan source explicitly declares
+    zero baseline grants, including when all its reads belong to views. Use
+    RoleStatements.Readiness for a role's selected shapes, including any-column,
+    schema and RLS requirements.
 
 func DefaultTypeFamilies() map[string][]string
     DefaultTypeFamilies returns a fresh copy of the built-in Go-type to

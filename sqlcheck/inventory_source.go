@@ -184,7 +184,8 @@ func (s inventorySource) definitionName(expr ast.Expr) string {
 		case *ast.SelectorExpr:
 			if sel := s.info.Selections[callee]; sel != nil {
 				_, declared := methodReceiverNames(sel)
-				if declared == tabulaPkgPath+".Table" && callee.Sel.Name == "Bind" {
+				if declared == tabulaPkgPath+".Table" && callee.Sel.Name == "Bind" ||
+					declared == tabulaPkgPath+".TableLayout" && callee.Sel.Name == "As" {
 					return s.definitionName(methodReceiver(callee, sel, e))
 				}
 				return ""
@@ -195,10 +196,19 @@ func (s inventorySource) definitionName(expr ast.Expr) string {
 		if !ok || fn.Pkg() == nil || fn.Pkg().Path() != tabulaPkgPath {
 			return ""
 		}
-		if fn.Name() == "RowsFrom" && len(e.Args) >= 2 {
+		switch fn.Name() {
+		case "RowsFrom", "MapTable", "TryMapTable":
+			if len(e.Args) == 0 {
+				return ""
+			}
 			return s.definitionName(e.Args[0])
 		}
-		if (fn.Name() != "Define" && fn.Name() != "DefineView") || len(e.Args) != 2 {
+		if len(e.Args) != 2 {
+			return ""
+		}
+		switch fn.Name() {
+		case "Define", "TryDefine", "DefineView", "DefinePlanSource", "TryDefinePlanSource":
+		default:
 			return ""
 		}
 		// A spec stored in a variable can have its fields mutated independently.
@@ -274,7 +284,7 @@ func singleInitializers(files []*ast.File, info *types.Info) map[types.Object]as
 					if id, ok := e.(*ast.Ident); ok && x.Tok == token.DEFINE && info.Defs[id] != nil && len(x.Rhs) == len(x.Lhs) {
 						v = x.Rhs[i]
 					} else if id, ok := e.(*ast.Ident); ok && i == 0 && x.Tok == token.DEFINE && info.Defs[id] != nil && len(x.Rhs) == 1 {
-						if call, ok := ast.Unparen(x.Rhs[0]).(*ast.CallExpr); ok && isTryRowPlan(info, call) {
+						if call, ok := ast.Unparen(x.Rhs[0]).(*ast.CallExpr); ok && isTryPlanHandle(info, call) {
 							v = call
 						}
 					}
@@ -286,7 +296,7 @@ func singleInitializers(files []*ast.File, info *types.Info) map[types.Object]as
 					if len(x.Values) == len(x.Names) {
 						v = x.Values[i]
 					} else if i == 0 && len(x.Values) == 1 {
-						if call, ok := ast.Unparen(x.Values[0]).(*ast.CallExpr); ok && isTryRowPlan(info, call) {
+						if call, ok := ast.Unparen(x.Values[0]).(*ast.CallExpr); ok && isTryPlanHandle(info, call) {
 							v = call
 						}
 					}

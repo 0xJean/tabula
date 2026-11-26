@@ -55,6 +55,16 @@ Fixed generated operations include primary-key reads and locks, insert, save, so
 
 PostgreSQL grants and RLS still apply. A separately acquired database connection has its own privileges. The binary COPY protocol retains its descriptor and session checks, including the independent `DenyCopy` capability.
 
+## Physical sources for typed plans
+
+`DefinePlanSource(reg, spec)` registers the table's physical columns and keys. Its baseline privilege list is explicitly empty. `DefineRows` and `DefineRead` record the physical grants on their output view's shapes. `DefineTableRows`, `DefineExists`, `DefineUpdateMany` and `DefineDeleteMany` register their shapes on the source table. Mapping a table alone adds no grants. A partial projection requests SELECT on the fields it reads, including any predicate, order and soft-delete fields. A column-free existence query requires SELECT on any column. Bounded exact and first-row reads inherit the same role, scope and locking requirements as their data query. `CollectPrivilegeNeeds` takes the union across the supplied definitions. Use the role's selected shapes from `RoleStatements.Readiness(role)` for `CheckReadiness`, then verify the same assignments with `VerifyRoleStatements`.
+
+For `UPDATE items SET rank = $1 WHERE id = $2`, the role needs column privileges `UPDATE(rank)` and `SELECT(id)`. A plan that also reads the old rank needs `SELECT(rank)`. Scope-column filters, live-row predicates and version comparisons contribute the columns they read. A `ByRLS` source records the requirement for enabled and forced row security on its physical relation.
+
+A locking read of a table whose columns form a composite primary key needs `SELECT` on the columns it reads and `UPDATE` on any one column. A grant on one key column satisfies the row-lock requirement. The source registers no standalone update. Its primary keys remain protected from typed assignment.
+
+`ReadOnly`, `WriteMode`, `AllowDelete` and `UpdateColumns` constrain plan declarations. The old `Rows` execution methods and COPY are denied before database I/O, with or without `DenyLegacySQL`. Declare additional application requirements separately when combining startup checks. [Declaration example](COOKBOOK.md#physical-sources-with-column-grants)
+
 ## Table write modes
 
 Choose a descriptor for each execution role and pass that role's definitions to `CollectPrivilegeNeeds` and `VerifyStatements`. Every role also needs schema `USAGE`. PostgreSQL evaluates grants, row policies, defaults and triggers when the statement runs.

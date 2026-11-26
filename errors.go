@@ -40,7 +40,8 @@ const (
 	ErrSessionClosed      staticError = "session is closed"
 	ErrCapabilityDenied   staticError = "operation denied by registry capability policy"
 
-	// ErrOperationDenied means the declared WriteMode forbids an operation or column.
+	// ErrOperationDenied means the table declaration forbids an operation or column,
+	// including legacy Rows methods on a source declared with DefinePlanSource.
 	ErrOperationDenied staticError = "operation denied by table write mode"
 
 	// ErrUnscopedRequiresReadOnly reports that UnscopedReadOnly denied access
@@ -86,23 +87,8 @@ const (
 // or "" when the code is absent or contains anything other than five ASCII
 // digits and uppercase letters.
 func SQLState(err error) string {
-	if pg, ok := errors.AsType[interface {
-		error
-		SQLState() string
-	}](err); ok {
-		state := pg.SQLState()
-		if len(state) != 5 {
-			return ""
-		}
-		for i := range len(state) {
-			c := state[i]
-			if (c < '0' || c > '9') && (c < 'A' || c > 'Z') {
-				return ""
-			}
-		}
-		return state
-	}
-	return ""
+	_, state := sqlDiagnostic(err)
+	return state
 }
 
 // ClassifyError inspects ctx and err (by context cancellation or PostgreSQL
@@ -184,11 +170,8 @@ func IsNumericOutOfRange(err error) bool { return SQLState(err) == "22003" }
 // lib/pq and pgx both carry the Routine field. Other drivers can supply the
 // standard English primary diagnostic. An ambiguous 42501 stays generic.
 func rlsViolation(err error) bool {
-	pg, ok := errors.AsType[interface {
-		error
-		SQLState() string
-	}](err)
-	if !ok {
+	pg, _ := sqlDiagnostic(err)
+	if pg == nil {
 		return false
 	}
 	v := reflect.ValueOf(pg)

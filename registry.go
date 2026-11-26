@@ -89,6 +89,9 @@ type RegistryConfig[S any] struct {
 	// Deny forbids selected table capabilities (such as DenyDelete, DenyUpsert,
 	// DenyUnscopedWrites, DenyCopy) across all descriptors in this registry.
 	Deny Capability
+	// DefaultTypes supplies the PostgreSQL type and input codec for exact Go
+	// types used in table layouts. ColumnType overrides the registry default.
+	DefaultTypes []TypeDefault
 }
 
 // Registry owns registered value converters, error policy, logging, tracing,
@@ -102,6 +105,7 @@ type Registry[S any] struct {
 	scopeLog            func(S) string
 	arrayArgFn          func(any) any
 	arrayColFn          func(reflect.Type) (func(any) any, error)
+	defaultTypes        map[reflect.Type]TypeDefault
 	errors              ErrorPolicy
 	log                 *logState
 	tracer              Tracer
@@ -121,6 +125,7 @@ type Registry[S any] struct {
 
 // NewRegistry creates a Registry preloaded with built-in scalar zero
 // converters (string, bool, int, int32, int64, float64, time.Time).
+// Invalid or duplicate DefaultTypes declarations cause a panic.
 func NewRegistry[S any](cfg RegistryConfig[S]) *Registry[S] {
 	prefix := cfg.Prefix
 	if prefix == "" {
@@ -134,6 +139,7 @@ func NewRegistry[S any](cfg RegistryConfig[S]) *Registry[S] {
 		scopeLog:            cfg.ScopeLog,
 		arrayArgFn:          cfg.ArrayArg,
 		arrayColFn:          cfg.ArrayColumn,
+		defaultTypes:        registryTypeDefaults(cfg.DefaultTypes),
 		errors:              cfg.Errors,
 		log:                 newLogState(cfg.Log),
 		tracer:              cfg.Tracer,

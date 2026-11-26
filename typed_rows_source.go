@@ -2,32 +2,31 @@ package tabula
 
 import (
 	"fmt"
-	"reflect"
 	"slices"
 	"strings"
-	"time"
 )
 
 // RowColumn identifies a typed descriptor field in a GROUP BY or source declaration.
 type RowColumn struct {
-	ref    *fieldRef
-	encode func(any) any
+	ref *fieldRef
 }
 
 // Column retains the field's occurrence and type in a heterogeneous column list.
 func (f Field[V]) Column() RowColumn {
-	col := RowColumn{ref: f.ref}
-	if f.kind.encode != nil {
-		col.encode = func(v any) any { return f.kind.encode(v.(V)) }
-	}
-	return col
+	return RowColumn{ref: f.ref}
 }
 
 // RowSource ties a single occurrence to its descriptor's keys and live-row policy.
 type RowSource[T, S any] struct {
-	owner *descriptor[T, S]
+	owner    *descriptor[T, S]
+	relation Rel[T]
+	types    []TypeDefault
 	rowSource
 }
+
+// Rel returns this source's occurrence with its declared scope and live-row
+// policy. Repeated calls identify the same occurrence.
+func (src RowSource[T, S]) Rel() Rel[T] { return src.relation }
 
 type rowSource struct {
 	rel       *occurrence
@@ -35,23 +34,56 @@ type rowSource struct {
 	protected map[string]bool
 	scopeType catalogType
 	deleted   *fieldRef
+	rowLivePolicy
+	version string
+}
+
+type rowLivePolicy struct {
 	liveOp    string
 	liveValue Binding
-	version   string
+}
+
+func (d deleteSpec) rowLivePolicy(kind catalogType) (rowLivePolicy, error) {
+	switch d.kind {
+	case deleteTimestamp:
+		return rowLivePolicy{liveOp: "IS NULL"}, nil
+	case deleteBool:
+		if !sameSQLType(kind, Bool().id) {
+			return rowLivePolicy{}, fmt.Errorf("tabula: boolean soft deletion requires a pg_catalog.bool column")
+		}
+		return rowLivePolicy{liveOp: "= FALSE"}, nil
+	case deleteStatus:
+		op, value := "<>", d.deletedVal
+		if d.aliveVal.IsValid() {
+			op, value = "=", d.aliveVal
+		}
+		b := kind.bind(&typedInput{name: "@live", kind: kind}, value.Interface())
+		if b.err != nil {
+			return rowLivePolicy{}, fmt.Errorf("tabula: encoding the declared soft-delete value: %w", b.err)
+		}
+		return rowLivePolicy{liveOp: op, liveValue: b}, nil
+	default:
+		return rowLivePolicy{}, nil
+	}
 }
 
 // RowsFrom uses the same occurrence as FieldOf. Supply the catalog type of a
 // scope or deleted field with field.Column() when its Go type needs an explicit
 // mapping. ByRLS and Global need no scope field.
 func RowsFrom[T, K, S any](table *Table[T, K, S], rel Rel[T], columns ...RowColumn) RowSource[T, S] {
-	src, err := tableRowSource(table, rel.source, columns)
+	return newRowSource(table, rel, columns, nil)
+}
+
+func newRowSource[T, K, S any](table *Table[T, K, S], rel Rel[T], columns []RowColumn, live *rowLivePolicy) RowSource[T, S] {
+	src, err := tableRowSource(table, rel.source, columns, live)
 	if err != nil {
 		panic(err)
 	}
-	return RowSource[T, S]{&table.descriptor, src}
+	rel.rows = func() (rowSource, error) { return src, nil }
+	return RowSource[T, S]{owner: &table.descriptor, relation: rel, rowSource: src}
 }
 
-func tableRowSource[T, K, S any](table *Table[T, K, S], rel *occurrence, columns []RowColumn) (rowSource, error) {
+func tableRowSource[T, K, S any](table *Table[T, K, S], rel *occurrence, columns []RowColumn, live *rowLivePolicy) (rowSource, error) {
 	if table == nil || rel == nil || table.entry != rel.entry {
 		return rowSource{}, fmt.Errorf("tabula.RowsFrom: the occurrence must belong to the table")
 	}
@@ -86,27 +118,11 @@ func tableRowSource[T, K, S any](table *Table[T, K, S], rel *occurrence, columns
 		if f := declared[col.name].ref; f != nil {
 			return f, nil
 		}
-		t := col.goType
-		if t.Kind() == reflect.Pointer {
-			t = t.Elem()
-		}
-		// Only use built-in Go types with a conventional catalog mapping.
-		var kind catalogType
-		switch t {
-		case reflect.TypeFor[int32]():
-			kind = Int4().id
-		case reflect.TypeFor[int64]():
-			kind = Int8().id
-		case reflect.TypeFor[string]():
-			kind = Text().id
-		case reflect.TypeFor[bool]():
-			kind = Bool().id
-		case reflect.TypeFor[time.Time]():
-			kind = Timestamptz().id
-		default:
+		kind := col.defaultType(table.reg.defaultTypes).kind
+		if kind.goType == nil {
 			return nil, fmt.Errorf("tabula.RowsFrom: supply the catalog type of %q with FieldOf(...).Column()", col.name)
 		}
-		return &fieldRef{source: rel, name: col.name, kind: kind, nullable: col.nullable, secret: col.secret}, nil
+		return col.typedRef(rel, kind), nil
 	}
 	if rel.scope == ByScopeColumn() {
 		scope, err := special(table.scope)
@@ -121,25 +137,13 @@ func tableRowSource[T, K, S any](table *Table[T, K, S], rel *occurrence, columns
 			return rowSource{}, err
 		}
 		src.deleted = deleted
-		switch table.del.kind {
-		case deleteTimestamp:
-			src.liveOp = "IS NULL"
-		case deleteBool:
-			if !sameSQLType(src.deleted.kind, Bool().id) {
-				return rowSource{}, fmt.Errorf("tabula.RowsFrom: boolean soft deletion requires a pg_catalog.bool column")
+		if live != nil {
+			src.rowLivePolicy = *live
+		} else {
+			src.rowLivePolicy, err = table.del.rowLivePolicy(deleted.kind)
+			if err != nil {
+				return rowSource{}, err
 			}
-			src.liveOp = "= FALSE"
-		case deleteStatus:
-			src.liveOp = "<>"
-			value := table.del.deletedVal
-			if table.del.aliveVal.IsValid() {
-				value, src.liveOp = table.del.aliveVal, "="
-			}
-			bound := value.Interface()
-			if encode := declared[src.deleted.name].encode; encode != nil {
-				bound = encode(bound)
-			}
-			src.liveValue = Binding{&typedInput{"@live", src.deleted.kind}, bound}
 		}
 	}
 	return src, nil
@@ -250,6 +254,9 @@ func compileRowFamily[T, S any](d *descriptor[T, S], name string, sources []rowS
 		if src.rel.scope == ByScopeColumn() {
 			if scopeType.goType != nil && !sameSQLType(scopeType, src.scopeType) {
 				return nil, fmt.Errorf("tabula: incompatible scope column types in plan %q", name)
+			}
+			if scopeType.goType != nil && d.reg.scopeID == nil && scopeType.encoder != src.scopeType.encoder {
+				return nil, fmt.Errorf("tabula: joined scope columns must share an encoder or declare RegistryConfig.ScopeID in plan %q", name)
 			}
 			scopeType, family.scope = src.scopeType, ByScopeColumn()
 		} else if src.rel.scope == ByRLS() && family.scope != ByScopeColumn() {

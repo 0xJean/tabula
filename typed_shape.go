@@ -285,6 +285,7 @@ func (c *typedCompiler) finishShape(key, query string, scopeType catalogType, me
 		if !sameSQLType(c.scopeType, scopeType) {
 			return nil, fmt.Errorf("tabula: scope slot type differs from its declaration")
 		}
+		c.params.scopeType = scopeType
 		schemas = append(schemas, scopeType.schema)
 	}
 	slices.Sort(schemas)
@@ -302,7 +303,7 @@ func (c *typedCompiler) finishShape(key, query string, scopeType catalogType, me
 		meta.Inputs = append(meta.Inputs, ShapeInput{Name: "scope", Type: scopeType.qualified(), Scope: true, Secret: c.hasSecret})
 	}
 	for _, slot := range c.params.order {
-		meta.Inputs = append(meta.Inputs, ShapeInput{Name: slot.name, Type: slot.kind.qualified(), Secret: c.hasSecret})
+		meta.Inputs = append(meta.Inputs, ShapeInput{Name: slot.name, Type: slot.kind.qualified(), Secret: c.hasSecret || slot.secret})
 	}
 	return &compiledShape{
 		key: key, sql: query, shape: cloneShape(meta), layout: c.params.frozen(), columns: columnTypes,

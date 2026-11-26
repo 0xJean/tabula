@@ -7,8 +7,8 @@ import (
 )
 
 func rowDeclaration(name string) bool {
-	switch name {
-	case "DefineRows", "TryDefineRows", "DefineRead", "TryDefineRead", "DefineUpdateMany", "TryDefineUpdateMany", "DefineDeleteMany", "TryDefineDeleteMany":
+	switch strings.TrimPrefix(name, "Try") {
+	case "DefineRows", "DefineRowsWithForms", "DefineTableRows", "DefineExists", "DefineRead", "DefineUpdateMany", "DefineDeleteMany":
 		return true
 	}
 	return false
@@ -17,16 +17,22 @@ func rowDeclaration(name string) bool {
 func rowExecutionMethod(recv, method string) bool {
 	switch recv {
 	case tabulaPkgPath + ".BoundRowsPlan":
-		return method == "Count" || method == "Exists" || method == "Find" || method == "List"
+		return method == "Count" || method == "Exists" || method == "Find" || method == "List" || singleRowMethod(method)
 	case tabulaPkgPath + ".BoundReadPlan":
-		return method == "Find"
+		return method == "Find" || singleRowMethod(method)
+	case tabulaPkgPath + ".BoundExistsPlan":
+		return method == "Exists"
 	case tabulaPkgPath + ".BoundMutationPlan":
 		return method == "UpdateMany" || method == "DeleteMany"
 	}
 	return false
 }
 
-func rowFunction(info *types.Info, call *ast.CallExpr) string {
+func singleRowMethod(method string) bool {
+	return method == "One" || method == "MaybeOne" || method == "First" || method == "MaybeFirst"
+}
+
+func tabulaCallName(info *types.Info, call *ast.CallExpr) string {
 	var id *ast.Ident
 	switch f := unwrapCallTarget(call.Fun).(type) {
 	case *ast.Ident:
@@ -35,14 +41,16 @@ func rowFunction(info *types.Info, call *ast.CallExpr) string {
 		id = f.Sel
 	}
 	fn, ok := info.Uses[id].(*types.Func)
-	if ok && fn.Pkg() != nil && fn.Pkg().Path() == tabulaPkgPath && typedPlanSiteKind(tabulaPkgPath, fn.Name()) != "" {
+	if ok && fn.Pkg() != nil && fn.Pkg().Path() == tabulaPkgPath {
 		return fn.Name()
 	}
 	return ""
 }
 
-func isTryRowPlan(info *types.Info, call *ast.CallExpr) bool {
-	return strings.HasPrefix(rowFunction(info, call), "Try")
+func isTryPlanHandle(info *types.Info, call *ast.CallExpr) bool {
+	name := tabulaCallName(info, call)
+	return name == "TryMapTable" || name == "TryDefine" || name == "TryDefinePlanSource" ||
+		strings.HasPrefix(name, "Try") && typedPlanSiteKind(tabulaPkgPath, name) != ""
 }
 
 func (s inventorySource) rowPlan(expr ast.Expr, depth int) (definition, key string) {
@@ -53,7 +61,7 @@ func (s inventorySource) rowPlan(expr ast.Expr, depth int) (definition, key stri
 	case *ast.Ident:
 		return s.rowPlan(s.initializers[s.info.Uses[e]], depth+1)
 	case *ast.CallExpr:
-		if rowFunction(s.info, e) != "" && len(e.Args) >= 2 {
+		if typedPlanSiteKind(tabulaPkgPath, tabulaCallName(s.info, e)) != "" && len(e.Args) >= 2 {
 			key, _ = s.constantString(e.Args[1])
 			return s.definitionName(e.Args[0]), key
 		}
@@ -61,7 +69,7 @@ func (s inventorySource) rowPlan(expr ast.Expr, depth int) (definition, key stri
 			if sel := s.info.Selections[selector]; sel != nil {
 				_, recv := methodReceiverNames(sel)
 				switch recv {
-				case tabulaPkgPath + ".RowsPlan", tabulaPkgPath + ".ReadPlan", tabulaPkgPath + ".MutationPlan", tabulaPkgPath + ".RoutinePlan", tabulaPkgPath + ".AdvisoryLockPlan":
+				case tabulaPkgPath + ".RowsPlan", tabulaPkgPath + ".ReadPlan", tabulaPkgPath + ".ExistsPlan", tabulaPkgPath + ".MutationPlan", tabulaPkgPath + ".RoutinePlan", tabulaPkgPath + ".AdvisoryLockPlan":
 					return s.rowPlan(methodReceiver(selector, sel, e), depth+1)
 				}
 			}

@@ -2,14 +2,14 @@ package tabula
 
 import (
 	"context"
-	"fmt"
 	"slices"
 )
 
 type rowExecution[T, S any] struct {
 	readBinding[T, S]
-	driver AuthorizedSession
-	family *rowFamily
+	driver  AuthorizedSession
+	family  *rowFamily
+	indexes []int
 }
 
 func bindRowExecution[T, S any](d *descriptor[T, S], f *rowFamily, s Session[S]) rowExecution[T, S] {
@@ -77,12 +77,14 @@ type BoundRowsPlan[T, S any] struct {
 
 // Bind attaches this read plan to a session from the same registry.
 func (p *RowsPlan[T, S]) Bind(s Session[S]) *BoundRowsPlan[T, S] {
-	if p == nil || p.view == nil {
+	if p == nil || p.owner == nil {
 		var bound BoundRowsPlan[T, S]
 		bound.bindErr = ErrStatementAuthority
 		return &bound
 	}
-	return &BoundRowsPlan[T, S]{bindRowExecution(&p.view.descriptor, p.family, s), p}
+	exec := bindRowExecution(p.owner, p.family, s)
+	exec.indexes = p.indexes
+	return &BoundRowsPlan[T, S]{exec, p}
 }
 
 func (b *BoundRowsPlan[T, S]) checkRead() error {
@@ -107,8 +109,8 @@ func (b *BoundRowsPlan[T, S]) dataCall(choice RowChoice, bindings []Binding) (Au
 		return AuthorizedStatement{}, err
 	}
 	page := &b.plan.page
-	if (choice.Order == "") != (len(page.orders) == 0) || choice.Order != "" && page.orders[choice.Order] == nil {
-		return AuthorizedStatement{}, fmt.Errorf("tabula: unregistered row order %q", choice.Order)
+	if err := page.checkOrder(choice.Order); err != nil {
+		return AuthorizedStatement{}, err
 	}
 	values, err := page.addPage(choice, slices.Clip(bindings))
 	if err != nil {
@@ -117,13 +119,30 @@ func (b *BoundRowsPlan[T, S]) dataCall(choice RowChoice, bindings []Binding) (Au
 	return b.call(choice.Filters, dataForm(choice.Order, choice.Page), CallEach, values)
 }
 
+func (b *rowExecution[T, S]) resultWidth() int {
+	if b.indexes == nil {
+		return len(b.d.cols)
+	}
+	return len(b.indexes)
+}
+
+func (b *rowExecution[T, S]) scanResult(scan func(...any) error, dst []any, row *T) error {
+	if b.indexes == nil {
+		return scan(b.fillAddrs(dst, row)...)
+	}
+	for i, index := range b.indexes {
+		dst[i] = b.d.cols[index].target(row)
+	}
+	return scan(dst...)
+}
+
 func (b *rowExecution[T, S]) find(ctx context.Context, call AuthorizedStatement) ([]T, error) {
 	var rows []T
-	dst := make([]any, len(b.d.cols))
+	dst := make([]any, b.resultWidth())
 	_, err := b.run(ctx, "find", call, func(ctx context.Context) (int64, error) {
 		err := b.driver.EachAuthorized(ctx, call, func(scan func(...any) error) error {
 			var row T
-			if err := scan(b.fillAddrs(dst, &row)...); err != nil {
+			if err := b.scanResult(scan, dst, &row); err != nil {
 				return err
 			}
 			rows = append(rows, row)
@@ -177,15 +196,7 @@ func (b *BoundRowsPlan[T, S]) Exists(ctx context.Context, filters []string, valu
 	if !b.plan.withExists {
 		return false, ErrOperationDenied
 	}
-	call, err := b.call(filters, "exists", CallScan, values)
-	if err != nil {
-		return false, err
-	}
-	var found bool
-	_, err = b.run(ctx, "exists", call, func(ctx context.Context) (int64, error) {
-		return -1, b.driver.ScanAuthorized(ctx, call, &found)
-	})
-	return found && err == nil, err
+	return b.exists(ctx, filters, values)
 }
 
 // List returns a data page and the exact count before pagination. The two
