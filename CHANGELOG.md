@@ -3,7 +3,7 @@
 All notable changes are listed here. The project follows semantic versioning; before
 v1.0 a minor version may contain breaking changes.
 
-## v0.4.0 — unreleased
+## v0.4.0 — 2026-11-26
 
 - Use `RowsSpec.Lock` to lock filtered, ordered or paginated rows with `plan.Bind(session).Find`. Transaction advisory locks support shared and exclusive acquisition in both PostgreSQL key spaces. Routine and advisory plans use the same session-binding style.
 - `RowsSpec.WithExists` registers a boolean `SELECT EXISTS` per scope and filter. `IsDistinct` and `IsNotDistinct` provide null-safe inequality and equality. Role inventory binds existence checks independently of data and count statements.
