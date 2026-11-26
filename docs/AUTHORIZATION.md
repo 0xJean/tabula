@@ -247,16 +247,27 @@ Give each process its own login when independent test suites share a disposable 
 ```go
 login, err := fixture.AcquireLoginRole(ctx, postgresfixture.LoginRoleOptions{
     MemberOf: []string{"fixture_reader", "fixture_writer"},
+    Label:    "suite_2",
 })
 if err != nil {
     return err
 }
 defer func() { err = errors.Join(err, login.Release(cleanupCtx)) }()
 
-// The host grants CONNECT only on the test database it just created.
-return runSuite(ctx, login.Name(), login.Password())
+db, err := fixture.CloneWithLease(ctx, plan, login)
+if err != nil {
+    return err
+}
+defer func() { err = errors.Join(err, db.Drop(cleanupCtx)) }()
+
+// The host grants CONNECT on db.Name() and closes its clients before returning.
+return runSuite(ctx, db.Name(), login.Name(), login.Password())
 ```
 
 In this example the suite function has a named error result. Supply a live cleanup context at shutdown, and close business pools before releasing the handle. An interrupted worker leaves a versioned role mark. On its first observation of an unlocked login with no client sessions, Prune records the server time. A later sweep can remove that login and its database CONNECT grants after maxIdle. An observed client connection clears the idle mark. Call `PruneLoginRoles(ctx, 0)` for immediate orphan cleanup. Unexpected dependencies are reported and the transaction rolls back. The host owns migration objects, template roles and PUBLIC privileges.
 
 Each live login uses one checked-out maintenance connection even between test cases. Supply a direct or session-pooled connection and leave pool capacity for cloning and pruning. A lost maintenance session ends the lease. Acquire a new login before continuing after a server restart or permanent connection failure. [Lifecycle design](DESIGN-v0.3.8.md)
+
+The optional login label is visible in PostgreSQL and accepts 1–25 ASCII lowercase letters, digits or underscores. Multiple processes can use the same label. Each gets an independent random name and lease.
+
+A live lease keeps its clones between connections. After a worker exits, `PruneClones(ctx, 0)` collects marked clones once all clients disconnect. `Prune(ctx, maxIdle)` applies its usual server-timed grace period. An ordinary clone, or a database left by an interruption between creation and marking, requires explicit cleanup. Automatic clone cleanup uses a non-forcing drop. Suites with host-specific teardown requirements should account for those separately before opting in. [Clone ownership and lifetime](DESIGN-v0.3.9.md)

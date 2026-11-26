@@ -104,6 +104,7 @@ type Fixture struct {
 type Database struct {
 	name    string
 	fixture Fixture
+	mark    string // Nonempty for a clone bound to a process login.
 }
 
 // Name is the database name to use in the test connection string.
@@ -119,6 +120,9 @@ func (d Database) Drop(ctx context.Context) error {
 		return err
 	}
 	defer func() { _ = conn.Close() }()
+	if d.mark != "" {
+		return d.dropLeased(ctx, conn)
+	}
 	return d.fixture.Backend.Drop(ctx, conn, d.name)
 }
 
@@ -150,6 +154,15 @@ func acquireLock(ctx context.Context, conn *sql.Conn, query, key string) error {
 	return err
 }
 
+func tryExclusive(ctx context.Context, conn *sql.Conn, key string) (bool, error) {
+	var locked bool
+	err := conn.QueryRowContext(ctx, "SELECT pg_catalog.pg_try_advisory_lock(pg_catalog.hashtextextended($1,0))", key).Scan(&locked)
+	if err != nil {
+		discardConn(conn)
+	}
+	return locked, err
+}
+
 func releaseLock(ctx context.Context, conn *sql.Conn, query, key string) error {
 	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
@@ -157,7 +170,7 @@ func releaseLock(ctx context.Context, conn *sql.Conn, query, key string) error {
 	err := conn.QueryRowContext(cleanup, query, key).Scan(&unlocked)
 	if err != nil || !unlocked {
 		discardConn(conn)
-		return errors.Join(errors.New("template advisory lock was not released"), err)
+		return errors.Join(errors.New("fixture advisory lock was not released"), err)
 	}
 	return nil
 }
@@ -166,6 +179,10 @@ func releaseLock(ctx context.Context, conn *sql.Conn, query, key string) error {
 // shared advisory lock protects the template through the physical copy,
 // allowing concurrent copies. Publication is serialized on the staging name.
 func (f Fixture) Clone(ctx context.Context, p Installation) (Database, error) {
+	return f.clone(ctx, p, nil)
+}
+
+func (f Fixture) clone(ctx context.Context, p Installation, login *LoginRole) (Database, error) {
 	if f.Admin == nil || f.Backend == nil {
 		return Database{}, errors.New("fixture requires Admin and Backend")
 	}
@@ -178,6 +195,11 @@ func (f Fixture) Clone(ctx context.Context, p Installation) (Database, error) {
 		return Database{}, err
 	}
 	defer func() { _ = conn.Close() }()
+	if login != nil {
+		if err := login.checkCloneLease(ctx, conn); err != nil {
+			return Database{}, err
+		}
+	}
 	if err := acquireLock(ctx, conn, lockShared, template); err != nil {
 		return Database{}, err
 	}
@@ -187,7 +209,7 @@ func (f Fixture) Clone(ctx context.Context, p Installation) (Database, error) {
 	if err := f.prepare(ctx, conn, template, p); err != nil {
 		return Database{}, err
 	}
-	name, err := freshName("tabula_test_")
+	name, err := freshName(clonePrefix)
 	if err != nil {
 		return Database{}, err
 	}

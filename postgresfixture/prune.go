@@ -61,12 +61,13 @@ func (c pruneCandidate) eligible(maxIdle time.Duration) bool {
 
 // Prune drops cached templates whose last Clone is older than maxIdle and
 // staging databases abandoned by interrupted builds, except the templates of
-// keep. Each database is dropped through Backend.Drop while holding the same
+// keep. Each template or stage is dropped through Backend.Drop while holding the same
 // advisory lock that Clone holds through the physical copy. Templates with
 // missing or invalid last-use marks are kept. Prune returns the names it
 // dropped, including partial results if another drop failed. It also reaps
-// process logins observed idle for maxIdle. Its result contains only database names; use
-// PruneLoginRoles to run login cleanup alone and collect role names.
+// process logins and leased clones observed idle for maxIdle. Its result
+// contains only database names. PruneLoginRoles and PruneClones run the
+// corresponding sweeps independently.
 func (f Fixture) Prune(ctx context.Context, maxIdle time.Duration, keep ...Installation) ([]string, error) {
 	if f.Admin == nil || f.Backend == nil {
 		return nil, errors.New("fixture requires Admin and Backend")
@@ -87,12 +88,12 @@ func (f Fixture) Prune(ctx context.Context, maxIdle time.Duration, keep ...Insta
 		return nil, err
 	}
 	defer func() { _ = conn.Close() }()
+	dropped, cloneErr := pruneClones(ctx, conn, maxIdle)
 	_, loginErr := pruneLogins(ctx, conn, maxIdle)
 	candidates, err := pruneCandidates(ctx, conn)
 	if err != nil {
-		return nil, errors.Join(loginErr, err)
+		return dropped, errors.Join(cloneErr, loginErr, err)
 	}
-	var dropped []string
 	var errs []error
 	for _, c := range candidates {
 		if kept[c.name] || !c.eligible(maxIdle) {
@@ -106,7 +107,7 @@ func (f Fixture) Prune(ctx context.Context, maxIdle time.Duration, keep ...Insta
 			dropped = append(dropped, c.name)
 		}
 	}
-	return dropped, errors.Join(loginErr, errors.Join(errs...))
+	return dropped, errors.Join(cloneErr, loginErr, errors.Join(errs...))
 }
 
 func pruneCandidates(ctx context.Context, conn *sql.Conn) ([]pruneCandidate, error) {
@@ -134,13 +135,9 @@ func (f Fixture) pruneLocked(ctx context.Context, conn *sql.Conn, name string, m
 	if digest, stage := strings.CutPrefix(name, stagePrefix); stage {
 		template = templatePrefix + digest
 	}
-	var locked bool
-	if err := conn.QueryRowContext(ctx, "SELECT pg_catalog.pg_try_advisory_lock(pg_catalog.hashtextextended($1,0))", template).Scan(&locked); err != nil {
-		discardConn(conn)
+	locked, err := tryExclusive(ctx, conn, template)
+	if err != nil || !locked {
 		return false, err
-	}
-	if !locked {
-		return false, nil
 	}
 	defer func() {
 		if e := releaseLock(ctx, conn, unlockExclusive, template); e != nil {

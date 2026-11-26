@@ -2,6 +2,12 @@
 
 Follow this guide when upgrading an application to v0.3. For the full surface after the upgrade, see the [integration guide](INTEGRATION.md).
 
+## From v0.3.8 to v0.3.9
+
+To identify a test worker in PostgreSQL, supply `LoginRoleOptions.Label` in a keyed options literal. Choose up to 25 ASCII lowercase letters, digits or underscores. The fixture rejects invalid labels. The worktree or suite that owns the label chooses how to shorten or normalize its own names. Empty preserves the v0.3.8 login format.
+
+For crash recovery, replace `fixture.Clone(ctx, plan)` with `fixture.CloneWithLease(ctx, plan, login)`. Keep normal per-test `Database.Drop` cleanup. Use the same maintenance database for acquisition, cloning and pruning. `PruneClones(ctx, 0)` collects eligible clones immediately, including after their login role has been removed. The existing `Prune(ctx, maxIdle, ...)` applies its idle grace to leased clones. Ordinary and historical clones continue to use explicit cleanup. [Example and crash boundary](AUTHORIZATION.md#process-login-roles)
+
 ## Process fixture logins in v0.3.8
 
 A test suite that shares a disposable PostgreSQL cluster can acquire a login per process. Use `Fixture.AcquireLoginRole` with the exact member roles, retain the handle for the suite lifetime, and grant CONNECT to its generated name on each clone. Close the client pools, then call `Release` at suite shutdown. An explicit `Prune` on the same maintenance database also reaps roles left by interrupted workers once they have been observed idle for maxIdle. Its return value still lists database names. Use `PruneLoginRoles` to collect role names from a standalone login cleanup. [Example and connection requirements](AUTHORIZATION.md#process-login-roles)

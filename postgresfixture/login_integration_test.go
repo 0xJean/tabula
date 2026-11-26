@@ -21,6 +21,7 @@ import (
 )
 
 const loginWorkerEnv = "TABULA_FIXTURE_LOGIN_WORKER"
+const workerLabel = "worktree_0123456789abcdef"
 
 func loginClient(t *testing.T, database string, login *postgresfixture.LoginRole) *sql.DB {
 	t.Helper()
@@ -53,12 +54,20 @@ func TestLoginWorker(t *testing.T) {
 	}
 	_, f := loginFixture(t)
 	ctx := t.Context()
-	role, err := f.AcquireLoginRole(ctx, postgresfixture.LoginRoleOptions{MemberOf: []string{member}, ConnectionLimit: new(3)})
+	role, err := f.AcquireLoginRole(ctx, postgresfixture.LoginRoleOptions{MemberOf: []string{member}, ConnectionLimit: new(3), Label: workerLabel})
 	require.NoError(t, err)
 	fmt.Println(role.Name())
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
 		command := scanner.Text()
+		if command == "clone" {
+			// A suite may reserve a small pool for leases and a separate pool for copies.
+			_, clones := loginFixture(t)
+			db, err := clones.CloneWithLease(ctx, postgresfixture.Installation{Revision: member, Base: []byte("SELECT 1")}, role)
+			require.NoError(t, err)
+			fmt.Println(db.Name())
+			continue
+		}
 		if command == "release" {
 			require.NoError(t, role.Release(ctx))
 			require.NoError(t, role.Release(ctx))
@@ -162,8 +171,10 @@ func TestProcessLoginLifetime(t *testing.T) {
 
 	first, second := startLoginWorker(t, member), startLoginWorker(t, member)
 	a, b := first.read(t), second.read(t)
-	require.Regexp(t, "^tabula_login_[a-f0-9]{24}$", a)
-	require.Regexp(t, "^tabula_login_[a-f0-9]{24}$", b)
+	require.Regexp(t, "^tabula_login_[a-f0-9]{24}_"+workerLabel+"$", a)
+	require.Regexp(t, "^tabula_login_[a-f0-9]{24}_"+workerLabel+"$", b)
+	require.Len(t, a, 63)
+	require.Len(t, b, 63)
 	require.NotEqual(t, a, b)
 	for _, name := range []string{a, b} {
 		var safe bool
@@ -286,13 +297,14 @@ func TestLoginReleaseRetriesWithoutDroppingObjects(t *testing.T) {
 func TestFixturePruneReapsLoginAndKeepsUnmarkedRole(t *testing.T) {
 	admin, f := loginFixture(t)
 	ctx := t.Context()
-	lookalike := fmt.Sprintf("tabula_login_%024x", time.Now().UnixNano())
+	lookalike := fmt.Sprintf("tabula_login_%024x_labeled", time.Now().UnixNano())
 	_, err := admin.ExecContext(ctx, "CREATE ROLE "+lookalike+" LOGIN")
 	require.NoError(t, err)
 	t.Cleanup(func() { _, _ = admin.Exec("DROP ROLE " + lookalike) })
 
 	r, err := f.AcquireLoginRole(ctx, postgresfixture.LoginRoleOptions{})
 	require.NoError(t, err)
+	require.Regexp(t, "^tabula_login_[a-f0-9]{24}$", r.Name())
 	t.Cleanup(func() { _ = r.Release(context.Background()) })
 	var database string
 	require.NoError(t, admin.QueryRowContext(ctx, "SELECT current_database()").Scan(&database))

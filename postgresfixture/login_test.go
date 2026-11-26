@@ -30,16 +30,43 @@ func TestLoginRoleOptions(t *testing.T) {
 	require.Error(t, err)
 	_, err = f.PruneLoginRoles(t.Context(), -time.Second)
 	require.ErrorContains(t, err, "nonnegative")
+	_, err = f.PruneClones(t.Context(), 0)
+	require.ErrorContains(t, err, "Admin")
+	_, err = f.PruneClones(t.Context(), -time.Second)
+	require.ErrorContains(t, err, "nonnegative")
 	var zero LoginRole
+	for _, role := range []*LoginRole{nil, &zero} {
+		_, err = f.CloneWithLease(t.Context(), Installation{}, role)
+		require.ErrorContains(t, err, "requires a fixture login")
+	}
 	require.Empty(t, zero.Name())
 	require.Empty(t, zero.Password())
 	require.Error(t, zero.Release(context.Background()))
 }
 
-func TestLoginIdleGrace(t *testing.T) {
+func TestLoginLabel(t *testing.T) {
+	maxLabel := strings.Repeat("a", 25)
+	for _, label := range []string{"", "_", "worktree_2", maxLabel} {
+		name, err := freshLoginName(label)
+		require.NoError(t, err)
+		require.Regexp(t, loginNamePattern, name)
+		if label == "" {
+			require.Len(t, name, 37)
+		} else {
+			require.True(t, strings.HasSuffix(name, "_"+label))
+			require.Len(t, name, 38+len(label))
+		}
+	}
+	for _, label := range []string{"Topic", "a/b", "a-b", "x y", "x\n", "é", "x'_", maxLabel + "0"} {
+		_, err := freshLoginName(label)
+		require.Error(t, err)
+	}
+}
+
+func TestFixtureIdleGrace(t *testing.T) {
 	const base = "tabula fixture login v1 7/9"
 	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
-	eligible, mark, err := loginIdle(base, false, now, time.Hour)
+	eligible, mark, err := fixtureIdle(base, false, now, time.Hour)
 	require.NoError(t, err)
 	require.False(t, eligible)
 	require.Equal(t, base+" idle 2026-01-02T03:04:05Z", mark)
@@ -47,11 +74,11 @@ func TestLoginIdleGrace(t *testing.T) {
 		elapsed time.Duration
 		want    bool
 	}{{0, false}, {time.Hour - time.Nanosecond, false}, {time.Hour, true}} {
-		eligible, update, err := loginIdle(mark, false, now.Add(tc.elapsed), time.Hour)
+		eligible, update, err := fixtureIdle(mark, false, now.Add(tc.elapsed), time.Hour)
 		require.NoError(t, err)
 		require.Empty(t, update)
 		require.Equal(t, tc.want, eligible)
 	}
-	_, _, err = loginIdle(base+" idle malformed", false, now, 0)
+	_, _, err = fixtureIdle(base+" idle malformed", false, now, 0)
 	require.Error(t, err)
 }

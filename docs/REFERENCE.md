@@ -1867,16 +1867,28 @@ func (f Fixture) Clone(ctx context.Context, p Installation) (Database, error)
     A shared advisory lock protects the template through the physical copy,
     allowing concurrent copies. Publication is serialized on the staging name.
 
+func (f Fixture) CloneWithLease(ctx context.Context, p Installation, login *LoginRole) (Database, error)
+    CloneWithLease creates a clone that PruneClones can reclaim after login's
+    lease ends. Use a live login from the same maintenance database, close test
+    clients and call Database.Drop during normal cleanup. If publication and
+    cleanup both fail, the error comes with the database handle for a retry.
+
 func (f Fixture) Prune(ctx context.Context, maxIdle time.Duration, keep ...Installation) ([]string, error)
     Prune drops cached templates whose last Clone is older than maxIdle and
     staging databases abandoned by interrupted builds, except the templates
-    of keep. Each database is dropped through Backend.Drop while holding the
-    same advisory lock that Clone holds through the physical copy. Templates
-    with missing or invalid last-use marks are kept. Prune returns the names
-    it dropped, including partial results if another drop failed. It also reaps
-    process logins observed idle for maxIdle. Its result contains only database
-    names; use PruneLoginRoles to run login cleanup alone and collect role
-    names.
+    of keep. Each template or stage is dropped through Backend.Drop while
+    holding the same advisory lock that Clone holds through the physical copy.
+    Templates with missing or invalid last-use marks are kept. Prune returns
+    the names it dropped, including partial results if another drop failed.
+    It also reaps process logins and leased clones observed idle for maxIdle.
+    Its result contains only database names. PruneLoginRoles and PruneClones run
+    the corresponding sweeps independently.
+
+func (f Fixture) PruneClones(ctx context.Context, maxIdle time.Duration) ([]string, error)
+    PruneClones removes abandoned CloneWithLease databases owned by this
+    maintenance database. A live lease or any connection preserves the clone.
+    A positive maxIdle starts at the first observed idle sweep; zero requests
+    immediate cleanup. It returns names removed by this call and any errors.
 
 func (f Fixture) PruneLoginRoles(ctx context.Context, maxIdle time.Duration) ([]string, error)
     PruneLoginRoles removes abandoned fixture logins from this maintenance
@@ -1928,6 +1940,9 @@ type LoginRoleOptions struct {
 	MemberOf        []string
 	Inherit         bool
 	ConnectionLimit *int
+	// Label optionally appends 1–25 ASCII lowercase letters, digits or
+	// underscores to the generated name. Empty preserves the unlabeled form.
+	Label string
 }
     LoginRoleOptions configures a temporary LOGIN on a disposable cluster.
     MemberOf lists exact catalog names of existing roles. Inherit defaults
