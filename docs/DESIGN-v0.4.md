@@ -32,16 +32,16 @@ query := q.DefineRead(summaries, "groups_by_size",
 rows, err := query.Bind(session).Find(ctx, q.BindValue(minimum, int64(2)))
 ```
 
-The scoped snapshot for this shape is shown below. `$1` comes from the verified session and `$2` from `minimum`. Counting the right-hand ID gives zero for an unmatched group. Moving the right-hand scope condition to the outer `WHERE` would lose that group.
+In this snapshot both scope columns are PostgreSQL `bigint`. The verified session supplies `$1` and `minimum` supplies `$2`. Counting the right-hand ID gives zero for an unmatched group. Moving the right-hand scope condition to the outer `WHERE` would lose that group.
 
 ```sql
 SELECT "g"."id" AS "group_id", count("j"."id") AS "job_count"
 FROM "app"."groups" AS "g"
 LEFT JOIN "app"."jobs" AS "j"
-  ON ("g"."id" = "j"."group_id") AND ("j"."scope_id" = $1)
-WHERE ("g"."scope_id" = $1)
+  ON ("g"."id" = "j"."group_id") AND ("j"."scope_id" = CAST($1 AS "pg_catalog"."int8"))
+WHERE ("g"."scope_id" = CAST($1 AS "pg_catalog"."int8"))
 GROUP BY "g"."id"
-HAVING (count("j"."id") >= $2)
+HAVING (count("j"."id") >= CAST($2 AS "pg_catalog"."int8"))
 ORDER BY "g"."id" ASC
 ```
 
@@ -50,7 +50,7 @@ When the database exclusively enforces row scope, declare the physical table wit
 ```sql
 SELECT "j"."id" AS "job_id"
 FROM "app"."jobs" AS "j"
-WHERE ("j"."id" = $1)
+WHERE ("j"."id" = CAST($1 AS "pg_catalog"."int8"))
 ```
 
 Here `$1` binds the requested job ID. `ByRLS` emits no scope predicate and reserves no scope slot. The plan records `app.jobs` as requiring ENABLE and FORCE ROW LEVEL SECURITY. Startup checks the declared physical relation and the executing role, including bypass and ownership considerations. A real-database test under that role must read an allowed row and exclude an otherwise matching row in another scope. Missing policies or a missing FORCE flag must fail verification. Apply these checks independently to each occurrence in a join.
