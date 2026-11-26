@@ -53,7 +53,7 @@ CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) additionally runs:
 - **Lint**: `golangci-lint` (v2) with [.golangci.yml](../.golangci.yml) across `.`, `pgxdriver`, and `benchmarks`
 - **Security**: `govulncheck -test -tags=integration ./...` across all three modules
 - **Example E2E**: `examples/multitenant` migrated and executed against PostgreSQL 17
-- **Release rehearsal**: prepare and verify a synthetic patch of the documented minor version. The release script checks the standalone module pins with `GOWORK=off` and regenerates the reference against the candidate modules.
+- **Release rehearsal**: prepare a synthetic patch of the documented minor version and run `release.sh verify-modules`. The release script checks the standalone module pins with `GOWORK=off` and regenerates the reference against the candidate modules.
 
 ## Documentation checks
 

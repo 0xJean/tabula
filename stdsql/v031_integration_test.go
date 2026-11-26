@@ -165,17 +165,17 @@ func TestV031RoleRunnerSharedSealedAndObserve(t *testing.T) {
 	runnerTrace := &traceRec{}
 	var runnerLogBuf bytes.Buffer
 	policy := stdsql.ScopePolicy[scope]{
-		ManagedVars: []string{"app.scope", "app.mode", "app.req_id"},
+		ManagedVars: []string{"demo.scope", "demo.mode", "demo.req_id"},
 		ScopeVars: func(s scope) map[string]string {
-			return map[string]string{"app.scope": string(s), "app.mode": "scoped"}
+			return map[string]string{"demo.scope": string(s), "demo.mode": "scoped"}
 		},
 		ContextVars: func(ctx context.Context) map[string]string {
 			v, _ := ctx.Value(ctxKey{}).(string)
-			return map[string]string{"app.req_id": v}
+			return map[string]string{"demo.req_id": v}
 		},
 		IsUnscoped:   func(s scope) bool { return s == "all" },
-		UnscopedVars: map[string]string{"app.mode": "unscoped"},
-		InactiveVars: map[string]string{"app.scope": "", "app.mode": "inactive"},
+		UnscopedVars: map[string]string{"demo.mode": "unscoped"},
+		InactiveVars: map[string]string{"demo.scope": "", "demo.mode": "inactive"},
 		ScopeLog:     func(s scope) string { return "tenant:" + string(s) },
 	}
 	runner, err := stdsql.NewRunner(db, policy, stdsql.RunnerOptions{
@@ -221,7 +221,7 @@ func TestV031RoleRunnerSharedSealedAndObserve(t *testing.T) {
 		retained = s
 		// Verify role, timeouts, and GUCs.
 		var curRole, lockMS, stmtMS, idleMS, appScope, appMode, appReq string
-		require.NoError(t, s.Scan(txCtx, `SELECT current_user, current_setting('lock_timeout'), current_setting('statement_timeout'), current_setting('idle_in_transaction_session_timeout'), current_setting('app.scope'), current_setting('app.mode'), current_setting('app.req_id')`,
+		require.NoError(t, s.Scan(txCtx, `SELECT current_user, current_setting('lock_timeout'), current_setting('statement_timeout'), current_setting('idle_in_transaction_session_timeout'), current_setting('demo.scope'), current_setting('demo.mode'), current_setting('demo.req_id')`,
 			nil, &curRole, &lockMS, &stmtMS, &idleMS, &appScope, &appMode, &appReq))
 		require.Equal(t, roleName, curRole)
 		require.Equal(t, "2s", lockMS)
@@ -235,7 +235,7 @@ func TestV031RoleRunnerSharedSealedAndObserve(t *testing.T) {
 		for _, bad := range []string{
 			"SET ROLE postgres",
 			"SET SESSION AUTHORIZATION DEFAULT",
-			"SELECT set_config('app.scope', 't2', true)",
+			"SELECT set_config('demo.scope', 't2', true)",
 			"SET lock_timeout = '100s'",
 			"SET statement_timeout = 0",
 			"COMMIT",
@@ -250,7 +250,7 @@ func TestV031RoleRunnerSharedSealedAndObserve(t *testing.T) {
 			require.ErrorIs(t, gErr, tabula.ErrForbiddenStatement, bad)
 		}
 		// Transaction role and scope variables must remain intact after rejected transaction control.
-		require.NoError(t, s.Scan(txCtx, `SELECT current_user, current_setting('app.scope')`, nil, &curRole, &appScope))
+		require.NoError(t, s.Scan(txCtx, `SELECT current_user, current_setting('demo.scope')`, nil, &curRole, &appScope))
 		require.Equal(t, roleName, curRole)
 		require.Equal(t, "t1", appScope)
 
@@ -338,7 +338,7 @@ func TestV031RoleRunnerSharedSealedAndObserve(t *testing.T) {
 
 		checkVars := func(s *stdsql.Session[scope], wantScope, wantMode string) {
 			var gotScope, gotMode string
-			require.NoError(t, s.Scan(txCtx, "SELECT current_setting('app.scope'), current_setting('app.mode')", nil, &gotScope, &gotMode))
+			require.NoError(t, s.Scan(txCtx, "SELECT current_setting('demo.scope'), current_setting('demo.mode')", nil, &gotScope, &gotMode))
 			require.Equal(t, wantScope, gotScope)
 			require.Equal(t, wantMode, gotMode)
 		}

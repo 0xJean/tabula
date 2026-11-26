@@ -10,15 +10,44 @@ children=(pgxdriver oteltabula benchmarks)
 die() { echo "$*" >&2; exit 1; }
 
 if [[ ! $version =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-  die 'Usage: scripts/release.sh {plan|prepare|verify|publish} vX.Y.Z'
+  die 'Usage: scripts/release.sh {plan|prepare|notes|verify-modules|verify|publish} vX.Y.Z [--notes-file FILE] [--pr-file FILE]'
 fi
+# The same section supplies the default release body and the changelog check.
+# Padding preserves the original CHANGELOG.md line numbers in findings.
+changelog_section() {
+  git show HEAD:CHANGELOG.md | awk -v version="$version" -v pad="$1" '
+    /^## / {
+      active = ($2 == version)
+      if (active) matches++
+    }
+    active { print; if ($0 !~ /^## / && $0 !~ /^[[:space:]]*$/) body++; next }
+    pad && !matches { print "" }
+    END { if (matches != 1 || !body) exit 1 }
+  '
+}
+
+notes_file=""
+pr_file=""
+shift 2
+while (( $# )); do
+  [[ $# -ge 2 && -f $2 ]] || die 'Expected an option followed by a readable file.'
+  case "$1:$mode" in
+    --notes-file:verify|--notes-file:publish) notes_file=$2 ;;
+    --pr-file:verify) pr_file=$2 ;;
+    *) die 'Unknown option for this release step.' ;;
+  esac
+  shift 2
+done
 case "$mode" in
+  notes)
+    changelog_section 0 || die 'The target needs one nonempty changelog section.'
+    exit 0 ;;
   plan)
     echo "Prepare child modules (${children[*]}) against $module@$version from the committed core."
     echo "After verification, publish main, $version, pgxdriver/$version and oteltabula/$version in one atomic push."
     exit 0 ;;
-  prepare|verify|publish) ;;
-  *) die 'Expected plan, prepare, verify, or publish.' ;;
+  prepare|verify-modules|verify|publish) ;;
+  *) die 'Expected plan, prepare, notes, verify-modules, verify, or publish.' ;;
 esac
 
 no_replacements() {
@@ -44,11 +73,38 @@ if [[ $mode != prepare ]]; then
   done
 fi
 
+tmp=$(mktemp -d)
+trap 'chmod -R u+w "$tmp" && rm -rf "$tmp"' EXIT
+if [[ $mode == verify || $mode == publish ]]; then
+  python3 -IB scripts/neutrality.py check
+  changelog_section 1 > "$tmp/changelog" || die 'The target needs one nonempty changelog section.'
+  python3 -IB scripts/neutrality.py text CHANGELOG.md "$tmp/changelog"
+  if [[ -z "$notes_file" ]]; then
+    changelog_section 0 > "$tmp/notes"
+    notes_file="$tmp/notes"
+  fi
+  [[ -s "$notes_file" ]] || die 'The release notes are empty.'
+  python3 -IB scripts/neutrality.py text Release "$notes_file"
+  if [[ -n "$pr_file" ]]; then
+    # Offline verification before opening a PR accepts its proposed title and body.
+    [[ -s "$pr_file" ]] || die 'The proposed pull request text is empty.'
+    python3 -IB scripts/neutrality.py text pull-request "$pr_file"
+  else
+    # At publication the PR must match this exact head or merge revision.
+    gh api --paginate --slurp "repos/0xJean/tabula/commits/$revision/pulls" |
+      jq -e --arg rev "$revision" '
+        [ .[][] | select(.base.repo.full_name == "0xJean/tabula" and .base.ref == "main")
+          | select((.state == "open" and .head.sha == $rev) or
+                   (.merged_at != null and .merge_commit_sha == $rev)) ]
+        | if length == 1 then .[0] else error("expected one release PR at the candidate revision") end
+      ' > "$tmp/pr.json"
+    python3 -IB scripts/neutrality.py pr --event "$tmp/pr.json"
+  fi
+fi
+
 # Let Go construct the canonical module archive from Git as it would for a
 # public tag. Only the private clone has this tag. Isolate the unreleased
 # version from both the public checksum server and the user's module cache.
-tmp=$(mktemp -d)
-trap 'chmod -R u+w "$tmp" && rm -rf "$tmp"' EXIT
 # Keep using the selected toolchain when its downloaded copy lives in the shared cache.
 toolchain_bin="$(go env GOROOT)/bin"
 export PATH="$toolchain_bin:$PATH" GOTOOLCHAIN=local
@@ -106,7 +162,7 @@ case "$mode" in
     done
     echo "Prepared child manifests for $version. Review and commit the changes."
     ;;
-  verify) echo "Verified the standalone modules against $module@$version ($revision)." ;;
+  verify|verify-modules) echo "Verified the standalone modules against $module@$version ($revision)." ;;
   publish)
     git push --atomic origin "$revision:refs/heads/main" "$revision:refs/tags/$version" "$revision:refs/tags/pgxdriver/$version" "$revision:refs/tags/oteltabula/$version"
     ;;

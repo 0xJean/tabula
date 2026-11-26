@@ -135,7 +135,7 @@ func TestVerifyAgainstPostgres(t *testing.T) {
 			`REVOKE EXECUTE ON FUNCTION ` + schema + `.count_items(text) FROM PUBLIC`,
 			`ALTER TABLE ` + schema + `.items ENABLE ROW LEVEL SECURITY`,
 			`ALTER TABLE ` + schema + `.items FORCE ROW LEVEL SECURITY`,
-			`CREATE POLICY items_tenant_scope ON ` + schema + `.items AS RESTRICTIVE FOR ALL TO PUBLIC USING (tenant_id = current_setting('app.current_tenant', true))`,
+			`CREATE POLICY items_tenant_scope ON ` + schema + `.items AS RESTRICTIVE FOR ALL TO PUBLIC USING (tenant_id = current_setting('demo.tenant', true))`,
 		} {
 			_, err := db.ExecContext(ctx, q)
 			require.NoError(t, err, q)

@@ -164,7 +164,7 @@ func TestScopedReadsAndBatchWrites(t *testing.T) {
 	err = sess.Scan(ctx, "WITH changed AS (UPDATE "+name+" SET attempts = 0 RETURNING id) SELECT count(*) FROM changed", nil, &n)
 	require.ErrorIs(t, err, tabula.ErrReadOnly)
 	require.Equal(t, "25006", tabula.SQLState(err))
-	_, err = stdsql.Direct("postgres", dsn, stdsql.ScopePolicy[tenant]{ManagedVars: []string{"app.tenant"}})
+	_, err = stdsql.Direct("postgres", dsn, stdsql.ScopePolicy[tenant]{ManagedVars: []string{"demo.tenant"}})
 	require.Error(t, err)
 }
 

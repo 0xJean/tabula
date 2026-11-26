@@ -119,7 +119,7 @@ behavior directly:
 ### Correlating server logs with Tabula statement keys
 
 1. **Per-service `application_name`**: set `application_name` in the connection DSN or
-   `pgxpool.Config` (for example `service:app_reader`) and include `%a` in
+   `pgxpool.Config` (for example `service:scope_reader`) and include `%a` in
    `log_line_prefix` to separate services and caller roles in PostgreSQL logs.
 2. **Opt-in SQL comment tagging (`RunnerOptions.TagStatements: true`)**: prefixes each
    executed statement with `/* tabula:<key> */ ` (using the registered statement key for

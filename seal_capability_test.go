@@ -177,7 +177,7 @@ func TestObserverMetadataPrecedenceAndRedaction(t *testing.T) {
 	regTracer := &fakeTracer{}
 
 	obs := NewObserver(ObserverConfig{
-		Role:          "app_writer",
+		Role:          "scope_writer",
 		Tracer:        runnerTracer,
 		TagStatements: true,
 		Log:           LogConfig{Logger: runnerLog, Level: LogAll, Values: ValuesAllowed, SQL: true},
@@ -202,7 +202,7 @@ func TestObserverMetadataPrecedenceAndRedaction(t *testing.T) {
 	require.Len(t, runnerTracer.spans, 1)
 	require.Empty(t, regTracer.spans)
 	require.Equal(t, "public.items.secret_read", runnerTracer.spans[0].info.Key)
-	require.Equal(t, "app_writer", runnerTracer.spans[0].info.Role)
+	require.Equal(t, "scope_writer", runnerTracer.spans[0].info.Role)
 	require.NotContains(t, runnerBuf.String(), "top-secret-token")
 	require.Contains(t, runnerBuf.String(), "[redacted]")
 	require.Empty(t, regBuf.String())

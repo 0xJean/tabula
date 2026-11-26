@@ -31,21 +31,21 @@ func ExampleDefine() {
 }
 
 func ExampleTable_DefineUpsert() {
-	type setting struct {
-		Key   string `db:"setting_key,key"`
-		Value string `db:"setting_value"`
+	type entry struct {
+		Key   string `db:"entry_key,key"`
+		Value string `db:"entry_value"`
 	}
 
 	reg := tabula.NewRegistry(tabula.RegistryConfig[struct{}]{})
-	tbl := tabula.Define(reg, tabula.TableSpec[setting, string]{Name: "public.settings"})
-	plan := tbl.DefineUpsert("upsert_setting", tabula.UpsertSpec{
-		Conflict: []string{"setting_key"},
-		Update:   []string{"setting_value"},
+	tbl := tabula.Define(reg, tabula.TableSpec[entry, string]{Name: "public.entries"})
+	plan := tbl.DefineUpsert("upsert_entry", tabula.UpsertSpec{
+		Conflict: []string{"entry_key"},
+		Update:   []string{"entry_value"},
 	})
 
 	fmt.Println(plan.SQL())
 	// Output:
-	// INSERT INTO public.settings (setting_key, setting_value) VALUES ($1, $2) ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value
+	// INSERT INTO public.entries (entry_key, entry_value) VALUES ($1, $2) ON CONFLICT (entry_key) DO UPDATE SET entry_value = EXCLUDED.entry_value
 }
 
 func ExampleDefineView() {

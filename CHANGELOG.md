@@ -7,6 +7,7 @@ v1.0 a minor version may contain breaking changes.
 
 - `TableSpec.WriteMode` supports read and update access with an optional `UpdateColumns` list, and strict insert access with optional serial sequence usage. The descriptor derives statements and privileges for the selected operations. Bound methods and pgx COPY check the mode before database I/O.
 - `WriteInsertOnly` supports a named, targetless `ON CONFLICT DO NOTHING` plan. Single inserts leave generated serial keys in PostgreSQL. [Table write modes](docs/AUTHORIZATION.md#table-write-modes)
+- Local publication checks cover staged changes, commit messages, branch names, pull request text and release notes. [Contribution workflow](CONTRIBUTING.md#publication-policy)
 
 ## v0.3.10 — 2026-11-26
 

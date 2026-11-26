@@ -62,29 +62,29 @@ func TestNewRunnerValidation(t *testing.T) {
 	}
 
 	_, err = stdsql.NewRunner(db, stdsql.ScopePolicy[string]{
-		ManagedVars: []string{"app.scope", "app.scope"},
+		ManagedVars: []string{"demo.scope", "demo.scope"},
 	}, stdsql.RunnerOptions{})
 	require.ErrorContains(t, err, "duplicate")
 
 	_, err = stdsql.NewRunner(db, stdsql.ScopePolicy[string]{
-		ManagedVars:  []string{"app.scope"},
-		UnscopedVars: map[string]string{"app.other": "1"},
+		ManagedVars:  []string{"demo.scope"},
+		UnscopedVars: map[string]string{"demo.other": "1"},
 	}, stdsql.RunnerOptions{})
 	require.ErrorContains(t, err, "not declared")
 
 	_, err = stdsql.NewRunner(db, stdsql.ScopePolicy[string]{
-		ManagedVars:  []string{"app.scope"},
-		InactiveVars: map[string]string{"app.other": ""},
+		ManagedVars:  []string{"demo.scope"},
+		InactiveVars: map[string]string{"demo.other": ""},
 	}, stdsql.RunnerOptions{})
 	require.ErrorContains(t, err, "not declared")
 
 	r, err := stdsql.NewRunner(db, stdsql.ScopePolicy[string]{
-		ManagedVars:  []string{"app.scope", "app.mode"},
+		ManagedVars:  []string{"demo.scope", "demo.mode"},
 		IsUnscoped:   func(s string) bool { return s == "all" },
-		UnscopedVars: map[string]string{"app.mode": "all"},
-		InactiveVars: map[string]string{"app.mode": "off"},
+		UnscopedVars: map[string]string{"demo.mode": "all"},
+		InactiveVars: map[string]string{"demo.mode": "off"},
 	}, stdsql.RunnerOptions{
-		Role:        "app_ro",
+		Role:        "scope_reader",
 		RequireRole: true,
 		ReadOnly:    true,
 		Unscoped:    stdsql.UnscopedReadOnly,
@@ -119,17 +119,17 @@ func TestNewRunnerValidation(t *testing.T) {
 
 	// Undeclared GUC returned by callback rejects before BEGIN.
 	rBadCB, err := stdsql.NewRunner(db, stdsql.ScopePolicy[string]{
-		ManagedVars: []string{"app.scope"},
-		ScopeVars:   func(string) map[string]string { return map[string]string{"app.extra": "x"} },
+		ManagedVars: []string{"demo.scope"},
+		ScopeVars:   func(string) map[string]string { return map[string]string{"demo.extra": "x"} },
 	}, stdsql.RunnerOptions{})
 	require.NoError(t, err)
 	require.ErrorContains(t, rBadCB.Within(ctx, "t1", func(context.Context, *stdsql.Session[string]) error { return nil }), "undeclared GUC")
 
 	// Duplicate GUC across ScopeVars and ContextVars rejects before BEGIN.
 	rDupCB, err := stdsql.NewRunner(db, stdsql.ScopePolicy[string]{
-		ManagedVars: []string{"app.scope"},
-		ScopeVars:   func(s string) map[string]string { return map[string]string{"app.scope": s} },
-		ContextVars: func(context.Context) map[string]string { return map[string]string{"app.scope": "override"} },
+		ManagedVars: []string{"demo.scope"},
+		ScopeVars:   func(s string) map[string]string { return map[string]string{"demo.scope": s} },
+		ContextVars: func(context.Context) map[string]string { return map[string]string{"demo.scope": "override"} },
 	}, stdsql.RunnerOptions{})
 	require.NoError(t, err)
 	require.ErrorContains(t, rDupCB.Within(ctx, "t1", func(context.Context, *stdsql.Session[string]) error { return nil }), "duplicate GUC")
@@ -145,7 +145,7 @@ func TestHelpersValidation(t *testing.T) {
 	_, err := stdsql.Direct("postgres", "http://example.com/db", stdsql.NoScopePolicy())
 	require.Error(t, err)
 	_, err = stdsql.Direct("postgres", "postgres://user:pass@localhost/db", stdsql.ScopePolicy[string]{
-		ScopeVars: func(s string) map[string]string { return map[string]string{"app.s": s} },
+		ScopeVars: func(s string) map[string]string { return map[string]string{"demo.s": s} },
 	})
 	require.Error(t, err)
 }

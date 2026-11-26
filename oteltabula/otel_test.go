@@ -41,7 +41,7 @@ func TestTracerRecordsSuccessAndErrorSpans(t *testing.T) {
 		Table:  "items",
 		Action: "list",
 		Scope:  "t-1",
-		Role:   "app_reader",
+		Role:   "scope_reader",
 	}
 	ctx, end := tr.Start(t.Context(), info)
 	end(4, nil)
@@ -50,7 +50,7 @@ func TestTracerRecordsSuccessAndErrorSpans(t *testing.T) {
 	// 2. Failed statement span with SQLSTATE + default empty name fallback.
 	_, endErr := tr.Start(t.Context(), tabula.TraceInfo{
 		Action: "insert",
-		Role:   "app_writer",
+		Role:   "scope_writer",
 	})
 	endErr(0, fakePGError{code: "23505"})
 
@@ -69,7 +69,7 @@ func TestTracerRecordsSuccessAndErrorSpans(t *testing.T) {
 	require.Equal(t, "items.list", attrs["tabula.key"].AsString())
 	require.Equal(t, "items", attrs["tabula.table"].AsString())
 	require.Equal(t, "list", attrs["tabula.action"].AsString())
-	require.Equal(t, "app_reader", attrs["tabula.role"].AsString())
+	require.Equal(t, "scope_reader", attrs["tabula.role"].AsString())
 	require.Equal(t, "t-1", attrs["tabula.scope"].AsString())
 	require.Equal(t, int64(4), attrs["tabula.rows"].AsInt64())
 
@@ -105,7 +105,7 @@ func TestMetricsRecordsHistogramAndCounter(t *testing.T) {
 		Key:    "tabula.inline.abcdef012345",
 		Table:  "items",
 		Action: "select",
-		Role:   "app_reader",
+		Role:   "scope_reader",
 		Scope:  "t-1",
 	}
 	m.Observe(t.Context(), info, 25*time.Millisecond, 3, "")
@@ -157,7 +157,7 @@ func TestMetricsRecordsHistogramAndCounter(t *testing.T) {
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sr))
 	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
 	obs := tabula.NewObserver(tabula.ObserverConfig{
-		Role:    "app_writer",
+		Role:    "scope_writer",
 		Tracer:  oteltabula.NewTracer(tp),
 		Metrics: m,
 	})

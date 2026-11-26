@@ -27,6 +27,10 @@ if [[ "$mode" == auto ]]; then
   fi
 fi
 
+echo "==> Checking publication policy"
+python3 -IB scripts/neutrality.py check
+python3 -IB scripts/test_neutrality.py
+
 echo "==> Checking formatting (gofmt)"
 unformatted=$(gofmt -l .)
 if [[ -n "$unformatted" ]]; then

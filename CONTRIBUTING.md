@@ -18,6 +18,29 @@ must preserve Tabula's core boundaries:
    the Go standard library. Driver-specific code belongs in `pqdriver` or the separate
    `pgxdriver` module.
 
+## Publication policy
+
+Use general PostgreSQL examples throughout the project. The mandatory vocabulary and scope rules are in [AGENTS.md](AGENTS.md#1-brand-and-domain-neutrality-is-mandatory). Maintainers review issue text, proposed branches, pull requests and release notes against the same rules.
+
+Install the local checks once per clone, then refresh them when the scanner or hooks change. This requires Git and Python 3.9 or newer. Place the private vocabulary in `~/.config/tabula/denylist` with mode `0600`. Use one literal term or phrase per line. Matching is case-insensitive. `TABULA_NEUTRALITY_FILE` can point to another absolute path outside every linked worktree.
+
+```sh
+scripts/install-hooks.sh
+python3 -IB scripts/neutrality.py check
+```
+
+The installer puts the scanner and its hooks in the clone's common Git directory. Existing and future linked worktrees use the same copy. The pre-commit hook checks staged additions and the branch name. The commit-msg hook checks the proposed message. Pre-push checks outgoing history and destination ref names. The hooks require the local policy even if Git inherited a CI environment.
+
+Before opening or editing a pull request, scan its proposed title and description. The full local check also examines the working tree and outgoing commits. A reported location identifies the file and line. Exit status 0 means clean, 1 indicates a finding and 2 indicates a missing policy or invalid input.
+
+```sh
+python3 -IB scripts/neutrality.py check
+python3 -IB scripts/neutrality.py text pr-title "$title_file"
+python3 -IB scripts/neutrality.py text pr-body "$body_file"
+```
+
+The existing CI quality job runs the structural checks using the complete Git history. Added Markdown and Go source must use characters outside the CJK ranges, with a source exception for `docs/brand/`. Commit references must resolve to commits in this repository. Local checks also apply the private vocabulary. CI runs with `CI=true` and requires no vocabulary or repository secret.
+
 ## Local Development & Testing
 
 With Go and jq installed, run `scripts/workspace.sh` from the repository root. It creates a Git-ignored `go.work` and maps each child module's core dependency to the local checkout. Run it again after changing the module pins.
@@ -60,9 +83,9 @@ Edit documentation in the same change as the behavior it describes. A release ta
 
 ## Releasing the modules
 
-Release tooling requires Git, Go and jq. The benchmark module is a development harness. The core, pgxdriver and oteltabula receive matching version tags.
+Release tooling requires Git, Go, jq, Python and the authenticated GitHub CLI. The benchmark module is a development harness. The core, pgxdriver and oteltabula receive matching version tags.
 
 1. Run `scripts/release.sh plan vX.Y.Z` to print the intended operations. Finalize and commit the core sources, integration guide, reference and changelog before preparing the child manifests. The guide title identifies the release series (for example `v0.3`).
 2. Run `scripts/release.sh prepare vX.Y.Z`. In a temporary Git clone and module cache, Go builds the candidate core archive from HEAD. With `GOWORK=off`, the script removes core replacements, pins the candidate and runs `go mod tidy` for each child. Review and commit the prepared child manifests and checksums.
-3. Run `scripts/release.sh verify vX.Y.Z` to check the guide series, generated reference, pins, checksums and standalone builds against the candidate. If the core changes, rerun preparation. Go excludes nested modules from the core archive, so committing the prepared child manifests preserves its checksum.
-4. After the release PR merges, run `scripts/release.sh publish vX.Y.Z` on clean `main` at the merged commit. It repeats verification and sends that commit to `main`, `vX.Y.Z`, `pgxdriver/vX.Y.Z` and `oteltabula/vX.Y.Z` in one atomic push. CI only exercises preparation and verification.
+3. Run `scripts/release.sh verify vX.Y.Z` against the release PR. Verification scans the changelog section, the proposed release body, and the PR at the candidate revision. It checks the reference, pins, checksums and standalone builds. Before the PR exists, use `--pr-file FILE` with its proposed title and body. If the core changes, rerun preparation. For an offline rehearsal of module resolution alone, use `scripts/release.sh verify-modules vX.Y.Z`.
+4. After the PR merges, generate its default release body with `scripts/release.sh notes vX.Y.Z > "$notes_file"`. Use `scripts/release.sh publish vX.Y.Z --notes-file "$notes_file"` on clean `main`. Publication verifies the actual merged PR and the supplied notes, then pushes the root, pgxdriver and oteltabula tags with the main revision in one atomic operation. Create the GitHub Release with `gh release create vX.Y.Z --verify-tag --title vX.Y.Z --notes-file "$notes_file"`. A custom release body uses the same `--notes-file` at verification, publication and release creation.

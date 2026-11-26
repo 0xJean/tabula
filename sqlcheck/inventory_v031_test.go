@@ -190,8 +190,8 @@ func setup(ctx context.Context, db *sql.DB, dynKey, dynCol string) {
 		MaxLimit: 50,
 	})
 	work := RoleStatements{}
-	work.AddViews("app_reader", reg.DefinedViews()...)
-	require.GreaterOrEqual(t, len(work["app_reader"]), 4)
+	work.AddViews("scope_reader", reg.DefinedViews()...)
+	require.GreaterOrEqual(t, len(work["scope_reader"]), 4)
 	require.NoError(t, work.validate())
 
 	cleanInv := SQLInventory{
@@ -202,10 +202,10 @@ func setup(ctx context.Context, db *sql.DB, dynKey, dynCol string) {
 		}},
 	}
 	bound, err := cleanInv.BindRolesWithDefinitions(
-		map[string]SQLBinding{"app.go#dq-1": {Roles: []string{"app_reader"}, Definition: "items_view"}},
+		map[string]SQLBinding{"app.go#dq-1": {Roles: []string{"scope_reader"}, Definition: "items_view"}},
 		nil,
 		reg.DefinedViews(),
 	)
 	require.NoError(t, err)
-	require.GreaterOrEqual(t, len(bound["app_reader"]), 4)
+	require.GreaterOrEqual(t, len(bound["scope_reader"]), 4)
 }

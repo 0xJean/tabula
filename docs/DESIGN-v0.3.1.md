@@ -35,7 +35,7 @@ request content.
 
 ```go
 runner, err := stdsql.NewRunner(db, policy, stdsql.RunnerOptions{
-    Role:     "app_writer",
+    Role:     "scope_writer",
     ReadOnly: false,                    // true: Within fails closed with ErrReadOnly
     Unscoped: stdsql.UnscopedReadOnly,  // UnscopedDenied | UnscopedReadOnly | UnscopedReadWrite
     Timeouts: stdsql.Timeouts{Lock: time.Second, Statement: 5 * time.Second,

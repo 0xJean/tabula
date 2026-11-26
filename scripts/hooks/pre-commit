@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+# Always enforce the private local policy when Git invokes the hook.
+unset CI
+hook_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+scanner=$hook_dir/neutrality.py
+if [ ! -f "$scanner" ]; then scanner=$hook_dir/../neutrality.py; fi
+exec python3 -IB "$scanner" staged

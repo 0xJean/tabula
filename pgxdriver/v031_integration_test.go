@@ -146,17 +146,17 @@ func TestV031PgxRoleRunnerSharedSealedCopyAndCrossDriverNesting(t *testing.T) {
 	runnerTrace := &pgxTraceRec{}
 	var runnerLogBuf bytes.Buffer
 	policy := pgxdriver.ScopePolicy[scope]{
-		ManagedVars: []string{"app.scope", "app.mode", "app.req_id"},
+		ManagedVars: []string{"demo.scope", "demo.mode", "demo.req_id"},
 		ScopeVars: func(s scope) map[string]string {
-			return map[string]string{"app.scope": string(s), "app.mode": "scoped"}
+			return map[string]string{"demo.scope": string(s), "demo.mode": "scoped"}
 		},
 		ContextVars: func(ctx context.Context) map[string]string {
 			v, _ := ctx.Value(ctxKey{}).(string)
-			return map[string]string{"app.req_id": v}
+			return map[string]string{"demo.req_id": v}
 		},
 		IsUnscoped:   func(s scope) bool { return s == "all" },
-		UnscopedVars: map[string]string{"app.mode": "unscoped"},
-		InactiveVars: map[string]string{"app.scope": "", "app.mode": "inactive"},
+		UnscopedVars: map[string]string{"demo.mode": "unscoped"},
+		InactiveVars: map[string]string{"demo.scope": "", "demo.mode": "inactive"},
 		ScopeLog:     func(s scope) string { return "tenant:" + string(s) },
 	}
 	runner, err := pgxdriver.NewRunner(pool, policy, pgxdriver.RunnerOptions{
@@ -202,7 +202,7 @@ func TestV031PgxRoleRunnerSharedSealedCopyAndCrossDriverNesting(t *testing.T) {
 	}, func(txCtx context.Context, s *pgxdriver.Session[scope]) error {
 		retained = s
 		var curRole, appScope, appMode, appReq string
-		require.NoError(t, s.Scan(txCtx, `SELECT current_user, current_setting('app.scope'), current_setting('app.mode'), current_setting('app.req_id')`,
+		require.NoError(t, s.Scan(txCtx, `SELECT current_user, current_setting('demo.scope'), current_setting('demo.mode'), current_setting('demo.req_id')`,
 			nil, &curRole, &appScope, &appMode, &appReq))
 		require.Equal(t, roleName, curRole)
 		require.Equal(t, "t1", appScope)
@@ -212,7 +212,7 @@ func TestV031PgxRoleRunnerSharedSealedCopyAndCrossDriverNesting(t *testing.T) {
 		// Built-in guard rejects SET ROLE, set_config, timeout overrides, and transaction-ending commands.
 		for _, bad := range []string{
 			"SET ROLE postgres",
-			"SELECT set_config('app.scope', 't2', true)",
+			"SELECT set_config('demo.scope', 't2', true)",
 			"COMMIT",
 			"END",
 			"ABORT",
@@ -223,7 +223,7 @@ func TestV031PgxRoleRunnerSharedSealedCopyAndCrossDriverNesting(t *testing.T) {
 			require.ErrorIs(t, gErr, tabula.ErrForbiddenStatement, bad)
 		}
 		// Transaction role and scope variables must remain intact after rejected transaction control.
-		require.NoError(t, s.Scan(txCtx, `SELECT current_user, current_setting('app.scope')`, nil, &curRole, &appScope))
+		require.NoError(t, s.Scan(txCtx, `SELECT current_user, current_setting('demo.scope')`, nil, &curRole, &appScope))
 		require.Equal(t, roleName, curRole)
 		require.Equal(t, "t1", appScope)
 
@@ -304,7 +304,7 @@ func TestV031PgxRoleRunnerSharedSealedCopyAndCrossDriverNesting(t *testing.T) {
 
 		checkVars := func(s *pgxdriver.Session[scope], wantScope, wantMode string) {
 			var gotScope, gotMode string
-			require.NoError(t, s.Scan(txCtx, "SELECT current_setting('app.scope'), current_setting('app.mode')", nil, &gotScope, &gotMode))
+			require.NoError(t, s.Scan(txCtx, "SELECT current_setting('demo.scope'), current_setting('demo.mode')", nil, &gotScope, &gotMode))
 			require.Equal(t, wantScope, gotScope)
 			require.Equal(t, wantMode, gotMode)
 		}
