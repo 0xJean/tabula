@@ -22,7 +22,7 @@ func TestMappedReadInventory(t *testing.T) {
 	bind := make(map[string]SQLBinding)
 	for _, site := range inventory.Sites {
 		owner := "entries"
-		if site.QueryKey == "lookup" || site.QueryKey == "visible" {
+		if site.QueryKey == "lookup" || site.QueryKey == "visible" || site.QueryKey == "brief" {
 			owner = "public.items"
 		}
 		require.Equal(t, owner, site.Definition)
@@ -32,14 +32,16 @@ func TestMappedReadInventory(t *testing.T) {
 	work, err := inventory.BindRolesWithDefinitions(bind, defs, nil)
 	require.NoError(t, err)
 	want := map[string][]string{
-		"lookup/One":           {"single_first.sort.offset", "single_first.sort.offset.where.first"},
-		"lookup/MaybeFirst":    {"single_first.sort.offset", "single_first.sort.offset.where.first"},
-		"visible/DefineExists": {"exists"},
-		"visible/Exists":       {"exists"},
-		"unlocked/MaybeOne":    {"data.sort.offset", "data.sort.offset.where.first"},
-		"unlocked/First":       {"firstrow.sort.offset", "firstrow.sort.offset.where.first"},
-		"joined/TryDefineRead": {"data", "single"},
-		"joined/One":           {"single"},
+		"brief/TryDefineTableRead": {"data"},
+		"brief/Find":               {"data"},
+		"lookup/One":               {"single_first.sort.offset", "single_first.sort.offset.where.first"},
+		"lookup/MaybeFirst":        {"single_first.sort.offset", "single_first.sort.offset.where.first"},
+		"visible/DefineExists":     {"exists"},
+		"visible/Exists":           {"exists"},
+		"unlocked/MaybeOne":        {"data.sort.offset", "data.sort.offset.where.first"},
+		"unlocked/First":           {"firstrow.sort.offset", "firstrow.sort.offset.where.first"},
+		"joined/TryDefineRead":     {"data", "single"},
+		"joined/One":               {"single"},
 	}
 	for role, forms := range want {
 		var got []string

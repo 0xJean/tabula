@@ -1074,6 +1074,11 @@ func ArrayOf[V any](element PGType[V]) PGType[[]V]
     RegistryConfig.ArrayArg, or the driver's native slice binding when it is
     nil. The array codec is responsible for encoding its elements.
 
+func ArrayOfNullable[V any](element PGType[V]) PGType[[]*V]
+    ArrayOfNullable declares a one-dimensional array with nullable elements.
+    A nil slice binds SQL NULL, an empty slice binds an empty array and a nil
+    element binds a SQL NULL within the array.
+
 func Bool() PGType[bool]
     Bool declares PostgreSQL boolean.
 
@@ -2608,6 +2613,10 @@ func ArrayOf[V any](element tabula.PGType[V]) tabula.PGType[[]V]
     ArrayOf declares a one-dimensional PostgreSQL array of the given element
     type. Its driver array adapter handles the elements.
 
+func ArrayOfNullable[V any](element tabula.PGType[V]) tabula.PGType[[]*V]
+    ArrayOfNullable declares a one-dimensional array of nullable scalar values.
+    A nil element round-trips independently of an empty or SQL NULL array.
+
 func BPChar() tabula.PGType[string]
     BPChar declares PostgreSQL's blank-padded character catalog type.
 
@@ -2708,8 +2717,9 @@ savepoints, binary COPY, and read-only Direct pools.
 FUNCTIONS
 
 func ArrayColumn(ft reflect.Type) (func(any) any, error)
-    ArrayColumn selects pgx's native one-dimensional array codec. Its type map
-    handles both built-in and named Go slices and element types.
+    ArrayColumn selects pgx's native one-dimensional array codec. Its type
+    map handles built-in and named Go slices, including pointer elements that
+    distinguish a SQL NULL from the scalar's zero value.
 
 func CopyFrom[T, K, S any](ctx context.Context, sess *Session[S], tbl *tabula.Table[T, K, S], rows []T) (int64, error)
     CopyFrom bulk-inserts rows into tbl using PostgreSQL's binary COPY protocol
@@ -3199,8 +3209,9 @@ func Array(v any) any
     Array wraps a Go slice for PostgreSQL "= ANY($n)" binding via lib/pq.
 
 func ArrayColumn(ft reflect.Type) (func(any) any, error)
-    ArrayColumn resolves one-dimensional string, int32, int64, float64 and bool
-    slices. Named slice and element types retain their Go types when scanned.
+    ArrayColumn resolves one-dimensional string, int32, int64, float64 and
+    bool slices. A slice of pointers also supports int16, uint32 and float32.
+    Named types and NULL elements retain their identities when scanned.
 
 func Int64Array[E ~int64](p *[]E) any
     Int64Array addresses a bigint[] column, including named int64 elements.

@@ -6,6 +6,8 @@ Start with the section for the version you are adopting. The integration guide l
 
 Use `DefineTableRead` to return a full or partial mapped record from an explicit single-source read. Reuse the same source occurrence in the selection and read clauses. Register and verify the resulting shape under the role that executes it.
 
+For a nullable array element, use a pointer slice such as `[]*int32` with `db:",array"` and `pgtype.ArrayOfNullable(pgtype.Int4())`. A nil element, an empty slice and a nil slice correspond to separate database values. The two driver column adapters support nullable elements of Go types bool, string, int16, int32, int64, uint32, float32 and float64, including named scalar types.
+
 ## From v0.4.1 to v0.4.2
 
 For tables used exclusively by typed plans, replace `Define(reg, spec)` with `DefinePlanSource(reg, spec)`. Use `TryDefinePlanSource` when startup should return a declaration error. Its successful result is already registered. Supply a schema-qualified physical name and declare the scope. A tagged scope field selects `ByScopeColumn` by default.

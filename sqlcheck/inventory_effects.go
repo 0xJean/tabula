@@ -44,6 +44,12 @@ func (site SQLSite) matchesTypedShape(key, plan string, shape tabula.StatementSh
 		if singleRowMethod(site.Method) {
 			return matchesSingleRow(key, plan, site.Method, shape, d)
 		}
+		if site.Receiver == tabulaPkgPath+".BoundReadPlan" {
+			switch site.Method {
+			case "Page", "List", "Count":
+				return matchesReadList(key, plan, site.Method)
+			}
+		}
 		return matchesRowMethod(key, plan, site.Method)
 	}
 	switch effectPlanReceiver(site.Receiver, site.Method) {

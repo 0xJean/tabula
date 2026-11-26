@@ -86,6 +86,30 @@ func TestTypedInputEncoderAndStorage(t *testing.T) {
 	require.Equal(t, document{}, BindValue(named, document{}).value)
 }
 
+func TestNullableArrayBindingSnapshotsEachStatement(t *testing.T) {
+	type document []byte
+	element := CatalogType[document]("pg_catalog", "bytea", nil)
+	slot := Input("documents", ArrayOfNullable(element))
+	raw := document{0, 7}
+	values := []*document{&raw, nil, new(document{}), new(document)}
+	b := BindValue(slot, values)
+	raw[0], values[1] = 3, &raw
+	store := newParameterLayout(false)
+	_, err := store.parameter(slot.input)
+	require.NoError(t, err)
+	for range 2 {
+		args, err := store.bind(nil, []Binding{b})
+		require.NoError(t, err)
+		got := args[0].([]*document)
+		require.Equal(t, []*document{new(document{0, 7}), nil, new(document{}), new(document)}, got)
+		(*got[0])[1] = 9
+		got[1] = got[0]
+		*got[2] = append(*got[2], 1)
+	}
+	require.Panics(t, func() { ArrayOfNullable(PGType[string]{}) })
+	require.Panics(t, func() { ArrayOfNullable(ArrayOf(Int4())) })
+}
+
 func TestScopeEncoderIdentity(t *testing.T) {
 	type scoped struct {
 		ID    int64        `db:"id,key"`

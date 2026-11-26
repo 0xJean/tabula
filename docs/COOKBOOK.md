@@ -254,6 +254,8 @@ Use `netip.Addr` for a host address and `netip.Prefix` for CIDR networks or inet
 
 Set `RegistryConfig.ArrayColumn` to `pqdriver.ArrayColumn` or `pgxdriver.ArrayColumn` for one-dimensional string, int32, int64, float64 and bool slices, including named element types. A nil slice represents SQL NULL and a non-nil empty slice represents an empty PostgreSQL array.
 
+Use a pointer for each element when individual array entries may be NULL. For example, declare a field `Ranks []*int32` with the tag `db:",array"` and map it with `ColumnType("ranks", pg.ArrayOfNullable(pg.Int4()))`. The PostgreSQL value `ARRAY[0,NULL]` decodes to a pointer to zero followed by a nil pointer. An input declared with the same mapping preserves these distinctions across executions.
+
 ## 14. Composed view queries and aggregates
 
 ```go

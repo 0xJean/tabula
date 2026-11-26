@@ -6,6 +6,7 @@ v1.0 a minor version may contain breaking changes.
 ## v0.4.3 — unreleased
 
 - `DefineTableRead` and `TryDefineTableRead` apply SELECT clauses to a mapped table selection and reuse its existing result decoders. [Mapped table reads](docs/COOKBOOK.md#mapped-table-reads)
+- `pgtype.ArrayOfNullable` and the two driver array-column adapters preserve SQL NULL elements in a one-dimensional array of pointers. A typed binding snapshots the pointed-to values. [PostgreSQL arrays](docs/COOKBOOK.md#13-postgresql-network-addresses-and-arrays)
 
 ## v0.4.2 — 2026-11-27
 

@@ -51,6 +51,20 @@ func (t catalogType) snapshot(value any) any {
 	}
 	clone := reflect.MakeSlice(v.Type(), v.Len(), v.Len())
 	reflect.Copy(clone, v)
+	if e.Kind() == reflect.Pointer {
+		for i := range clone.Len() {
+			item := clone.Index(i)
+			if item.IsNil() {
+				continue
+			}
+			ptr := reflect.New(e.Elem())
+			ptr.Elem().Set(item.Elem())
+			if elem := ptr.Elem(); elem.Kind() == reflect.Slice && elem.Type().Elem().Kind() == reflect.Uint8 {
+				elem.SetBytes(bytes.Clone(elem.Bytes()))
+			}
+			item.Set(ptr)
+		}
+	}
 	// A byte string can itself be a mutable element of a one-dimensional
 	// SQL array. Keep named slices such as raw documents in their Go type.
 	if e.Kind() == reflect.Slice && e.Elem().Kind() == reflect.Uint8 {

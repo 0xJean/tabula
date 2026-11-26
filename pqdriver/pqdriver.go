@@ -19,12 +19,15 @@ func Int64Array[E ~int64](p *[]E) any { return arrayOf[int64](reflect.TypeFor[[]
 func Array(v any) any { return pq.Array(v) }
 
 // ArrayColumn resolves one-dimensional string, int32, int64, float64 and bool
-// slices. Named slice and element types retain their Go types when scanned.
+// slices. A slice of pointers also supports int16, uint32 and float32.
+// Named types and NULL elements retain their identities when scanned.
 func ArrayColumn(ft reflect.Type) (func(any) any, error) {
 	if ft.Kind() != reflect.Slice {
 		return nil, fmt.Errorf("array option requires a slice type, got %s", ft)
 	}
 	switch ft.Elem().Kind() {
+	case reflect.Pointer:
+		return nullableArrayColumn(ft)
 	case reflect.String:
 		return arrayOf[string](ft), nil
 	case reflect.Int32:
