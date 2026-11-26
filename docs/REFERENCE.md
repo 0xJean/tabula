@@ -53,7 +53,8 @@ const (
 	ErrSessionClosed      staticError = "session is closed"
 	ErrCapabilityDenied   staticError = "operation denied by registry capability policy"
 
-	// ErrOperationDenied means the declared WriteMode forbids an operation or column.
+	// ErrOperationDenied means the table declaration forbids an operation or column,
+	// including legacy Rows methods on a source declared with DefinePlanSource.
 	ErrOperationDenied staticError = "operation denied by table write mode"
 
 	// ErrUnscopedRequiresReadOnly reports that UnscopedReadOnly denied access
@@ -526,6 +527,8 @@ type Definition struct {
 	Name       string
 	Columns    []DefinedColumn
 	Statements map[string]string
+	// Privileges lists grants required by the descriptor itself. A plan
+	// source declares an empty slice, with each plan's grants in StatementShapes.
 	Privileges []DefinedPrivilege
 	// StatementQueries records the owner of each composed-query variant and
 	// registered scalar aggregate (for example, sum_rank belongs to sum:rank).
@@ -2067,19 +2070,32 @@ type Table[T, K, S any] struct {
     access modes are fixed by Define.
 
 func Define[T, K, S any](r *Registry[S], spec TableSpec[T, K]) *Table[T, K, S]
-    Define validates spec against r (panicking on declaration mistakes at
-    package initialization), derives its statements and column privileges,
-    and records it in r.
+    Define validates spec, derives its fixed statements and column privileges,
+    and records the table in r. Use DefinePlanSource for typed plans alone.
+
+func DefinePlanSource[T, K, S any](r *Registry[S], spec TableSpec[T, K]) *Table[T, K, S]
+    DefinePlanSource registers a physical table for typed plans. The source
+    contributes its column and key metadata. Each plan declares its own SQL and
+    privileges. Calls through Table.Bind return ErrOperationDenied. It panics on
+    invalid declarations.
 
 func TryDefine[T, K, S any](r *Registry[S], spec TableSpec[T, K]) (*Table[T, K, S], error)
     TryDefine validates spec and returns a compiled table without registering
     it.
 
+func TryDefinePlanSource[T, K, S any](r *Registry[S], spec TableSpec[T, K]) (*Table[T, K, S], error)
+    TryDefinePlanSource returns a registered source ready for FromTable
+    and RowsFrom. An invalid spec returns an error and leaves the registry
+    untouched. WriteMode, ReadOnly, AllowDelete and UpdateColumns constrain the
+    plans. Order, GroupBy and Aggregates belong on the individual plans.
+
 func (t *Table[T, K, S]) AllowsDelete() bool
     AllowsDelete reports whether the table permits physical deletes.
 
 func (t *Table[T, K, S]) Bind(s Session[S]) *Rows[T, K, S]
-    Bind binds the table to a transaction session.
+    Bind binds the table's fixed and legacy operations to a session. A table
+    registered with DefinePlanSource returns ErrOperationDenied from these
+    operations. Bind its typed plans directly to the session.
 
 func (t *Table[T, K, S]) Cols() string
     Cols is the select list, for hand-written statements scanned with
@@ -2915,8 +2931,10 @@ func ClassifyPolicies(policies []Policy, rules []PolicyRule) ([]PolicyClass, []s
 
 func CollectPrivilegeNeeds(defs []tabula.Definition) (PrivilegeNeeds, []string)
     CollectPrivilegeNeeds merges descriptor and typed-shape grants and reports
-    definitions with no explicit grants. Use RoleStatements.Readiness for a
-    role's selected shapes, including any-column, schema and RLS requirements.
+    definitions with unspecified grants. A plan source explicitly declares
+    zero baseline grants, including when all its reads belong to views. Use
+    RoleStatements.Readiness for a role's selected shapes, including any-column,
+    schema and RLS requirements.
 
 func DefaultTypeFamilies() map[string][]string
     DefaultTypeFamilies returns a fresh copy of the built-in Go-type to

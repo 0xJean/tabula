@@ -2,6 +2,14 @@
 
 Start with the section for the version you are adopting. The integration guide lists the APIs and commands available in this checkout. [Integration guide](INTEGRATION.md)
 
+## From v0.4.1 to v0.4.2
+
+For tables used exclusively by typed plans, replace `Define(reg, spec)` with `DefinePlanSource(reg, spec)`. Use `TryDefinePlanSource` when startup should return a declaration error. Its successful result is already registered. Supply a schema-qualified physical name and declare the scope. A tagged scope field selects `ByScopeColumn` by default.
+
+Move descriptor-wide ordering, grouping and aggregates onto the relevant plans. Regenerate the statement snapshot and bind the selected plans to their roles. Mutation statements belong to the source table. Read statements, including joins, belong to their output view. A source used only for projections has no SQL section of its own. Continue using `Define` for tables with callers of `table.Bind(session)` CRUD methods. [Minimum-grant example](AUTHORIZATION.md#physical-sources-for-typed-plans)
+
+For a table made entirely of primary-key columns, declare a plan source and set `RowsSpec.Lock` on the read plan. Its SQL snapshot contains the locking read and avoids a fixed update with an empty assignment list.
+
 ## From v0.4.0 to v0.4.1
 
 Declare one `FromTable` occurrence per alias. Pass it to `Select(...).From(...)` or a join, or use `RowsFrom` to specify a custom catalog type for a scope or soft-delete column. Declare a nullable view field for a projected column on the right of a left join. Bind the resulting `DefineRead` plan to a session and execute `Find`. Rebuild the role snapshot and run readiness and statement verification for the new shapes. [Explicit joins](COOKBOOK.md#explicit-joins)

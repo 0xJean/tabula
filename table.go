@@ -118,6 +118,8 @@ type Definition struct {
 	Name       string
 	Columns    []DefinedColumn
 	Statements map[string]string
+	// Privileges lists grants required by the descriptor itself. A plan
+	// source declares an empty slice, with each plan's grants in StatementShapes.
 	Privileges []DefinedPrivilege
 	// StatementQueries records the owner of each composed-query variant and
 	// registered scalar aggregate (for example, sum_rank belongs to sum:rank).
@@ -136,9 +138,8 @@ type DefinedColumn struct {
 	Secret   bool
 }
 
-// Define validates spec against r (panicking on declaration mistakes at package
-// initialization), derives its statements and column privileges, and records
-// it in r.
+// Define validates spec, derives its fixed statements and column privileges,
+// and records the table in r. Use DefinePlanSource for typed plans alone.
 func Define[T, K, S any](r *Registry[S], spec TableSpec[T, K]) *Table[T, K, S] {
 	d, err := TryDefine(r, spec)
 	if err != nil {
@@ -150,20 +151,28 @@ func Define[T, K, S any](r *Registry[S], spec TableSpec[T, K]) *Table[T, K, S] {
 
 // TryDefine validates spec and returns a compiled table without registering it.
 func TryDefine[T, K, S any](r *Registry[S], spec TableSpec[T, K]) (*Table[T, K, S], error) {
+	return compileTable(r, spec, false)
+}
+
+func compileTable[T, K, S any](r *Registry[S], spec TableSpec[T, K], plansOnly bool) (*Table[T, K, S], error) {
+	constructor := ".Define"
+	if plansOnly {
+		constructor = ".DefinePlanSource"
+	}
 	if r == nil {
-		return nil, errors.New("tabula.Define: registry is required")
+		return nil, errors.New("tabula" + constructor + ": registry is required")
 	}
 	if spec.Name == "" {
-		return nil, errors.New(r.prefix + ".Define: name is required")
+		return nil, errors.New(r.prefix + constructor + ": name is required")
 	}
 	fail := func(format string, args ...any) error {
-		return fmt.Errorf(r.prefix+".Define "+spec.Name+": "+format, args...)
+		return fmt.Errorf(r.prefix+constructor+" "+spec.Name+": "+format, args...)
 	}
 	if err := spec.validateWriteMode(fail); err != nil {
 		return nil, err
 	}
 	if spec.AllowDelete && r.deny&DenyDelete != 0 {
-		return nil, fmt.Errorf("%w: %s.Define %s: AllowDelete is denied by registry policy", ErrCapabilityDenied, r.prefix, spec.Name)
+		return nil, fmt.Errorf("%w: %s%s %s: AllowDelete is denied by registry policy", ErrCapabilityDenied, r.prefix, constructor, spec.Name)
 	}
 	rt := reflect.TypeFor[T]()
 	if rt.Kind() != reflect.Struct {
@@ -174,6 +183,12 @@ func TryDefine[T, K, S any](r *Registry[S], spec TableSpec[T, K]) (*Table[T, K, 
 		order:      spec.Order, readOnly: spec.ReadOnly, allowDelete: spec.AllowDelete, mode: spec.WriteMode,
 		scope: -1, deleted: -1, version: -1,
 	}
+	t.plansOnly = plansOnly
+	if plansOnly {
+		if err := spec.checkPlanSource(); err != nil {
+			return nil, fail("%w", err)
+		}
+	}
 	if err := walkFields(rt, nil, "", nil, func(f reflect.StructField, idx []int, _, tag string) error { return t.tagged(f, idx, tag, fail) }, fail); err != nil {
 		return nil, err
 	}
@@ -182,7 +197,7 @@ func TryDefine[T, K, S any](r *Registry[S], spec TableSpec[T, K]) (*Table[T, K, 
 			return nil, err
 		}
 	}
-	if r.SQLAuthority().DeniesLegacySQL() {
+	if plansOnly || r.SQLAuthority().DeniesLegacySQL() {
 		if err := t.checkFixedIdentifiers(); err != nil {
 			return nil, err
 		}
@@ -192,6 +207,9 @@ func TryDefine[T, K, S any](r *Registry[S], spec TableSpec[T, K]) (*Table[T, K, 
 	}
 	if err := t.bindRelationScope(spec.RelationScope); err != nil {
 		return nil, fail("%v", err)
+	}
+	if plansOnly && t.relationScope.kind == 0 {
+		return nil, fail("declare ByScopeColumn, ByRLS or Global for the physical relation")
 	}
 	if len(spec.GroupBy) > 0 {
 		t.groupBy = make(map[string]bool, len(spec.GroupBy))
@@ -222,6 +240,9 @@ func TryDefine[T, K, S any](r *Registry[S], spec TableSpec[T, K]) (*Table[T, K, 
 	}
 	if err := t.bindSoftDelete(spec.SoftDelete, fail); err != nil {
 		return nil, err
+	}
+	if plansOnly {
+		return t, nil
 	}
 	t.derive()
 	if t.mode == WriteUpdateOnly && len(t.stmt.setColumns) == 0 {
@@ -444,9 +465,14 @@ func (t *Table[T, K, S]) InsertColumns() []string {
 	return out
 }
 
-// Bind binds the table to a transaction session.
+// Bind binds the table's fixed and legacy operations to a session.
+// A table registered with DefinePlanSource returns ErrOperationDenied from
+// these operations. Bind its typed plans directly to the session.
 func (t *Table[T, K, S]) Bind(s Session[S]) *Rows[T, K, S] {
 	r := &Rows[T, K, S]{t: t, readBinding: bindReader(&t.descriptor, s)}
+	if t.plansOnly && r.bindErr == nil {
+		r.bindErr = ErrOperationDenied
+	}
 	if len(t.stmt.onceColumns) > 0 {
 		r.locks = &lockedRows{}
 	}

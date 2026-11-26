@@ -26,7 +26,7 @@ func rowExecutionMethod(recv, method string) bool {
 	return false
 }
 
-func rowFunction(info *types.Info, call *ast.CallExpr) string {
+func tabulaCallName(info *types.Info, call *ast.CallExpr) string {
 	var id *ast.Ident
 	switch f := unwrapCallTarget(call.Fun).(type) {
 	case *ast.Ident:
@@ -35,14 +35,15 @@ func rowFunction(info *types.Info, call *ast.CallExpr) string {
 		id = f.Sel
 	}
 	fn, ok := info.Uses[id].(*types.Func)
-	if ok && fn.Pkg() != nil && fn.Pkg().Path() == tabulaPkgPath && typedPlanSiteKind(tabulaPkgPath, fn.Name()) != "" {
+	if ok && fn.Pkg() != nil && fn.Pkg().Path() == tabulaPkgPath {
 		return fn.Name()
 	}
 	return ""
 }
 
-func isTryRowPlan(info *types.Info, call *ast.CallExpr) bool {
-	return strings.HasPrefix(rowFunction(info, call), "Try")
+func isTryPlanHandle(info *types.Info, call *ast.CallExpr) bool {
+	name := tabulaCallName(info, call)
+	return name == "TryDefinePlanSource" || strings.HasPrefix(name, "Try") && typedPlanSiteKind(tabulaPkgPath, name) != ""
 }
 
 func (s inventorySource) rowPlan(expr ast.Expr, depth int) (definition, key string) {
@@ -53,7 +54,7 @@ func (s inventorySource) rowPlan(expr ast.Expr, depth int) (definition, key stri
 	case *ast.Ident:
 		return s.rowPlan(s.initializers[s.info.Uses[e]], depth+1)
 	case *ast.CallExpr:
-		if rowFunction(s.info, e) != "" && len(e.Args) >= 2 {
+		if typedPlanSiteKind(tabulaPkgPath, tabulaCallName(s.info, e)) != "" && len(e.Args) >= 2 {
 			key, _ = s.constantString(e.Args[1])
 			return s.definitionName(e.Args[0]), key
 		}

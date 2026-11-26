@@ -314,6 +314,28 @@ tabula test-rls --config behavior.json
 
 Generate `statements.sql` from the tables and views used by the assigned roles. A missing descriptor or aggregate makes `inventory` exit with the affected site ID. Review each unregistered dynamic site and each extra grant before changing the application's grant declarations. [Full JSON examples and interpretation](AUTHORIZATION.md)
 
+## Physical sources with column grants
+
+This declaration permits a plan to update `rank` when it finds a matching key. A role with schema usage, `SELECT(id)` and `UPDATE(rank)` can execute it.
+
+```go
+type Item struct {
+	ID   int64 `db:"id,key"`
+	Rank int32 `db:"rank"`
+}
+items := tabula.DefinePlanSource(reg, tabula.TableSpec[Item, int64]{
+	Name: "public.items", RelationScope: tabula.Global(),
+	WriteMode: tabula.WriteUpdateOnly, UpdateColumns: []string{"rank"},
+})
+i := tabula.FromTable(items, "i", tabula.Global())
+id, rank := tabula.FieldOf(i, "id", tabula.Int8()), tabula.FieldOf(i, "rank", tabula.Int4())
+key, value := tabula.Input("id", tabula.Int8()), tabula.Input("value", tabula.Int4())
+change := tabula.DefineUpdateMany(tabula.RowsFrom(items, i), "change",
+	tabula.MutationSpec{RowFilter: tabula.RowFilter{Where: tabula.Eq(id.Expr(), key.Expr())}},
+	tabula.RowSet{Name: "rank", Assignments: []tabula.RowAssignment{tabula.Assign(rank, value.Expr())}})
+n, err := change.Bind(session).UpdateMany(ctx, "rank", nil, tabula.BindValue(key, 1), tabula.BindValue(value, 5))
+```
+
 ## Registered single-table reads and writes
 
 Declare a physical table and an output view at startup. This example uses

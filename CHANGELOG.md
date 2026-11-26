@@ -3,6 +3,10 @@
 All notable changes are listed here. The project follows semantic versioning; before
 v1.0 a minor version may contain breaking changes.
 
+## v0.4.2 — 2026-11-27
+
+- `DefinePlanSource` and `TryDefinePlanSource` register a physical table for typed plans. The declared plans determine its SQL and grants, including column-level updates and locking reads on composite keys. Legacy `Rows` calls return `ErrOperationDenied` before database I/O. [Physical plan sources](docs/AUTHORIZATION.md#physical-sources-for-typed-plans)
+
 ## v0.4.1 — 2026-11-26
 
 - `DefineRead` registers explicit inner, left and cross joins, including self-joins. A left join keeps right-side scope and live-row filters in its match condition. Each occurrence contributes its column grants and row-security requirements. [Explicit joins](docs/COOKBOOK.md#explicit-joins)

@@ -26,13 +26,15 @@ The [v0.4 design](docs/DESIGN-v0.4.md) describes typed predicates, per-shape ver
 
 `DefineRows`, `DefineUpdateMany` and `DefineDeleteMany` register the exact statements a single-table plan can execute. The inventory expands those statements for each assigned PostgreSQL role. [Registered row plans](docs/COOKBOOK.md#registered-single-table-reads-and-writes)
 
+Use `DefinePlanSource` for a physical table accessed exclusively through typed plans. A narrow projection can read two columns of a wide table. A conditional update can write a column on which the role has only `UPDATE`. [Minimum grants for typed plans](docs/AUTHORIZATION.md#physical-sources-for-typed-plans)
+
 Set `RowsSpec.Lock` on a filtered or ordered page, or enable `WithExists` on an unlocked plan for a boolean result. Registered transaction advisory locks and PostgreSQL functions also use `plan.Bind(session)`. Each statement identifies its result, session requirements and minimum grants. [Lock and routine examples](docs/COOKBOOK.md#registered-locks-and-functions)
 
 Use `DefineRead` for inner, left and cross joins. Give each side of a self-join its own occurrence. Use `In` for a fixed list, `Any` for an array parameter and `Like` or `ILike` for patterns. [Explicit join example](docs/COOKBOOK.md#explicit-joins)
 
-## Install v0.4.1
+## Install v0.4.2
 
-Run `go get github.com/0xJean/tabula@v0.4.1` in your application module with Go 1.26 or later. For the native driver and telemetry modules, use the matching version with `go get github.com/0xJean/tabula/pgxdriver@v0.4.1` and/or `go get github.com/0xJean/tabula/oteltabula@v0.4.1`.
+Run `go get github.com/0xJean/tabula@v0.4.2` in your application module with Go 1.26 or later. For the native driver and telemetry modules, use the matching version with `go get github.com/0xJean/tabula/pgxdriver@v0.4.2` and/or `go get github.com/0xJean/tabula/oteltabula@v0.4.2`.
 
 ## Read a row by primary key
 

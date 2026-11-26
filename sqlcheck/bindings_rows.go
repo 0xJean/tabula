@@ -204,6 +204,13 @@ func (r RoleStatements) Readiness(role string) (ReadinessNeeds, error) {
 	return n, nil
 }
 
+// A registered physical source has a key and an explicitly empty grant list.
+// Views with unspecified grants keep their existing inventory diagnostics.
+func planSourceDefinition(d tabula.Definition) bool {
+	return d.Privileges != nil && len(d.Privileges) == 0 &&
+		slices.ContainsFunc(d.Columns, func(c tabula.DefinedColumn) bool { return c.Role == "key" })
+}
+
 // Typed grants use quoted physical names. Retain the table spelling callers
 // already use to look up grants on the same descriptor.
 func grantTableNames(defs []tabula.Definition) map[string]string {
@@ -211,12 +218,18 @@ func grantTableNames(defs []tabula.Definition) map[string]string {
 		return nil
 	}
 	names := make(map[string]string)
+	record := func(name string) {
+		obj, err := resolveReadinessItem(MissingRequirement{Kind: "TABLE", Object: name})
+		if err == nil {
+			names[quoteIdent(obj.Schema)+"."+quoteIdent(obj.Name)] = name
+		}
+	}
 	for _, d := range defs {
+		if planSourceDefinition(d) {
+			record(d.Name)
+		}
 		for _, grant := range d.Privileges {
-			obj, err := resolveReadinessItem(MissingRequirement{Kind: "TABLE", Object: grant.Table})
-			if err == nil {
-				names[quoteIdent(obj.Schema)+"."+quoteIdent(obj.Name)] = grant.Table
-			}
+			record(grant.Table)
 		}
 	}
 	return names

@@ -163,7 +163,8 @@ The driver boundary consists of `SQLAuthority`, `AuthorizedStatement` and `Autho
 | Version | PostgreSQL capabilities |
 | --- | --- |
 | v0.4.0 | Single-table typed relations, columns, bound slots, comparisons including `IsDistinct` and `IsNotDistinct`, boolean predicates and grouping. Registered Find, List, Count, opt-in `WithExists`, scalar and grouped aggregates, and affected-count UpdateMany/DeleteMany. Finite assignments, orders and page variants. `RowsSpec.Lock` on filtered and ordered data pages, transaction advisory locks and standalone function calls. Registry snapshots, per-role authorization and verified RLS-only scoping. |
-| First subsequent patch | Explicit inner, left and cross joins, including self-joins, with per-occurrence scope and privilege checks. Typed list and array membership (`In`, `Any`) and pattern matching (`Like`, `ILike`). |
+| v0.4.1 | Explicit inner, left and cross joins, including self-joins, with per-occurrence scope and privilege checks. Typed list and array membership (`In`, `Any`) and pattern matching (`Like`, `ILike`). |
+| v0.4.2 | Physical sources for typed plans. Each registered shape supplies the grants for the SQL it executes. |
 | Expression patch | Arithmetic, `Coalesce`, conditional `Case` expressions, explicit expression `Cast`, aggregate `FilterWhere` and `COUNT(DISTINCT ...)`. |
 | Write patch | Predicate-based `UpdateMany` with a write-authorized `RETURNING` stream. |
 | Further releases | Correlated and derived subqueries, LATERAL, set operations, read-only and recursive CTEs, windows, typed write sources, conflict handling and modifying CTEs. |
