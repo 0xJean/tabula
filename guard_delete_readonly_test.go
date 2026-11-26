@@ -19,7 +19,7 @@ func TestGuardNoSessionEscape(t *testing.T) {
 		`SELECT E'one; two'; /* next statement */ dO LANGUAGE plpgsql $body$BEGIN NULL; END;$body$`,
 		"SET SESSION AUTHORIZATION DEFAULT",
 		"RESET SESSION AUTHORIZATION",
-		"SELECT set_config('app.current_tenant', 'other', true)",
+		"SELECT set_config('demo.tenant', 'other', true)",
 		"SELECT pg_catalog.set_config('role', 'postgres', false)",
 		"SELECT 1; /* sneaky */ SET LOCAL ROLE super",
 		`SELECT "set_config"('x','y',true)`,

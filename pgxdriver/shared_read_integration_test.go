@@ -74,8 +74,8 @@ func TestSharedReadRoleAndCursorLifetime(t *testing.T) {
 	exec("CREATE CONSTRAINT TRIGGER record_role AFTER INSERT ON " + deferredItems +
 		" DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION " + schema + ".record_commit_role()")
 
-	policy := stdsql.ScopePolicy[string]{ManagedVars: []string{"app.scope"},
-		ScopeVars:  func(s string) map[string]string { return map[string]string{"app.scope": s} },
+	policy := stdsql.ScopePolicy[string]{ManagedVars: []string{"demo.scope"},
+		ScopeVars:  func(s string) map[string]string { return map[string]string{"demo.scope": s} },
 		IsUnscoped: func(s string) bool { return s == "all" }}
 	trace := new(pgxTraceRec)
 	std, err := stdsql.NewRunner(db, policy, stdsql.RunnerOptions{Role: writer, Unscoped: stdsql.UnscopedReadOnly, UnscopedReadRole: reader, Tracer: trace})
@@ -133,7 +133,7 @@ func TestSharedReadRoleAndCursorLifetime(t *testing.T) {
 					var n int
 					var mayWrite bool
 					readCtx := tabula.WithStatementMeta(ctx, tabula.StatementMeta{Key: "shared.read"})
-					require.NoError(t, s.Scan(readCtx, "SELECT current_user, current_setting('app.scope'), count(*), has_table_privilege(current_user, $1, 'INSERT') FROM "+table, []any{table}, &role, &scope, &n, &mayWrite))
+					require.NoError(t, s.Scan(readCtx, "SELECT current_user, current_setting('demo.scope'), count(*), has_table_privilege(current_user, $1, 'INSERT') FROM "+table, []any{table}, &role, &scope, &n, &mayWrite))
 					require.Equal(t, reader, role)
 					require.Empty(t, scope)
 					require.Equal(t, 1, n)
@@ -155,7 +155,7 @@ func TestSharedReadRoleAndCursorLifetime(t *testing.T) {
 				}))
 				var role, scope string
 				writeCtx := tabula.WithStatementMeta(ctx, tabula.StatementMeta{Key: "shared.write"})
-				require.NoError(t, scoped.Scan(writeCtx, "SELECT current_user, current_setting('app.scope')", nil, &role, &scope))
+				require.NoError(t, scoped.Scan(writeCtx, "SELECT current_user, current_setting('demo.scope')", nil, &role, &scope))
 				require.Equal(t, writer, role)
 				require.Equal(t, "a", scope)
 				_, err = scoped.Exec(ctx, "INSERT INTO "+table+" VALUES (2)")

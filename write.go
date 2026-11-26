@@ -10,14 +10,15 @@ import (
 
 const maxPostgresParams = 65535
 
-// Insert writes row; with a serial key the generated key is read back into row.
+// Insert writes row. With a serial key, the default mode reads the generated
+// key back into row. WriteInsertOnly leaves the key field untouched.
 func (r *Rows[T, K, S]) Insert(ctx context.Context, row *T) error {
 	if err := r.CheckWrite(row); err != nil {
 		return err
 	}
 	meta := stmtMeta{key: r.t.name + ".insert"}
 	args, secret := r.Args(*row), r.t.insertSecretMask()
-	if r.t.serial {
+	if r.t.serial && r.t.mode.allows(selectOp) {
 		_, err := r.returning(ctx, "insert", meta, r.t.stmt.insert, args, secret, sql.ErrNoRows, r.t.cols[r.t.keys[0]].target(row))
 		return err
 	}
@@ -28,7 +29,7 @@ func (r *Rows[T, K, S]) Insert(ctx context.Context, row *T) error {
 // InsertReturning writes row and scans the named columns (or all table columns
 // when columns is empty) back into row via RETURNING.
 func (r *Rows[T, K, S]) InsertReturning(ctx context.Context, row *T, columns ...string) error {
-	if err := r.CheckWrite(row); err != nil {
+	if err := r.checkRowWrite(insertReturningOp, row); err != nil {
 		return err
 	}
 	idx := r.t.resolveReturningColumns(columns)
@@ -42,18 +43,18 @@ func (r *Rows[T, K, S]) InsertReturning(ctx context.Context, row *T, columns ...
 // automatically to stay within PostgreSQL's 65,535 bind parameter limit.
 // All rows in a scoped call must share the session's scope.
 func (r *Rows[T, K, S]) InsertMany(ctx context.Context, rows []T) error {
+	if err := r.checkWriteAccess(insertOp); err != nil {
+		return err
+	}
 	_, err := r.writeMany(ctx, "insert_many", stmtMeta{key: r.t.name + ".insert_many"}, "", rows)
 	return err
 }
 
-// writeMany checks every row before sending any chunk. conflict is the
+// writeMany checks each row scope after operation checks and before sending any chunk. conflict is the
 // precompiled ON CONFLICT clause, without a single-row RETURNING list.
 func (r *Rows[T, K, S]) writeMany(ctx context.Context, action string, meta stmtMeta, conflict string, rows []T) (int64, error) {
-	if err := r.checkWriteAccess(); err != nil {
-		return 0, err
-	}
 	for i := range rows {
-		if err := r.CheckWrite(&rows[i]); err != nil {
+		if err := r.checkRowScope(&rows[i]); err != nil {
 			return 0, err
 		}
 	}
@@ -109,7 +110,7 @@ func (r *Rows[T, K, S]) batchValues(chunk []T, mask []bool) (string, []any, []bo
 // Save writes every updatable column of the undeleted row at the previous
 // version (when versioned); no row updated returns the conflict error.
 func (r *Rows[T, K, S]) Save(ctx context.Context, row T) error {
-	if err := r.CheckWrite(&row); err != nil {
+	if err := r.checkRowWrite(updateOp, &row); err != nil {
 		return err
 	}
 	if err := r.unchanged(ctx, row); err != nil {
@@ -125,7 +126,7 @@ func (r *Rows[T, K, S]) Save(ctx context.Context, row T) error {
 // columns (or all columns when empty) back into row via RETURNING. No row
 // matched returns the conflict error.
 func (r *Rows[T, K, S]) SaveReturning(ctx context.Context, row *T, columns ...string) error {
-	if err := r.CheckWrite(row); err != nil {
+	if err := r.checkRowWrite(updateOp, row); err != nil {
 		return err
 	}
 	if err := r.unchanged(ctx, *row); err != nil {
@@ -141,8 +142,11 @@ func (r *Rows[T, K, S]) SaveReturning(ctx context.Context, row *T, columns ...st
 // SoftDelete is a Save of a row whose deleted column is marked deleted
 // (non-nil *time.Time, true bool, or configured DeletedValue).
 func (r *Rows[T, K, S]) SoftDelete(ctx context.Context, row T) error {
-	if err := r.checkWriteAccess(); err != nil {
+	if err := r.checkWriteAccess(updateOp); err != nil {
 		return err
+	}
+	if r.t.deleted >= 0 && !r.t.permitsColumn(r.name(r.t.deleted)) {
+		return ErrOperationDenied
 	}
 	if !r.t.isRowDeleted(&row) {
 		return r.t.reg.notDeletedErr()
@@ -152,7 +156,7 @@ func (r *Rows[T, K, S]) SoftDelete(ctx context.Context, row T) error {
 
 // Set writes only the named columns of the undeleted row (no version check).
 func (r *Rows[T, K, S]) Set(ctx context.Context, row T, columns ...string) error {
-	if err := r.CheckWrite(&row); err != nil {
+	if err := r.checkRowWrite(updateOp, &row, columns...); err != nil {
 		return err
 	}
 	query, args, secret := r.buildSetQuery(&row, columns, "", nil)
@@ -164,7 +168,7 @@ func (r *Rows[T, K, S]) Set(ctx context.Context, row T, columns ...string) error
 // (and scope/version when declared) plus an extra static SQL predicate over
 // "?" placeholders. Reports whether a row matched; zero rows is not an error.
 func (r *Rows[T, K, S]) UpdateWhere(ctx context.Context, row T, where string, values ...any) (bool, error) {
-	if err := r.CheckWrite(&row); err != nil {
+	if err := r.checkRowWrite(updateOp, &row); err != nil {
 		return false, err
 	}
 	if err := r.unchanged(ctx, row); err != nil {
@@ -189,7 +193,7 @@ func (r *Rows[T, K, S]) UpdateWhere(ctx context.Context, row T, where string, va
 // (and scope when declared) plus an extra static SQL predicate over "?"
 // placeholders. Reports whether a row matched; zero rows is not an error.
 func (r *Rows[T, K, S]) SetWhere(ctx context.Context, row T, columns []string, where string, values ...any) (bool, error) {
-	if err := r.CheckWrite(&row); err != nil {
+	if err := r.checkRowWrite(updateOp, &row, columns...); err != nil {
 		return false, err
 	}
 	query, args, secret := r.buildSetQuery(&row, columns, where, values)
@@ -201,7 +205,7 @@ func (r *Rows[T, K, S]) SetWhere(ctx context.Context, row T, columns []string, w
 // Requires TableSpec.AllowDelete = true. Returns the conflict error when zero rows
 // matched (missing or already deleted).
 func (r *Rows[T, K, S]) Delete(ctx context.Context, key K) error {
-	if err := r.checkWriteAccess(); err != nil {
+	if err := r.checkWriteAccess(deleteOp); err != nil {
 		return err
 	}
 	if !r.t.allowDelete {
@@ -220,7 +224,7 @@ func (r *Rows[T, K, S]) Delete(ctx context.Context, key K) error {
 // non-empty static predicate over "?" placeholders. Requires TableSpec.AllowDelete = true.
 // Returns the affected row count; zero rows matched is not an error.
 func (r *Rows[T, K, S]) DeleteWhere(ctx context.Context, where string, values ...any) (int64, error) {
-	if err := r.checkWriteAccess(); err != nil {
+	if err := r.checkWriteAccess(deleteOp); err != nil {
 		return 0, err
 	}
 	if !r.t.allowDelete {

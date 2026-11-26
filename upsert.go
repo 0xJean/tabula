@@ -2,7 +2,6 @@ package tabula
 
 import (
 	"context"
-
 	"errors"
 	"fmt"
 	"strings"
@@ -11,7 +10,9 @@ import (
 // UpsertSpec declares a controlled PostgreSQL INSERT ... ON CONFLICT statement.
 // Conflict columns identify the unique index or constraint target. Update lists
 // the columns updated on conflict (key, scope, and once columns are forbidden);
-// leaving Update empty produces ON CONFLICT (...) DO NOTHING.
+// leaving Update empty produces ON CONFLICT (...) DO NOTHING. WriteInsertOnly
+// accepts an empty spec for targetless ON CONFLICT DO NOTHING. An explicit
+// conflict target or RETURNING list would require SELECT on its columns.
 type UpsertSpec struct {
 	Conflict  []string
 	Update    []string
@@ -59,13 +60,19 @@ func (t *Table[T, K, S]) TryDefineUpsert(key string, spec UpsertSpec, opts ...St
 	if t.readOnly {
 		return nil, fail("cannot define upsert on a ReadOnly table")
 	}
+	if !t.mode.allows(insertOp) {
+		return nil, fail("%w: upsert requires inserts", ErrOperationDenied)
+	}
+	if t.mode == WriteInsertOnly && (len(spec.Conflict) != 0 || len(spec.Update) != 0 || len(spec.Returning) != 0 || strings.TrimSpace(spec.Where) != "") {
+		return nil, fail("%w: WriteInsertOnly permits only targetless ON CONFLICT DO NOTHING without RETURNING", ErrOperationDenied)
+	}
 	if t.reg.deny&DenyUpsert != 0 {
 		return nil, fmt.Errorf("%w: %s.Upsert %s: upsert is denied by registry policy", ErrCapabilityDenied, t.prefix(), t.name)
 	}
 	if key == "" {
 		return nil, fail("statement key is required")
 	}
-	if len(spec.Conflict) == 0 {
+	if len(spec.Conflict) == 0 && t.mode != WriteInsertOnly {
 		return nil, fail("conflict columns are required")
 	}
 	seenConflict := make(map[string]bool, len(spec.Conflict))
@@ -81,9 +88,13 @@ func (t *Table[T, K, S]) TryDefineUpsert(key string, spec UpsertSpec, opts ...St
 
 	var b strings.Builder
 
-	b.WriteString(" ON CONFLICT (")
-	b.WriteString(strings.Join(spec.Conflict, ", "))
-	b.WriteString(") ")
+	b.WriteString(" ON CONFLICT")
+	if len(spec.Conflict) != 0 {
+		b.WriteString(" (")
+		b.WriteString(strings.Join(spec.Conflict, ", "))
+		b.WriteByte(')')
+	}
+	b.WriteByte(' ')
 
 	if len(spec.Update) == 0 {
 		if strings.TrimSpace(spec.Where) != "" {
@@ -154,7 +165,9 @@ func (r *Rows[T, K, S]) Upsert(ctx context.Context, plan *UpsertPlan[T, K, S], r
 	if err := r.CheckWrite(row); err != nil {
 		return false, err
 	}
-	r.checkPlan(plan)
+	if err := r.checkPlan(plan); err != nil {
+		return false, err
+	}
 	args, secret := r.Args(*row), r.t.insertSecretMask()
 	if len(plan.retIdx) > 0 {
 		return r.returning(ctx, "upsert", plan.meta, plan.sql, args, secret, nil, r.targets(row, plan.retIdx)...)
@@ -168,18 +181,21 @@ func (r *Rows[T, K, S]) Upsert(ctx context.Context, plan *UpsertPlan[T, K, S], r
 // it omits the plan's RETURNING list and leaves the input slice untouched.
 // On error the count covers successful chunks in the current transaction.
 func (r *Rows[T, K, S]) UpsertMany(ctx context.Context, plan *UpsertPlan[T, K, S], rows []T) (int64, error) {
-	if r.bindErr != nil {
-		return 0, r.bindErr
-	}
-	if err := r.checkWriteAccess(); err != nil {
+	if err := r.checkWriteAccess(insertOp); err != nil {
 		return 0, err
 	}
-	r.checkPlan(plan)
+	if err := r.checkPlan(plan); err != nil {
+		return 0, err
+	}
 	return r.writeMany(ctx, "upsert_many", plan.meta, plan.conflict, rows)
 }
 
-func (r *Rows[T, K, S]) checkPlan(plan *UpsertPlan[T, K, S]) {
+func (r *Rows[T, K, S]) checkPlan(plan *UpsertPlan[T, K, S]) error {
 	if plan == nil || plan.t != r.t {
+		if r.t.mode == WriteInsertOnly {
+			return ErrOperationDenied
+		}
 		panic(r.t.prefix() + ".Upsert " + r.t.name + ": upsert plan does not belong to this table")
 	}
+	return nil
 }

@@ -2,15 +2,23 @@
 
 This file defines the hard engineering constraints for contributors and coding agents working in `github.com/0xJean/tabula`. Read [docs/DESIGN.md](docs/DESIGN.md) and [docs/TESTING.md](docs/TESTING.md) before making architectural or API changes.
 
-## 1. Identity & Red Lines
+## 1. Brand and domain neutrality is mandatory
 
-Tabula is a **general-purpose, domain-agnostic PostgreSQL descriptor engine** for Go.
+Tabula is a general-purpose PostgreSQL descriptor engine for Go. This policy applies to code, tests, examples, documentation, the changelog, branch names, commit messages, issue titles and bodies, pull request titles and bodies, and release notes.
 
-1. **No generated joins or preloading** — relations never go into struct tags; joins remain explicit SQL decoded via `View`.
-2. **No DDL or AutoMigrate** — migrations remain the sole source of truth; Tabula may only verify schema/grants/RLS via `sqlcheck`.
-3. **No hidden global state, callbacks, or implicit clocks** — registries, scopes, loggers, tracers, metrics, and error policies are passed explicitly.
-4. **Strict domain neutrality** — never introduce business-specific concepts, terminology, roles, GUC names, or test fixtures from any host/downstream application (e.g., finance, crypto, payments, KYC, auth tokens). Keep row-level scoping generic (`Scope` / `Unscoped` / `db:"...,scope"`). Multi-tenant PostgreSQL RLS may appear in examples, cookbooks, and tests as an illustration of generic scoping.
-5. **Zero third-party dependencies in core packages** — `tabula`, `tabula/stdsql`, `tabula/sqlcheck`, `tabula/postgresfixture`, and `tabula/internal/*` must depend **only on the Go standard library**. Driver code belongs in `pqdriver` (`lib/pq`) or the separate `pgxdriver` module (`pgx/v5`).
+- Describe the PostgreSQL requirement in its own terms. Suitable examples include an append-only audit table, an update-only record and row-level security in a shared table.
+- Keep the identity of each application, host, brand and supplier private. Exclude industry vocabulary, application schema identifiers, relation and column names, role and session setting names, external revisions, migration and decision numbers, batch labels, scale figures and workload measurements. An anonymous reference to a particular deployment is also identifying.
+- Use `items`, `notes`, `jobs`, `groups`, `regions` and `entries` as example relations. Use `demo.*` for example session settings and generic role names such as `scope_reader`.
+- Keep application inventories, workload ledgers, assignment lists, and the private vocabulary file outside this repository.
+- Every agent must run the local neutrality scan before committing, pushing, opening a pull request, or publishing a release. Include the prospective title and body when reviewing public text. Follow the [contribution guide](CONTRIBUTING.md).
+- A violation blocks merge. Correct published text promptly. For a pushed branch still under review, rewrite the affected branch commits and update the pull request. Correct a merged change on the default branch and edit the affected public description. Published release tags retain their original revisions.
+
+### Engineering boundaries
+
+1. **No generated joins or preloading.** Relations never go into struct tags. Use SQL decoded through a `View` for joins.
+2. **No DDL or AutoMigrate.** Migrations define schema changes. Tabula verifies schema, grants and row-level security through `sqlcheck`.
+3. **No hidden global state.** Pass registries, scopes, observations and error policies explicitly. Avoid implicit clocks and lifecycle hooks.
+4. **Zero third-party dependencies in core.** `tabula`, `tabula/stdsql`, `tabula/sqlcheck`, `tabula/postgresfixture` and `tabula/internal/*` depend only on the Go standard library. Driver code belongs in `pqdriver` or the separate `pgxdriver` module.
 
 ## 2. Repository & Module Boundaries
 

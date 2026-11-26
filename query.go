@@ -54,8 +54,8 @@ type KeysetPage[T any] struct {
 // in deterministic (SortColumn, key...) order without OFFSET. Invalid listing
 // options return an error before the filter callback or database is used.
 func (r *Rows[T, K, S]) ListKeyset(ctx context.Context, where func(*Filter), l KeysetListing) (KeysetPage[T], error) {
-	if r.bindErr != nil {
-		return KeysetPage[T]{}, r.bindErr
+	if err := r.checkOperation(selectOp); err != nil {
+		return KeysetPage[T]{}, err
 	}
 	if l.Limit <= 0 || l.Limit == math.MaxInt {
 		return KeysetPage[T]{}, fmt.Errorf("%s.ListKeyset %s: Limit must be positive and less than math.MaxInt", r.t.prefix(), r.t.name)

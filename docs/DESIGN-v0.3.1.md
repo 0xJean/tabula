@@ -35,7 +35,7 @@ request content.
 
 ```go
 runner, err := stdsql.NewRunner(db, policy, stdsql.RunnerOptions{
-    Role:     "app_writer",
+    Role:     "scope_writer",
     ReadOnly: false,                    // true: Within fails closed with ErrReadOnly
     Unscoped: stdsql.UnscopedReadOnly,  // UnscopedDenied | UnscopedReadOnly | UnscopedReadWrite
     Timeouts: stdsql.Timeouts{Lock: time.Second, Statement: 5 * time.Second,
@@ -463,7 +463,7 @@ cursor continuity and streaming early exit.
 //go:embed sql/*.sql
 var files embed.FS
 var sqlFiles = tabula.MustSQLFiles(files, "sql")
-view.Statement("orders.report", sqlFiles.Get("orders_report.sql"))
+view.Statement("items.report", sqlFiles.Get("items_report.sql"))
 ```
 
 Long joins live in `.sql` files, are loaded once at init and are registered like any
@@ -533,7 +533,7 @@ variables.
 
 ## Delivery order and acceptance
 
-1. Consumers can adopt released v0.3.0 verification and fixture tools independently.
+1. Verification and fixture tools were available in v0.3.0.
 2. Finalize the A1 constructor (`RunnerOptions`, including `SessionKey`, and the
    nested-transaction marker / `WithoutTransaction` escape hatch) alongside the
    decided A4 proof contract (`key.Sign` / `SessionProof`) before integrating keys
@@ -541,14 +541,11 @@ variables.
    Validate nested transactions, deliberate detached transactions, read-only
    overrides, savepoint rollback, invalid bindings across all session creation paths
    and `BenchmarkSealedBind` hot-path overhead.
-3. Deliver B1–B3 (including the decided `oteltabula` module) for consumers replacing
-   their runner and session tracing. Then consumers can narrow grants against the new
-   runner and migrate adapters in batches.
+3. Deliver B1–B3 and the `oteltabula` module with tests for runner and session tracing.
 4. Validate C2's agreed direction with a second prototype and fuzz seeds covering
    fragment compilation (lexing, parenthesis/comment/quote boundaries, local `$1…$m`
    renumbering and `CountBase` dense base-slot remapping) before locking C2's public
-   API and implementing C1–C4 and the query-related D checks. Consumers can then move
-   their composed lists onto verified views.
+   API and implementing C1–C4 and the query-related D checks.
 5. Remove the proposal-only `docs/internal/v04` test package once production
    implementations and tests replace it, before tagging v0.3.1.
 

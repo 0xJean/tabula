@@ -18,35 +18,38 @@ type DefinedPrivilege struct {
 	Function         string
 }
 
-func derivePrivileges(name string, columns []DefinedColumn, s statements, readOnly, allowDelete bool) []DefinedPrivilege {
-	pick := func(indexes []int) []string {
-		out := make([]string, len(indexes))
-		for i, index := range indexes {
-			out[i] = columns[index].Name
+func (t *Table[T, K, S]) derivePrivileges() []DefinedPrivilege {
+	var out []DefinedPrivilege
+	if t.mode.allows(selectOp) {
+		names := make([]string, len(t.cols))
+		for i, c := range t.cols {
+			names[i] = c.name
 		}
+		out = append(out, DefinedPrivilege{Table: t.name, Privilege: "SELECT", Columns: names})
+	}
+	if t.readOnly {
 		return out
 	}
-	all := make([]string, len(columns))
-	for i, c := range columns {
-		all[i] = c.Name
-	}
-	out := []DefinedPrivilege{
-		{Table: name, Privilege: "SELECT", Columns: all},
-	}
-	if readOnly {
-		return out
-	}
-	out = append(out,
-		DefinedPrivilege{Table: name, Privilege: "INSERT", Columns: pick(s.insertColumns)},
-		DefinedPrivilege{Table: name, Privilege: "UPDATE", Columns: pick(s.setColumns)},
-	)
-	if allowDelete {
-		out = append(out, DefinedPrivilege{Table: name, Privilege: "DELETE"})
-	}
-	for i, c := range columns {
-		if c.Role == string(keyRole) && !slices.Contains(s.insertColumns, i) {
-			out = append(out, DefinedPrivilege{Table: name, Privilege: "USAGE", Sequence: c.Name})
+	if t.mode.allows(insertOp) {
+		names := t.InsertColumns()
+		if t.mode == WriteInsertOnly && len(names) == 0 {
+			// The INSERT names the serial key with a literal DEFAULT.
+			names = []string{t.cols[t.keys[0]].name}
 		}
+		out = append(out, DefinedPrivilege{Table: t.name, Privilege: "INSERT", Columns: names})
+	}
+	if t.mode.allows(updateOp) {
+		names := make([]string, len(t.stmt.setColumns))
+		for i, col := range t.stmt.setColumns {
+			names[i] = t.cols[col].name
+		}
+		out = append(out, DefinedPrivilege{Table: t.name, Privilege: "UPDATE", Columns: names})
+	}
+	if t.allowDelete {
+		out = append(out, DefinedPrivilege{Table: t.name, Privilege: "DELETE"})
+	}
+	if t.serial && t.mode.allows(insertOp) {
+		out = append(out, DefinedPrivilege{Table: t.name, Privilege: "USAGE", Sequence: t.cols[t.keys[0]].name})
 	}
 	return out
 }

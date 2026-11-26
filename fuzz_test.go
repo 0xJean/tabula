@@ -118,7 +118,7 @@ func FuzzGuardNoSessionEscape(f *testing.F) {
 	f.Add(`SET LOCAL "scope"."id" = 'one'`)
 	f.Add("SELECT id FROM items WHERE id = $1")
 	f.Add("SET LOCAL ROLE postgres")
-	f.Add("SELECT set_config('app.x', '1', true)")
+	f.Add("SELECT set_config('demo.x', '1', true)")
 	f.Add("SELECT 'SET ROLE admin' /* RESET ROLE */")
 	f.Add("/* nested /* comment */ still comment */ SET ROLE x")
 	f.Add(`SELECT E'\''; SET ROLE postgres`)
@@ -230,7 +230,7 @@ func FuzzCompileQueryFragment(f *testing.F) {
 		"n.a = $1)",
 		"n.a = $1; DROP TABLE notes",
 		"SET ROLE postgres",
-		"SELECT set_config('app.x', '1', true)",
+		"SELECT set_config('demo.x', '1', true)",
 		"n.a = $0",
 		"n.a = $2",
 		`n.a = E'it\'s $1' AND n.b = $1`,

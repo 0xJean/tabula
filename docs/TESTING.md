@@ -44,7 +44,7 @@ scripts/check.sh --unit     # --static + unit tests (-race) + 1s fuzzing
 TABULA_TEST_DSN='postgres://...' scripts/check.sh --all  # full gate including PG integration & coverage
 ```
 
-The full gate also runs the workspace integration package in `testdata/integration`. It checks both drivers with the same callback ownership cases and exports real PostgreSQL statement failures through OpenTelemetry and structured logs.
+The full gate also runs the workspace integration package in `testdata/integration`. It checks both drivers with minimum append and update grants, verifies registered plans, exercises serial inserts, and revokes individual column and sequence grants to check denials. It also checks callback ownership and exports real PostgreSQL statement failures through OpenTelemetry and structured logs.
 
 CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) additionally runs:
 
@@ -53,7 +53,7 @@ CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) additionally runs:
 - **Lint**: `golangci-lint` (v2) with [.golangci.yml](../.golangci.yml) across `.`, `pgxdriver`, and `benchmarks`
 - **Security**: `govulncheck -test -tags=integration ./...` across all three modules
 - **Example E2E**: `examples/multitenant` migrated and executed against PostgreSQL 17
-- **Release rehearsal**: prepare and verify a synthetic patch of the documented minor version. The release script checks the standalone module pins with `GOWORK=off` and regenerates the reference against the candidate modules.
+- **Release rehearsal**: prepare a synthetic patch of the documented minor version and run `release.sh verify-modules`. The release script checks the standalone module pins with `GOWORK=off` and regenerates the reference against the candidate modules.
 
 ## Documentation checks
 

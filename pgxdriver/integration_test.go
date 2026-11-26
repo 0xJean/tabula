@@ -118,9 +118,9 @@ func TestPgxRunnerAndTabulaIntegration(t *testing.T) {
 	roTbl := tabula.Define(reg, tabula.TableSpec[item, int64]{Name: schema + ".items", ReadOnly: true})
 
 	runner, err := pgxdriver.NewRunner(pool, pgxdriver.ScopePolicy[tenant]{
-		ManagedVars: []string{"app.current_tenant"},
+		ManagedVars: []string{"demo.tenant"},
 		ScopeVars: func(scope tenant) map[string]string {
-			return map[string]string{"app.current_tenant": string(scope)}
+			return map[string]string{"demo.tenant": string(scope)}
 		},
 	}, pgxdriver.RunnerOptions{})
 	require.NoError(t, err)
@@ -331,6 +331,6 @@ func TestDirectAndCopyTypes(t *testing.T) {
 	err = s.Each(ctx, lock, nil, func(scan func(...any) error) error { return scan(new(int64)) })
 	require.ErrorIs(t, err, tabula.ErrReadOnly)
 	require.Equal(t, "25006", tabula.SQLState(err))
-	_, err = pgxdriver.Direct(ctx, dsn, pgxdriver.ScopePolicy[scope]{ManagedVars: []string{"app.scope"}})
+	_, err = pgxdriver.Direct(ctx, dsn, pgxdriver.ScopePolicy[scope]{ManagedVars: []string{"demo.scope"}})
 	require.Error(t, err)
 }

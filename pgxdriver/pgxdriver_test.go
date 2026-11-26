@@ -98,28 +98,28 @@ func TestNewRunnerValidationAndPreBeginChecks(t *testing.T) {
 		require.Error(t, err)
 	}
 
-	_, err = NewRunner(pool, ScopePolicy[string]{ManagedVars: []string{"app.s", "app.s"}}, RunnerOptions{})
+	_, err = NewRunner(pool, ScopePolicy[string]{ManagedVars: []string{"demo.s", "demo.s"}}, RunnerOptions{})
 	require.ErrorContains(t, err, "duplicate")
 
 	_, err = NewRunner(pool, ScopePolicy[string]{
-		ManagedVars:  []string{"app.s"},
-		UnscopedVars: map[string]string{"app.other": "1"},
+		ManagedVars:  []string{"demo.s"},
+		UnscopedVars: map[string]string{"demo.other": "1"},
 	}, RunnerOptions{})
 	require.ErrorContains(t, err, "not declared")
 
 	_, err = NewRunner(pool, ScopePolicy[string]{
-		ManagedVars:  []string{"app.s"},
-		InactiveVars: map[string]string{"app.other": ""},
+		ManagedVars:  []string{"demo.s"},
+		InactiveVars: map[string]string{"demo.other": ""},
 	}, RunnerOptions{})
 	require.ErrorContains(t, err, "not declared")
 
 	r, err := NewRunner(pool, ScopePolicy[string]{
-		ManagedVars:  []string{"app.s", "app.mode"},
+		ManagedVars:  []string{"demo.s", "demo.mode"},
 		IsUnscoped:   func(s string) bool { return s == "all" },
-		UnscopedVars: map[string]string{"app.mode": "all"},
-		InactiveVars: map[string]string{"app.mode": "off"},
+		UnscopedVars: map[string]string{"demo.mode": "all"},
+		InactiveVars: map[string]string{"demo.mode": "off"},
 	}, RunnerOptions{
-		Role:        "app_ro",
+		Role:        "scope_reader",
 		RequireRole: true,
 		ReadOnly:    true,
 		Unscoped:    UnscopedReadOnly,
@@ -150,8 +150,8 @@ func TestNewRunnerValidationAndPreBeginChecks(t *testing.T) {
 	require.ErrorIs(t, rDenied.WithinReadOnly(ctx, "all", func(context.Context, *Session[string]) error { return nil }), tabula.ErrCapabilityDenied)
 
 	rBadCB, err := NewRunner(pool, ScopePolicy[string]{
-		ManagedVars: []string{"app.s"},
-		ScopeVars:   func(string) map[string]string { return map[string]string{"app.extra": "1"} },
+		ManagedVars: []string{"demo.s"},
+		ScopeVars:   func(string) map[string]string { return map[string]string{"demo.extra": "1"} },
 	}, RunnerOptions{})
 	require.NoError(t, err)
 	require.ErrorContains(t, rBadCB.Within(ctx, "t1", func(context.Context, *Session[string]) error { return nil }), "undeclared GUC")

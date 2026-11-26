@@ -20,9 +20,9 @@ builds joins, never generates DDL, and never runs hidden callbacks.
 
 Read the README at the Git tag or commit your application builds. The [migration guide](docs/MIGRATION.md) covers upgrading to v0.3. The [changelog](CHANGELOG.md) records release status.
 
-## Install v0.3.10
+## Install v0.3.11
 
-Run `go get github.com/0xJean/tabula@v0.3.10` in your application module with Go 1.26 or later. If you use the native pgx/v5 adapter or the OpenTelemetry bridge, also run `go get github.com/0xJean/tabula/pgxdriver@v0.3.10` and/or `go get github.com/0xJean/tabula/oteltabula@v0.3.10`.
+Run `go get github.com/0xJean/tabula@v0.3.11` in your application module with Go 1.26 or later. For the native driver and telemetry modules, use the matching version with `go get github.com/0xJean/tabula/pgxdriver@v0.3.11` and/or `go get github.com/0xJean/tabula/oteltabula@v0.3.11`.
 
 ## Read a row by primary key
 
@@ -44,6 +44,8 @@ item, err := items.Bind(session).Get(ctx, 42)
 ```
 
 `Get` returns a pointer to the matching `Item`, or `(nil, nil)` if the key is missing. When streaming with `Iter`, finish the loop or break before using the transaction for another lookup. Overlapping operations return `tabula.ErrSessionBusy`. [Streaming example](docs/COOKBOOK.md#10-stream-a-worker-batch)
+
+A descriptor can match a role that only updates selected columns or only appends rows. Set `TableSpec.WriteMode` to derive the corresponding SQL and column grants. [Table write modes](docs/AUTHORIZATION.md#table-write-modes)
 
 ## Try it locally
 

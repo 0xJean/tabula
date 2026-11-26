@@ -17,13 +17,13 @@ var reg = tabula.NewRegistry(tabula.RegistryConfig[TenantID]{
 
 key := tabula.NewSessionKey()
 runner, err := stdsql.NewRunner(db, stdsql.ScopePolicy[TenantID]{
-    ManagedVars: []string{"app.current_tenant"},
+    ManagedVars: []string{"demo.tenant"},
     ScopeVars: func(tenant TenantID) map[string]string {
-        return map[string]string{"app.current_tenant": string(tenant)}
+        return map[string]string{"demo.tenant": string(tenant)}
     },
     ScopeLog: func(t TenantID) string { return string(t) },
 }, stdsql.RunnerOptions{
-    Role:        "app_user",
+    Role:        "scope_user",
     RequireRole: true,
     SessionKey:  key,
     Timeouts: stdsql.Timeouts{
@@ -54,7 +54,7 @@ A runner that accepts only application reads and writes can set `RunnerOptions.S
 ## 2. Single-table CRUD with optimistic locking and `once` protection
 
 ```go
-type Record struct {
+type Entry struct {
     ID           int64      `db:"id,key,serial"`
     Tenant       TenantID   `db:"tenant_id,scope"`
     Code         string     `db:"code"`
@@ -66,8 +66,8 @@ type Record struct {
     DeletedAt    *time.Time `db:"deleted_at,deleted"`
 }
 
-var records = tabula.Define(reg, tabula.TableSpec[Record, int64]{
-    Name:  "public.records",
+var entries = tabula.Define(reg, tabula.TableSpec[Entry, int64]{
+    Name:  "public.entries",
     Order: "id ASC",
 })
 ```
@@ -75,7 +75,7 @@ var records = tabula.Define(reg, tabula.TableSpec[Record, int64]{
 Inside `runner.Within(ctx, tenant, ...)`:
 
 ```go
-r := records.Bind(sess)
+r := entries.Bind(sess)
 row, err := r.Lock(ctx, id) // FOR UPDATE; remembers once columns
 if err != nil { return err }
 if row == nil { return ErrRecordMissing } // application error
@@ -84,10 +84,22 @@ row.Version++
 err = r.Save(ctx, *row) // checks version CAS and once columns
 ```
 
+### Give an update role access to two columns
+
+```go
+var editable = tabula.Define(reg, tabula.TableSpec[Entry, int64]{
+    Name:          "public.entries",
+    WriteMode:     tabula.WriteUpdateOnly,
+    UpdateColumns: []string{"code", "version"},
+})
+```
+
+A locked entry can be saved with a new code and an incremented version. The generated `UPDATE` assigns those two columns. The role needs `SELECT` on the declared columns for the lock and `UPDATE (code, version)` for the save. [Table write modes](AUTHORIZATION.md#table-write-modes)
+
 ## 3. Conditional state transitions (`UpdateWhere` / `SetWhere`)
 
 ```go
-change := Record{ID: id, Tenant: sess.Scope(), Status: "published"}
+change := Entry{ID: id, Tenant: sess.Scope(), Status: "published"}
 matched, err := r.SetWhere(ctx, change, []string{"status"}, "status = ?", "draft")
 if err != nil {
     return err
@@ -115,25 +127,25 @@ registers the SQL into `Definition.Statements` so `sqlcheck` verifies it against
 ## 5. JOIN projection with nested `View` prefixes
 
 ```go
-type OrderPart struct {
+type JobPart struct {
     ID   int64  `db:"id"`
     Code string `db:"code"`
 }
-type CustomerPart struct {
+type GroupPart struct {
     Name string `db:"name,zero"`
 }
-type OrderSummary struct {
-    Order    OrderPart    `db:"o_"`
-    Customer CustomerPart `db:"c_"`
+type JobSummary struct {
+    Job    JobPart    `db:"j_"`
+    Group GroupPart `db:"g_"`
 }
 
-var orderView = tabula.DefineView(reg, tabula.ViewSpec[OrderSummary]{
-    Name: "public.order_summaries",
+var jobView = tabula.DefineView(reg, tabula.ViewSpec[JobSummary]{
+    Name: "public.job_summaries",
 })
 
-var listOrdersSQL = orderView.Statement("list",
-    "SELECT "+orderView.SelectAs(map[string]string{"o_": "o", "c_": "c"})+
-        " FROM public.orders o JOIN public.customers c ON c.id = o.customer_id WHERE o.tenant_id = $1",
+var listJobsSQL = jobView.Statement("list",
+    "SELECT "+jobView.SelectAs(map[string]string{"j_": "j", "g_": "g"})+
+        " FROM public.jobs j JOIN public.groups g ON g.id = j.group_id WHERE j.tenant_id = $1",
 )
 ```
 
@@ -168,7 +180,7 @@ For thousands of rows in one batch, `pgxdriver.CopyFrom` streams directly over P
 binary `COPY` protocol while reusing your `Table` descriptor and codecs:
 
 ```go
-n, err := pgxdriver.CopyFrom(ctx, pgxSession, records, batch)
+n, err := pgxdriver.CopyFrom(ctx, pgxSession, entries, batch)
 ```
 
 ## 9. CI verification with `tabula check`
@@ -180,7 +192,7 @@ then run the CLI built from the same Tabula revision against a migrated test dat
 tabula check \
   --dsn "$POSTGRES_DSN" \
   --snapshot test/sqlprepare/testdata/defined-statements.sql \
-  --role app_user
+  --role scope_user
 
 # Also audit Row-Level Security (ENABLE + FORCE + RESTRICTIVE):
 tabula check-rls \
@@ -254,7 +266,7 @@ exists, err := rows.Exists(ctx, func(f *tabula.Filter) { f.And("pinned = ?", tru
 
 // View-owned composed query with Select/Where split, local $1 filters and keyset paging.
 var listNotes = noteView.DefineQuery("notes.search", tabula.QuerySpec{
-    Select: "SELECT n.id, n.rank, coalesce(l.caption, '') AS caption FROM public.notes n LEFT JOIN public.labels l ON l.id = n.label_id AND l.tenant_id = n.tenant_id",
+    Select: "SELECT n.id, n.rank, coalesce(g.caption, '') AS caption FROM public.notes n LEFT JOIN public.groups g ON g.id = n.group_id AND g.tenant_id = n.tenant_id",
     Where:  "n.deleted_at IS NULL",
     Scope:  tabula.ScopeColumns("n.tenant_id"),
     Filters: []tabula.QueryFilter{
@@ -291,7 +303,7 @@ With a fixed keyset order, set the same `Direction` on the primary sort and each
 Run these commands in the application repository using the application’s inventory, workload, scope and expected grant files. Set `TABULA_DSN` to a disposable PostgreSQL installation.
 
 ```sh
-tabula check-login-role --role app_login --member-of app_reader,app_writer --schemas public
+tabula check-login-role --role scope_login --member-of scope_reader,scope_writer --schemas public
 tabula inventory --config inventory.json --bindings bindings.json --snapshot statements.sql > workload.json
 tabula verify-roles --config workload.json
 tabula grants --config privileges.json

@@ -46,7 +46,7 @@ func TestLoginRoleOptions(t *testing.T) {
 
 func TestLoginLabel(t *testing.T) {
 	maxLabel := strings.Repeat("a", 25)
-	for _, label := range []string{"", "_", "worktree_2", maxLabel} {
+	for _, label := range []string{"", "_", "suite_2", maxLabel} {
 		name, err := freshLoginName(label)
 		require.NoError(t, err)
 		require.Regexp(t, loginNamePattern, name)

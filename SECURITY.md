@@ -24,6 +24,7 @@ Send the following details to the maintainers. [Report a vulnerability](https://
   `RequireSealed` + `Registry.Seal(key)` reject foreign, copied, wrapped or unsealed sessions
   with `ErrForeignSession` before I/O. `RegistryConfig.Deny` enforces `DenyDelete`,
   `DenyUpsert`, `DenyUnscopedWrites` and `DenyCopy` across derived writes and `CopyFrom`.
+- Explicit table write modes check each bound operation before driver I/O, including empty batches and pgx COPY. Hand-written SQL on a restricted Rows handle returns `ErrOperationDenied`. Configure the corresponding PostgreSQL role to enforce access across every session handle. [Table write modes](docs/AUTHORIZATION.md#table-write-modes)
 - **Role-bound runners and no default raw `Tx()` escape**: `stdsql.Runner` and
   `pgxdriver.Runner` bind the configured PostgreSQL roles and timeout policy at construction, validate
   declared `ManagedVars` and auto-guard them, reject nested runner calls (`ErrNested`), close

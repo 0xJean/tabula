@@ -29,7 +29,7 @@ func SetNow(column string) Assignment { return Assignment{column: column} }
 // Like Set, it checks the affected row count and does not perform version CAS.
 // Key, scope, deleted, version and once columns cannot be expression targets.
 func (r *Rows[T, K, S]) SetExpr(ctx context.Context, key K, assignments ...Assignment) error {
-	if err := r.checkWriteAccess(); err != nil {
+	if err := r.checkWriteAccess(updateOp); err != nil {
 		return err
 	}
 	if len(assignments) == 0 {
@@ -44,6 +44,9 @@ func (r *Rows[T, K, S]) SetExpr(ctx context.Context, key K, assignments ...Assig
 	seen := make(map[string]bool, len(assignments))
 	secret := make([]bool, len(args))
 	for _, a := range assignments {
+		if !r.t.allowsUpdateColumn(a.column) {
+			return ErrOperationDenied
+		}
 		idx, ok := r.t.byName[a.column]
 		if !ok || seen[a.column] {
 			return fmt.Errorf("tabula.SetExpr %s: unknown or duplicate column %q", r.t.name, a.column)

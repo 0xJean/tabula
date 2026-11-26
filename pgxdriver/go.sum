@@ -1,5 +1,5 @@
-github.com/0xJean/tabula v0.3.10 h1:ZkQ7lmkENIylrYebRqNXtGHY5RxSJMXXNCx9OMZiiwc=
-github.com/0xJean/tabula v0.3.10/go.mod h1:zWHca4hnMv2Q/AP5scZPY3wMt/DppYliCgo8R75zcJA=
+github.com/0xJean/tabula v0.3.11 h1:0py0Jg6utAarNfQghqKB7vVeeDVdt/2bIdJcCC4x1oM=
+github.com/0xJean/tabula v0.3.11/go.mod h1:zWHca4hnMv2Q/AP5scZPY3wMt/DppYliCgo8R75zcJA=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/jackc/pgpassfile v1.0.0 h1:/6Hmqy13Ss2zCq62VdNG8tM1wchn8zjSGOBJ6icpsIM=
 github.com/jackc/pgpassfile v1.0.0/go.mod h1:CEx0iS5ambNFdcRtxPj5JhEz+xB6uRky5eyVu/W2HEg=

@@ -200,12 +200,12 @@ func TestInsertReturningSaveReturningAndInsertMany(t *testing.T) {
 
 type pairKey struct {
 	Region string `db:"region_code"`
-	SKU    string `db:"sku"`
+	Code   string `db:"code"`
 }
 
 type pairRow struct {
 	Region    string       `db:"region_code,key"`
-	SKU       string       `db:"sku,key"`
+	Code      string       `db:"code,key"`
 	Tenant    customTenant `db:"tenant_id,scope"`
 	Priority  int          `db:"priority"`
 	CreatedBy string       `db:"created_by,once"`
@@ -217,55 +217,55 @@ func TestCompositeKeyTable(t *testing.T) {
 	})
 	tbl := Define(reg, TableSpec[pairRow, pairKey]{
 		Name:  "public.region_items",
-		Order: "region_code ASC, sku ASC",
+		Order: "region_code ASC, code ASC",
 	})
 	def := tbl.Definition()
-	require.Equal(t, "SELECT region_code, sku, tenant_id, priority, created_by FROM public.region_items WHERE region_code = $1 AND sku = $2 AND tenant_id = $3", def.Statements["get"])
-	require.Equal(t, "UPDATE public.region_items SET priority = $4 WHERE region_code = $1 AND sku = $2 AND tenant_id = $3", def.Statements["update"])
+	require.Equal(t, "SELECT region_code, code, tenant_id, priority, created_by FROM public.region_items WHERE region_code = $1 AND code = $2 AND tenant_id = $3", def.Statements["get"])
+	require.Equal(t, "UPDATE public.region_items SET priority = $4 WHERE region_code = $1 AND code = $2 AND tenant_id = $3", def.Statements["update"])
 
 	sess := &fakeSession{
 		tenant:   "t-1",
 		execRows: 1,
 		scanFn: func(dest ...any) error {
 			*dest[0].(*string) = "US"
-			*dest[1].(*string) = "WIDGET"
+			*dest[1].(*string) = "ALPHA"
 			*dest[2].(*customTenant) = "t-1"
 			*dest[3].(*int) = 6
 			*dest[4].(*string) = "alice"
 			return nil
 		},
 		eachRows: [][]any{
-			{"US", "WIDGET", customTenant("t-1"), 6, "alice"},
+			{"US", "ALPHA", customTenant("t-1"), 6, "alice"},
 		},
 	}
 	rows := tbl.Bind(sess)
 
 	// Lock + once tracking works with composite struct key.
-	locked, err := rows.Lock(t.Context(), pairKey{Region: "US", SKU: "WIDGET"})
+	locked, err := rows.Lock(t.Context(), pairKey{Region: "US", Code: "ALPHA"})
 	require.NoError(t, err)
 	require.Equal(t, "US", locked.Region)
-	require.Equal(t, "WIDGET", locked.SKU)
+	require.Equal(t, "ALPHA", locked.Code)
 	locked.CreatedBy = "tampered"
 	require.ErrorIs(t, rows.Save(t.Context(), *locked), ErrOnce)
 
 	// GetMany & LockMany use PostgreSQL tuple IN and composite ORDER BY ASC.
 	_, err = rows.GetMany(t.Context(), []pairKey{
-		{Region: "US", SKU: "WIDGET"},
-		{Region: "EU", SKU: "GADGET"},
+		{Region: "US", Code: "ALPHA"},
+		{Region: "EU", Code: "GADGET"},
 	})
 	require.NoError(t, err)
-	require.Contains(t, sess.lastQuery, "AND ((region_code, sku) IN (($2, $3), ($4, $5))) ORDER BY region_code ASC, sku ASC")
+	require.Contains(t, sess.lastQuery, "AND ((region_code, code) IN (($2, $3), ($4, $5))) ORDER BY region_code ASC, code ASC")
 
-	_, err = rows.LockMany(t.Context(), []pairKey{{Region: "US", SKU: "WIDGET"}})
+	_, err = rows.LockMany(t.Context(), []pairKey{{Region: "US", Code: "ALPHA"}})
 	require.NoError(t, err)
-	require.Contains(t, sess.lastQuery, "ORDER BY region_code ASC, sku ASC FOR UPDATE")
+	require.Contains(t, sess.lastQuery, "ORDER BY region_code ASC, code ASC FOR UPDATE")
 
 	// Reject mismatched composite key struct.
 	type badKey struct {
 		Region string `db:"region_code"`
 	}
 	_, err = TryDefine(reg, TableSpec[pairRow, badKey]{Name: "public.bad"})
-	require.ErrorContains(t, err, "missing key column sku")
+	require.ErrorContains(t, err, "missing key column code")
 }
 
 func TestConfigurableSoftDelete(t *testing.T) {

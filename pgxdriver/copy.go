@@ -13,7 +13,7 @@ import (
 )
 
 // CopyFrom bulk-inserts rows into tbl using PostgreSQL's binary COPY protocol
-// via pgx.Tx.CopyFrom. It checks session provenance (A4), read-only mode,
+// via pgx.Tx.CopyFrom. It checks session provenance (A4), permission to insert,
 // DenyCopy and DenyUnscopedWrites (A6), and closed-session state before any
 // empty-input shortcut or driver access, then checks each row's scope via
 // CheckWrite.

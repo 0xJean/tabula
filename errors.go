@@ -40,6 +40,9 @@ const (
 	ErrSessionClosed      staticError = "session is closed"
 	ErrCapabilityDenied   staticError = "operation denied by registry capability policy"
 
+	// ErrOperationDenied means the declared WriteMode forbids an operation or column.
+	ErrOperationDenied staticError = "operation denied by table write mode"
+
 	// ErrUnscopedRequiresReadOnly reports that UnscopedReadOnly denied access
 	// because the transaction is read-write and no shared reader role applies.
 	// It also matches ErrReadOnly.

@@ -37,11 +37,11 @@ func TestTracerRecordsSuccessAndErrorSpans(t *testing.T) {
 
 	// 1. Successful statement span.
 	info := tabula.TraceInfo{
-		Key:    "orders.list",
-		Table:  "orders",
+		Key:    "items.list",
+		Table:  "items",
 		Action: "list",
 		Scope:  "t-1",
-		Role:   "app_reader",
+		Role:   "scope_reader",
 	}
 	ctx, end := tr.Start(t.Context(), info)
 	end(4, nil)
@@ -50,7 +50,7 @@ func TestTracerRecordsSuccessAndErrorSpans(t *testing.T) {
 	// 2. Failed statement span with SQLSTATE + default empty name fallback.
 	_, endErr := tr.Start(t.Context(), tabula.TraceInfo{
 		Action: "insert",
-		Role:   "app_writer",
+		Role:   "scope_writer",
 	})
 	endErr(0, fakePGError{code: "23505"})
 
@@ -58,7 +58,7 @@ func TestTracerRecordsSuccessAndErrorSpans(t *testing.T) {
 	require.Len(t, spans, 2)
 
 	okSpan := spans[0]
-	require.Equal(t, "orders.list", okSpan.Name())
+	require.Equal(t, "items.list", okSpan.Name())
 	require.Equal(t, trace.SpanKindClient, okSpan.SpanKind())
 	require.Equal(t, "custom.tabula", okSpan.InstrumentationScope().Name)
 	require.Equal(t, "0.3.1", okSpan.InstrumentationScope().Version)
@@ -66,10 +66,10 @@ func TestTracerRecordsSuccessAndErrorSpans(t *testing.T) {
 	attrs := attrMap(okSpan.Attributes())
 	require.Equal(t, "postgresql", attrs["db.system"].AsString())
 	require.Equal(t, "appdb", attrs["db.namespace"].AsString())
-	require.Equal(t, "orders.list", attrs["tabula.key"].AsString())
-	require.Equal(t, "orders", attrs["tabula.table"].AsString())
+	require.Equal(t, "items.list", attrs["tabula.key"].AsString())
+	require.Equal(t, "items", attrs["tabula.table"].AsString())
 	require.Equal(t, "list", attrs["tabula.action"].AsString())
-	require.Equal(t, "app_reader", attrs["tabula.role"].AsString())
+	require.Equal(t, "scope_reader", attrs["tabula.role"].AsString())
 	require.Equal(t, "t-1", attrs["tabula.scope"].AsString())
 	require.Equal(t, int64(4), attrs["tabula.rows"].AsInt64())
 
@@ -103,9 +103,9 @@ func TestMetricsRecordsHistogramAndCounter(t *testing.T) {
 
 	info := tabula.TraceInfo{
 		Key:    "tabula.inline.abcdef012345",
-		Table:  "orders",
+		Table:  "items",
 		Action: "select",
-		Role:   "app_reader",
+		Role:   "scope_reader",
 		Scope:  "t-1",
 	}
 	m.Observe(t.Context(), info, 25*time.Millisecond, 3, "")
@@ -144,7 +144,7 @@ func TestMetricsRecordsHistogramAndCounter(t *testing.T) {
 		require.False(t, hasKey, "tabula.key must be omitted from metrics")
 		vTable, okTable := dp.Attributes.Value("tabula.table")
 		require.True(t, okTable)
-		require.Equal(t, "orders", vTable.AsString())
+		require.Equal(t, "items", vTable.AsString())
 		if v, exists := dp.Attributes.Value("tabula.error_class"); exists && v.AsString() == string(tabula.ClassRLSDenied) {
 			sawRLS = true
 		}
@@ -157,7 +157,7 @@ func TestMetricsRecordsHistogramAndCounter(t *testing.T) {
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sr))
 	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
 	obs := tabula.NewObserver(tabula.ObserverConfig{
-		Role:    "app_writer",
+		Role:    "scope_writer",
 		Tracer:  oteltabula.NewTracer(tp),
 		Metrics: m,
 	})
