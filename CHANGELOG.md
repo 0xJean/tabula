@@ -6,7 +6,8 @@ v1.0 a minor version may contain breaking changes.
 ## v0.4.4 — unreleased
 
 - Establish shared lexical query, result-identity and write-effect contracts for composable statements. The implementation follows [the M3 design](docs/DESIGN-M3.md).
-- Add the optional `OperationSession` capability and the standard-library `sqlcheck.Verifier` transaction/description contract. Concrete plan and driver integration is in progress; existing execution behavior is unchanged.
+- Add the optional `OperationSession` capability in both transaction drivers. Its sealed callback child isolates operation failures with a savepoint; incomplete operations and cleanup failures prevent the runner from committing.
+- Add the standard-library `sqlcheck.Verifier` contract and `pgxdriver.SQLVerifier` protocol backend. Parse/Describe checks statement result metadata without executing writes or sequence defaults.
 - Record portable write-source uniqueness, database-default, conflict-arbiter and logical result-lineage requirements. Write effects distinguish an upsert's command pair from independent writes, and track RETURNING per physical target.
 
 ## v0.4.3 — 2026-11-27

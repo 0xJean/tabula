@@ -6,6 +6,10 @@ Start with the section for the version you are adopting. The integration guide l
 
 Composable statements follow the [M3 contract](DESIGN-M3.md). The additive `OperationSession` interface does not change `Session` or `AuthorizedSession`. Operations requiring its savepoint guarantee will reject an unsupported adapter with `ErrOperationRequired` before I/O. `sqlcheck.Verifier` keeps a non-executing statement description on the verification transaction's connection; `ErrDescribeRequired` identifies a backend that cannot safely inspect a write result. These contracts do not authorize SQL or add a driver dependency to core.
 
+Both transaction drivers implement `WithinOperation`. Use its callback session and context, including for nested operations. The parent and sibling handles return `ErrSessionBusy` until the callback ends; retained children return `ErrSessionClosed`. An ordinary callback error rolls back only that operation. A suspended operation at transaction exit or failed savepoint cleanup prevents commit even if the caller ignores the error. End a pulled iterator with its `stop` function before returning.
+
+`pgxdriver.SQLVerifier(pool)` supplies a separate read-only verification transaction and protocol description. It is usable even when application statements run through `database/sql`. `Describe` does not execute the described SQL, and its server OIDs are verification-local evidence rather than portable snapshot identifiers. Every caller must roll back the verification transaction when finished.
+
 The planned `StatementPolicy` additions retain zero-value behavior. Use keyed configuration literals: adding public fields requires converting positional literals to named fields. The complete API and snapshot migration notes will accompany the candidate implementation.
 
 ## From v0.4.2 to v0.4.3

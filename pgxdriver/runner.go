@@ -237,6 +237,9 @@ func (r *Runner[S]) runTx(
 		return err
 	}
 	sess.close()
+	if err := sess.mu.operationError(); err != nil {
+		return err
+	}
 
 	if runOpts.BeforeCommit != nil {
 		stepSess := r.newBoundSession(tx, scope, unscoped, readOnly)
@@ -246,6 +249,9 @@ func (r *Runner[S]) runTx(
 			return err
 		}
 		stepSess.close()
+		if err := stepSess.mu.operationError(); err != nil {
+			return err
+		}
 	}
 
 	if err := ctx.Err(); err != nil {
@@ -390,6 +396,9 @@ func (r *Runner[S]) WithinSharedOptions(ctx context.Context, opts pgx.TxOptions,
 		return err
 	}
 	state.closeAll()
+	if err := state.mu.operationError(); err != nil {
+		return err
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}

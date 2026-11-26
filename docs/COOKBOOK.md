@@ -2,6 +2,12 @@
 
 Practical recipes showing how applications bind and use Tabula without an ORM.
 
+## Operation savepoints
+
+Both transaction sessions implement `tabula.OperationSession[S]`. `WithinOperation` receives a sealed child and a fresh callback context. Execute the whole operation through that child; returning an error or panicking rolls its changes back while preserving earlier transaction work. Parent and sibling handles remain reserved until the operation ends. Nested operations use nested savepoints.
+
+A decoder error must be returned from the operation callback. A result iterator must be finished before returning from the runner; when using `iter.Pull2`, call `stop`. An unfinished operation or failed cleanup makes the enclosing runner roll back instead of committing partial work. Direct pools do not provide this write capability.
+
 ## 1. Setup with `stdsql` and a row-scope / RLS plug-in
 
 ```go

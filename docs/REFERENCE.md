@@ -3270,6 +3270,11 @@ func CopyFrom[T, K, S any](ctx context.Context, sess *Session[S], tbl *tabula.Ta
     An empty rows slice returns 0, nil after passing capability and session
     checks without touching the database.
 
+func SQLVerifier(pool *pgxpool.Pool) sqlcheck.Verifier
+    SQLVerifier supplies non-executing PostgreSQL statement descriptions to
+    sqlcheck. It may be used independently of the application's runtime driver.
+    Each verification uses one read-only transaction and always rolls it back.
+
 func SetLocalConfig(ctx context.Context, tx pgx.Tx, key, value string) error
     SetLocalConfig sets a PostgreSQL transaction-local GUC via set_config(...,
     true).
@@ -3375,6 +3380,10 @@ func (s *RawSession[S]) Tx() pgx.Tx
 
 func (s *RawSession[S]) Unscoped() bool
     Unscoped reports whether this session bypasses row-level scope predicates.
+
+func (s *RawSession[S]) WithinOperation(ctx context.Context, fn func(context.Context, tabula.Session[S]) error) error
+    WithinOperation delegates to the guarded transaction handle. The operation
+    callback receives a guarded child without a raw transaction escape.
 
 type RunOptions[S any] struct {
 	TxOptions    pgx.TxOptions
@@ -3547,6 +3556,11 @@ func (s *Session[S]) TabulaObserved() tabula.ObserveMask
 
 func (s *Session[S]) Unscoped() bool
     Unscoped reports whether this session bypasses row-level scope predicates.
+
+func (s *Session[S]) WithinOperation(ctx context.Context, fn func(context.Context, tabula.Session[S]) error) (err error)
+    WithinOperation runs fn in an operation savepoint. Its sealed child is
+    the only usable handle until fn returns. Errors and panics roll back the
+    operation; cleanup failure prevents the enclosing runner from committing.
 
 type Shared[S any] struct {
 	// Has unexported fields.
@@ -4475,6 +4489,10 @@ func (s *RawSession[S]) Tx() *sql.Tx
 func (s *RawSession[S]) Unscoped() bool
     Unscoped reports whether this session bypasses row-level scope predicates.
 
+func (s *RawSession[S]) WithinOperation(ctx context.Context, fn func(context.Context, tabula.Session[S]) error) error
+    WithinOperation delegates to the guarded transaction handle. The operation
+    callback receives a guarded child without a raw transaction escape.
+
 type RunOptions[S any] struct {
 	TxOptions    *sql.TxOptions
 	BeforeCommit func(context.Context, *Session[S]) error
@@ -4679,6 +4697,11 @@ func (s *Session[S]) TabulaObserved() tabula.ObserveMask
 
 func (s *Session[S]) Unscoped() bool
     Unscoped reports whether this session bypasses row-level scope predicates.
+
+func (s *Session[S]) WithinOperation(ctx context.Context, fn func(context.Context, tabula.Session[S]) error) (err error)
+    WithinOperation runs fn in an operation savepoint. Its sealed child is
+    the only usable handle until fn returns. Errors and panics roll back the
+    operation; cleanup failure prevents the enclosing runner from committing.
 
 type Shared[S any] struct {
 	// Has unexported fields.

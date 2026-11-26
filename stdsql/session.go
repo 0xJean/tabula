@@ -44,9 +44,11 @@ func quoteIdent(ident string) string {
 // exposing the raw transaction. Overlapping statements or savepoint requests
 // on the transaction return tabula.ErrSessionBusy, including inside Each.
 type Session[S any] struct {
-	authority  tabula.SQLAuthority
-	statements tabula.StatementGuard
-	mu         *statementLock // shared by handles on the same transaction
+	authority     tabula.SQLAuthority
+	statements    tabula.StatementGuard
+	mu            *statementLock // shared by handles on the same transaction
+	operation     *operationLease
+	checkCallback func(context.Context) error
 	readQueries
 	tx       *sql.Tx
 	scope    S
@@ -54,6 +56,7 @@ type Session[S any] struct {
 	readOnly bool
 	readRole bool
 	denied   error
+	key      tabula.SessionKey
 	proof    tabula.SessionProof
 	obs      *tabula.Observer
 	scopeLog func(S) string
@@ -175,7 +178,7 @@ func (s *Session[S]) tryLock() error {
 	if !locked {
 		return tabula.ErrSessionBusy
 	}
-	if s.mu.cursor != nil {
+	if s.mu.cursor != nil || s.mu.operation != s.operation {
 		s.mu.Unlock()
 		return tabula.ErrSessionBusy
 	}
@@ -183,20 +186,32 @@ func (s *Session[S]) tryLock() error {
 }
 
 func (s *Session[S]) checkContext(ctx context.Context) error {
-	if s.mu == nil || s.mu.checkCallback == nil {
+	if s.mu == nil {
 		return nil
 	}
 	if err := s.checkState(); err != nil {
 		return err
 	}
-	return s.mu.checkCallback(ctx)
+	if s.checkCallback != nil {
+		return s.checkCallback(ctx)
+	}
+	if s.mu.checkCallback != nil {
+		return s.mu.checkCallback(ctx)
+	}
+	return nil
 }
 
 func (s *Session[S]) checkState() error {
 	if s.mu == nil || s.mu.closed.Load() {
 		return tabula.ErrSessionClosed
 	}
-	return s.denied
+	if s.operation != nil && s.operation.closed.Load() {
+		return tabula.ErrSessionClosed
+	}
+	if s.denied != nil {
+		return s.denied
+	}
+	return s.mu.operationError()
 }
 
 func (s *Session[S]) applyScope(ctx context.Context) error {
@@ -385,6 +400,7 @@ func (s *Session[S]) Savepoint(ctx context.Context, name string, fn func(context
 	execSP := func(spCtx context.Context, stmt string) error {
 		s.mu.Lock()
 		defer s.mu.Unlock()
+		s.mu.abandonOperations(s.operation)
 		if err := s.checkState(); err != nil {
 			return err
 		}

@@ -156,6 +156,7 @@ func (r *Runner[S]) newBoundSession(tx *sql.Tx, scope S, unscoped, readOnly bool
 		scope:       scope,
 		unscoped:    unscoped,
 		readOnly:    readOnly,
+		key:         r.opts.SessionKey,
 		obs:         r.obs,
 		scopeLog:    r.compiled.policy.ScopeLog,
 		statements:  r.compiled.statements,
@@ -242,6 +243,9 @@ func (r *Runner[S]) runTx(
 		return err
 	}
 	sess.close()
+	if err := sess.mu.operationError(); err != nil {
+		return err
+	}
 
 	if runOpts.BeforeCommit != nil {
 		stepSess := r.newBoundSession(tx, scope, unscoped, readOnly)
@@ -251,6 +255,9 @@ func (r *Runner[S]) runTx(
 			return err
 		}
 		stepSess.close()
+		if err := stepSess.mu.operationError(); err != nil {
+			return err
+		}
 	}
 
 	if err := ctx.Err(); err != nil {
@@ -318,6 +325,7 @@ func (st *sharedState[S]) mint(scope S, unscoped bool) *Session[S] {
 		readOnly:    st.readOnly || readRole,
 		readRole:    readRole,
 		denied:      denied,
+		key:         st.runner.opts.SessionKey,
 		obs:         obs,
 		scopeLog:    st.runner.compiled.policy.ScopeLog,
 		statements:  st.runner.compiled.statements,
@@ -397,6 +405,9 @@ func (r *Runner[S]) WithinSharedOptions(ctx context.Context, opts *sql.TxOptions
 		return err
 	}
 	state.closeAll()
+	if err := state.mu.operationError(); err != nil {
+		return err
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}

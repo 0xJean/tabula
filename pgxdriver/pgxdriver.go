@@ -68,10 +68,12 @@ func quoteIdent(ident string) string {
 // transaction. Overlapping statements or savepoint requests on the transaction
 // return tabula.ErrSessionBusy, including inside Each or a binary COPY.
 type Session[S any] struct {
-	authority  tabula.SQLAuthority
-	statements tabula.StatementGuard
-	mu         *statementLock // shared by handles on the same transaction
-	closed     atomic.Bool
+	authority     tabula.SQLAuthority
+	statements    tabula.StatementGuard
+	mu            *statementLock // shared by handles on the same transaction
+	operation     *operationLease
+	checkCallback func(context.Context) error
+	closed        atomic.Bool
 	readQueries
 	tx       pgx.Tx
 	scope    S
@@ -201,7 +203,7 @@ func (s *Session[S]) tryLock() error {
 	if !locked {
 		return tabula.ErrSessionBusy
 	}
-	if s.mu.cursor != nil {
+	if s.mu.cursor != nil || s.mu.operation != s.operation {
 		s.mu.Unlock()
 		return tabula.ErrSessionBusy
 	}
@@ -209,20 +211,32 @@ func (s *Session[S]) tryLock() error {
 }
 
 func (s *Session[S]) checkContext(ctx context.Context) error {
-	if s.mu == nil || s.mu.checkCallback == nil {
+	if s.mu == nil {
 		return nil
 	}
 	if err := s.checkState(); err != nil {
 		return err
 	}
-	return s.mu.checkCallback(ctx)
+	if s.checkCallback != nil {
+		return s.checkCallback(ctx)
+	}
+	if s.mu.checkCallback != nil {
+		return s.mu.checkCallback(ctx)
+	}
+	return nil
 }
 
 func (s *Session[S]) checkState() error {
 	if s.mu == nil || s.mu.closed.Load() || s.closed.Load() {
 		return tabula.ErrSessionClosed
 	}
-	return s.denied
+	if s.operation != nil && s.operation.closed.Load() {
+		return tabula.ErrSessionClosed
+	}
+	if s.denied != nil {
+		return s.denied
+	}
+	return s.mu.operationError()
 }
 
 func (s *Session[S]) applyScope(ctx context.Context) error {
@@ -415,20 +429,22 @@ func (s *Session[S]) Savepoint(ctx context.Context, fn func(context.Context, *Se
 		return err
 	}
 	child := &Session[S]{
-		mu:          s.mu,
-		tx:          nested,
-		scope:       s.scope,
-		unscoped:    s.unscoped,
-		readOnly:    s.readOnly,
-		readRole:    s.readRole,
-		denied:      s.denied,
-		key:         s.key,
-		obs:         s.obs,
-		scopeLog:    s.scopeLog,
-		shared:      s.shared,
-		statements:  s.statements,
-		authority:   s.authority,
-		readQueries: readQueries{db: nested, guard: s.guard},
+		mu:            s.mu,
+		operation:     s.operation,
+		checkCallback: s.checkCallback,
+		tx:            nested,
+		scope:         s.scope,
+		unscoped:      s.unscoped,
+		readOnly:      s.readOnly,
+		readRole:      s.readRole,
+		denied:        s.denied,
+		key:           s.key,
+		obs:           s.obs,
+		scopeLog:      s.scopeLog,
+		shared:        s.shared,
+		statements:    s.statements,
+		authority:     s.authority,
+		readQueries:   readQueries{db: nested, guard: s.guard},
 	}
 	child.proof = s.key.Sign(child)
 
@@ -436,6 +452,7 @@ func (s *Session[S]) Savepoint(ctx context.Context, fn func(context.Context, *Se
 	defer func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
+		s.mu.abandonOperations(s.operation)
 		child.closed.Store(true)
 		if closed := s.checkState(); closed != nil {
 			if err == nil {
