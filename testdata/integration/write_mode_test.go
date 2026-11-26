@@ -60,14 +60,19 @@ func TestTableWriteModeRoles(t *testing.T) {
 			updateTable := tabula.Define(reg, tabula.TableSpec[writableItem, int64]{
 				Name: table, WriteMode: tabula.WriteUpdateOnly, UpdateColumns: []string{"rank", "revision", "removed"},
 			})
-			checkNeeds := func(def tabula.Definition, role string, missing ...string) {
+			checkNeeds := func(def tabula.Definition, role string, missingGrants []string, missing ...sqlcheck.MissingRequirement) {
 				t.Helper()
 				needs, empty := sqlcheck.CollectPrivilegeNeeds([]tabula.Definition{def})
 				require.Empty(t, empty)
 				got, extra, err := sqlcheck.CheckRolePrivileges(ctx, db, needs, role)
 				require.NoError(t, err)
-				require.ElementsMatch(t, missing, got)
+				require.ElementsMatch(t, missingGrants, got)
 				require.Empty(t, extra)
+				findings, err := sqlcheck.CheckReadiness(ctx, db, role, sqlcheck.ReadinessNeeds{
+					Privileges: needs, SchemaUsage: []string{ns},
+				})
+				require.NoError(t, err)
+				require.ElementsMatch(t, missing, findings)
 			}
 			verify := func(def tabula.Definition, role string) []string {
 				t.Helper()
@@ -75,8 +80,8 @@ func TestTableWriteModeRoles(t *testing.T) {
 				require.NoError(t, err)
 				return issues
 			}
-			checkNeeds(appendTable.Definition(), appendRole)
-			checkNeeds(updateTable.Definition(), updateRole)
+			checkNeeds(appendTable.Definition(), appendRole, nil)
+			checkNeeds(updateTable.Definition(), updateRole, nil)
 			require.Empty(t, verify(appendTable.Definition(), appendRole))
 			require.Empty(t, verify(updateTable.Definition(), updateRole))
 
@@ -163,16 +168,19 @@ func TestTableWriteModeRoles(t *testing.T) {
 				require.ErrorIs(t, err, tabula.ErrInsufficientPrivilege)
 			}
 			exec("REVOKE USAGE ON SEQUENCE " + table + "_id_seq FROM " + appendRole)
-			checkNeeds(appendTable.Definition(), appendRole, table+" USAGE(seq id)")
+			checkNeeds(appendTable.Definition(), appendRole, []string{table + " USAGE(seq id)"},
+				sqlcheck.MissingRequirement{Kind: "SEQUENCE", Object: table, Column: "id", Privilege: "USAGE"})
 			assertDenied(run(appendRole, appendOne))
 			exec("GRANT USAGE ON SEQUENCE " + table + "_id_seq TO " + appendRole)
 			exec("REVOKE INSERT (source) ON " + table + " FROM " + appendRole)
-			checkNeeds(appendTable.Definition(), appendRole, table+" INSERT(source)")
+			checkNeeds(appendTable.Definition(), appendRole, []string{table + " INSERT(source)"},
+				sqlcheck.MissingRequirement{Kind: "COLUMN", Object: table, Column: "source", Privilege: "INSERT"})
 			require.Len(t, verify(appendTable.Definition(), appendRole), 2)
 			assertDenied(run(appendRole, appendOne))
 
 			exec("REVOKE UPDATE (rank) ON " + table + " FROM " + updateRole)
-			checkNeeds(updateTable.Definition(), updateRole, table+" UPDATE(rank)")
+			checkNeeds(updateTable.Definition(), updateRole, []string{table + " UPDATE(rank)"},
+				sqlcheck.MissingRequirement{Kind: "COLUMN", Object: table, Column: "rank", Privilege: "UPDATE"})
 			issues := verify(updateTable.Definition(), updateRole)
 			require.Len(t, issues, 1)
 			require.Contains(t, issues[0], table+" update:")

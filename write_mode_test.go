@@ -113,15 +113,15 @@ func TestInvalidWriteModes(t *testing.T) {
 	type keyOnly struct {
 		ID int64 `db:"id,key,serial"`
 	}
-	_, err := TryDefine(reg, TableSpec[keyOnly, int64]{Name: "public.ids", WriteMode: WriteUpdateOnly})
+	_, err := TryDefine(reg, TableSpec[keyOnly, int64]{Name: "public.entries", WriteMode: WriteUpdateOnly})
 	require.ErrorContains(t, err, "updatable column")
-	ids := Define(reg, TableSpec[keyOnly, int64]{Name: "public.ids", WriteMode: WriteInsertOnly})
+	ids := Define(reg, TableSpec[keyOnly, int64]{Name: "public.entries", WriteMode: WriteInsertOnly})
 	require.ErrorIs(t, ids.Bind(&fakeSession{}).CheckCopy(), ErrOperationDenied)
 	only := ids.Definition()
-	require.Equal(t, map[string]string{"insert": "INSERT INTO public.ids (id) VALUES (DEFAULT)"}, only.Statements)
+	require.Equal(t, map[string]string{"insert": "INSERT INTO public.entries (id) VALUES (DEFAULT)"}, only.Statements)
 	require.Equal(t, []DefinedPrivilege{
-		{Table: "public.ids", Privilege: "INSERT", Columns: []string{"id"}},
-		{Table: "public.ids", Privilege: "USAGE", Sequence: "id"},
+		{Table: "public.entries", Privilege: "INSERT", Columns: []string{"id"}},
+		{Table: "public.entries", Privilege: "USAGE", Sequence: "id"},
 	}, only.Privileges)
 }
 
