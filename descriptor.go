@@ -14,6 +14,7 @@ type descriptor[T, S any] struct {
 	cols   []column[T]
 	byName map[string]int
 	entry  *registration
+	fixed  map[string]*compiledShape
 }
 
 func newDescriptor[T, S any](reg *Registry[S], name string) descriptor[T, S] {
@@ -55,6 +56,9 @@ func (d *descriptor[T, S]) Definition() Definition {
 // Statement registers hand-written SQL for verification and observation.
 // Keys are unique within a table or view.
 func (d *descriptor[T, S]) Statement(key, query string, opts ...StatementOption) string {
+	if d.reg != nil && d.reg.deny&DenyLegacySQL != 0 {
+		panic(ErrLegacySQL)
+	}
 	return d.registerStatement(key, query, "", opts)
 }
 
@@ -63,6 +67,13 @@ func (d *descriptor[T, S]) registerStatement(key, query, queryKey string, opts [
 	meta := statementMeta(d.name+"."+key, opts)
 	d.reg.mu.Lock()
 	defer d.reg.mu.Unlock()
+	if queryKey != "" {
+		for shapeKey := range e.def.StatementShapes {
+			if e.def.StatementQueries[shapeKey] == queryKey {
+				panic(fmt.Sprintf("%s: %s plan %q already registered", d.prefix(), d.name, queryKey))
+			}
+		}
+	}
 	if _, ok := e.def.Statements[key]; ok {
 		panic(fmt.Sprintf("%s.Statement %s: key %s declared twice", d.prefix(), d.name, key))
 	}

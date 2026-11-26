@@ -57,21 +57,22 @@ func parsePhysicalName(text string) (physicalName, error) {
 	if err != nil || len(tokens) != 3 || tokens[1].Text != "." {
 		return physicalName{}, fmt.Errorf("tabula: typed tables need a schema-qualified catalog name")
 	}
-	component := func(token pgstmt.Span) string {
-		switch token.Kind {
-		case pgstmt.Word:
-			return token.Text
-		case pgstmt.Quoted:
-			return strings.ReplaceAll(token.Text[1:len(token.Text)-1], `""`, `"`)
-		default:
-			return ""
-		}
-	}
-	n := physicalName{component(tokens[0]), component(tokens[2])}
+	n := physicalName{catalogIdentifier(tokens[0]), catalogIdentifier(tokens[2])}
 	if !typedIdent(n.schema) || !typedIdent(n.name) {
 		return physicalName{}, fmt.Errorf("tabula: invalid physical relation name")
 	}
 	return n, nil
+}
+
+func catalogIdentifier(token pgstmt.Span) string {
+	switch token.Kind {
+	case pgstmt.Word:
+		return token.Text
+	case pgstmt.Quoted:
+		return strings.ReplaceAll(token.Text[1:len(token.Text)-1], `""`, `"`)
+	default:
+		return ""
+	}
 }
 
 func (n physicalName) sql() string { return typedQuote(n.schema) + "." + typedQuote(n.name) }
@@ -84,6 +85,7 @@ type occurrence struct {
 	scope       RelationScope
 	scopeColumn string
 	scopeSecret bool
+	scopeGoType reflect.Type
 	mode        WriteMode
 	readOnly    bool
 	allowDelete bool
@@ -117,6 +119,7 @@ func FromTable[T, K, S any](t *Table[T, K, S], alias string, scope RelationScope
 	if t.scope >= 0 {
 		src.scopeColumn = t.cols[t.scope].name
 		src.scopeSecret = t.cols[t.scope].secret
+		src.scopeGoType = t.cols[t.scope].goType
 	}
 	return Rel[T]{source: src, column: func(name string) (column[T], bool) {
 		i, ok := t.byName[name]

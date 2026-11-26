@@ -8,6 +8,10 @@ v1.0 a minor version may contain breaking changes.
 - Typed relation occurrences, fields, input slots and projections carry their PostgreSQL types through compilation. Each registered shape records its ordered parameters, output columns, effects and grants in `Definition.StatementShapes`.
 - The adapter interface accepts a statement issued by its registry for one session and operation. A snapshot can be inspected independently of execution. [Typed query design](docs/DESIGN-v0.4.md)
 
+- A registry can enable `DenyLegacySQL` and issue its `SQLAuthority` to selected runners or Direct pools. They execute registered calls for that registry and reject direct SQL text, undeclared variants and raw transaction entry. Fixed generated table operations use the same credential. [Registered execution](docs/AUTHORIZATION.md#registered-execution)
+
+- Typed input slots now render an explicit cast to their schema-qualified PostgreSQL type. Regenerate statement snapshots before comparing or verifying plans. `Varchar(n)` records a physical column length for catalog checks. Parameter casts omit the length so PostgreSQL handles comparisons and assignments with their normal semantics.
+
 ## v0.3.11 — 2026-11-26
 
 - `TableSpec.WriteMode` supports read and update access with an optional `UpdateColumns` list, and strict insert access with optional serial sequence usage. The descriptor derives statements and privileges for the selected operations. Bound methods and pgx COPY check the mode before database I/O.

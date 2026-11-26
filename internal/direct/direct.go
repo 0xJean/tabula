@@ -15,12 +15,13 @@ type Reader interface {
 
 // Pool owns connections opened with default_transaction_read_only=on.
 type Pool[S any] struct {
-	reader   Reader
-	unscoped func(S) bool
-	scopeLog func(S) string
-	key      tabula.SessionKey
-	obs      *tabula.Observer
-	close    func() error
+	reader    Reader
+	unscoped  func(S) bool
+	scopeLog  func(S) string
+	authority tabula.SQLAuthority
+	key       tabula.SessionKey
+	obs       *tabula.Observer
+	close     func() error
 }
 
 // NewPool constructs a read-only direct pool.
@@ -35,27 +36,30 @@ func NewPoolWithOptions[S any](
 	unscoped func(S) bool,
 	scopeLog func(S) string,
 	key tabula.SessionKey,
+	authority tabula.SQLAuthority,
 	obs *tabula.Observer,
 	closePool func() error,
 ) *Pool[S] {
 	return &Pool[S]{
-		reader:   r,
-		unscoped: unscoped,
-		scopeLog: scopeLog,
-		key:      key,
-		obs:      obs,
-		close:    closePool,
+		reader:    r,
+		unscoped:  unscoped,
+		scopeLog:  scopeLog,
+		authority: authority,
+		key:       key,
+		obs:       obs,
+		close:     closePool,
 	}
 }
 
 // Session binds a scope without acquiring a connection or starting a transaction.
 func (p *Pool[S]) Session(scope S) tabula.Session[S] {
 	s := &session[S]{
-		reader:   p.reader,
-		scope:    scope,
-		unscoped: p.unscoped != nil && p.unscoped(scope),
-		scopeLog: p.scopeLog,
-		obs:      p.obs,
+		authority: p.authority,
+		reader:    p.reader,
+		scope:     scope,
+		unscoped:  p.unscoped != nil && p.unscoped(scope),
+		scopeLog:  p.scopeLog,
+		obs:       p.obs,
 	}
 	s.proof = p.key.Sign(s)
 	return s
@@ -65,12 +69,13 @@ func (p *Pool[S]) Session(scope S) tabula.Session[S] {
 func (p *Pool[S]) Close() error { return p.close() }
 
 type session[S any] struct {
-	reader   Reader
-	scope    S
-	unscoped bool
-	scopeLog func(S) string
-	obs      *tabula.Observer
-	proof    tabula.SessionProof
+	authority tabula.SQLAuthority
+	reader    Reader
+	scope     S
+	unscoped  bool
+	scopeLog  func(S) string
+	obs       *tabula.Observer
+	proof     tabula.SessionProof
 }
 
 func (s *session[S]) Scope() S                           { return s.scope }
@@ -87,14 +92,27 @@ func (s *session[S]) scopeLabel() string {
 }
 
 func (s *session[S]) Exec(context.Context, string, ...any) (int64, error) {
+	if s.authority.DeniesLegacySQL() {
+		return 0, errors.Join(tabula.ErrReadOnly, tabula.ErrLegacySQL)
+	}
 	return 0, tabula.ErrReadOnly
 }
 
 func (s *session[S]) Returning(context.Context, string, []any, ...any) error {
+	if s.authority.DeniesLegacySQL() {
+		return errors.Join(tabula.ErrReadOnly, tabula.ErrLegacySQL)
+	}
 	return tabula.ErrReadOnly
 }
 
 func (s *session[S]) Scan(ctx context.Context, q string, args []any, dest ...any) error {
+	if s.authority.DeniesLegacySQL() {
+		return tabula.ErrLegacySQL
+	}
+	return s.scan(ctx, q, args, dest...)
+}
+
+func (s *session[S]) scan(ctx context.Context, q string, args []any, dest ...any) error {
 	if s.obs == nil {
 		return readError(s.reader.Scan(ctx, q, args, dest...))
 	}
@@ -106,6 +124,13 @@ func (s *session[S]) Scan(ctx context.Context, q string, args []any, dest ...any
 }
 
 func (s *session[S]) Each(ctx context.Context, q string, args []any, visit func(func(...any) error) error) error {
+	if s.authority.DeniesLegacySQL() {
+		return tabula.ErrLegacySQL
+	}
+	return s.each(ctx, q, args, visit)
+}
+
+func (s *session[S]) each(ctx context.Context, q string, args []any, visit func(func(...any) error) error) error {
 	if s.obs == nil {
 		return readError(s.reader.Each(ctx, q, args, visit))
 	}
