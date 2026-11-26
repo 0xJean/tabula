@@ -7,20 +7,28 @@ import (
 	"strings"
 )
 
-// RowsSpec declares the finite alternatives for Find, List and Count.
+// RowsSpec declares the finite alternatives for a single-table read.
 // GroupBy lists the physical fields that determine each aggregate group.
 type RowsSpec struct {
 	RowFilter
 	GroupBy []RowColumn
 	Orders  []RowOrder
 	Pages   RowPages
+	// Lock applies to every data page. A locking plan supports Find only
+	// and requires an ungrouped, non-aggregate projection.
+	Lock RowLock
+	// WithExists registers a boolean existence check for each filter and
+	// scope choice of an unlocked, non-aggregate plan.
+	WithExists bool
 }
 
-// RowsPlan owns the registered data and exact-count shapes for one output view.
+// RowsPlan owns the registered read shapes for one output view.
 type RowsPlan[T, S any] struct {
-	view   *View[T, S]
-	family *rowFamily
-	page   rowPagePlan
+	view       *View[T, S]
+	family     *rowFamily
+	page       rowPagePlan
+	lock       RowLock
+	withExists bool
 }
 
 // DefineRows registers a named single-table read. It panics on declaration errors.
@@ -42,7 +50,15 @@ func TryDefineRows[T, R, S any](out *View[T, S], name string, src RowSource[R, S
 	if err != nil {
 		return nil, err
 	}
-	p := &RowsPlan[T, S]{view: out, page: rowPagePlan{pages: spec.Pages, orders: make(map[string]*rowOrdering)}}
+	locked := spec.Lock.declared
+	if locked && aggregate {
+		return nil, fmt.Errorf("tabula: a row lock requires a non-aggregate, ungrouped projection")
+	}
+	if spec.WithExists && (aggregate || locked) {
+		return nil, fmt.Errorf("tabula: WithExists requires an unlocked, non-aggregate plan")
+	}
+	p := &RowsPlan[T, S]{view: out, lock: spec.Lock, withExists: spec.WithExists,
+		page: rowPagePlan{pages: spec.Pages, orders: make(map[string]*rowOrdering)}}
 	for _, order := range spec.Orders {
 		if p.page.orders[order.Name] != nil {
 			return nil, fmt.Errorf("tabula: duplicate row order %q", order.Name)
@@ -57,9 +73,19 @@ func TryDefineRows[T, R, S any](out *View[T, S], name string, src RowSource[R, S
 	if err != nil {
 		return nil, err
 	}
-	names := append([]string{"count"}, slices.Sorted(maps.Keys(forms))...)
+	var names []string
+	if !locked {
+		names = append(names, "count")
+	}
+	if spec.WithExists {
+		names = append(names, "exists")
+	}
+	names = append(names, slices.Sorted(maps.Keys(forms))...)
 	p.family, err = compileRowFamily(&out.descriptor, name, src.rowSource, spec.RowFilter, names,
 		func(c *typedCompiler, form string, predicates []Pred) (string, StatementShape, error) {
+			if form == "exists" {
+				return renderRowExists(c, src.rowSource, predicates)
+			}
 			return p.render(c, src.rowSource, project, spec.GroupBy, aggregate, predicates, forms[form], form == "count")
 		})
 	if err != nil {
@@ -156,8 +182,31 @@ func (p *RowsPlan[T, S]) render(c *typedCompiler, src rowSource, project []Proje
 		query += order + page
 	}
 	meta, err := c.readRequirements()
+	if err != nil {
+		return "", StatementShape{}, err
+	}
 	meta.Result = fields
-	return query, meta, err
+	if p.lock.declared {
+		clause, err := p.lock.clause(c, &meta)
+		if err != nil {
+			return "", StatementShape{}, err
+		}
+		query += clause
+	}
+	return query, meta, nil
+}
+
+func renderRowExists(c *typedCompiler, src rowSource, predicates []Pred) (string, StatementShape, error) {
+	terms, err := src.where(c, predicates)
+	if err != nil {
+		return "", StatementShape{}, err
+	}
+	meta, err := c.readRequirements()
+	if err != nil {
+		return "", StatementShape{}, err
+	}
+	meta.Result = []ShapeField{{Name: "exists", Type: Bool().id.qualified()}}
+	return `SELECT EXISTS (SELECT 1 FROM ` + src.fromSQL() + whereSQL(terms) + `) AS "exists"`, meta, nil
 }
 
 // Cursor validates a boundary against the specific plan, order, field types

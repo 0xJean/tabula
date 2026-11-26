@@ -12,7 +12,7 @@ import (
 
 // SQLBinding assigns one inventoried site to its execution roles. Definition
 // names the owning table or view when the collector cannot resolve it. Prefix
-// optionally narrows the variants of that one composed query. Manual Variants
+// optionally narrows the registered variants of one plan. Manual Variants
 // carry their own Access or NoAccess requirements. Skip requires a registered exception.
 type SQLBinding struct {
 	Roles      []string
@@ -32,8 +32,8 @@ func (inv SQLInventory) BindRoles(bindings map[string]SQLBinding) (RoleStatement
 	return inv.BindRolesWithDefinitions(bindings, nil, nil)
 }
 
-// BindRolesWithDefinitions expands each static composed query or aggregate
-// against its owning definition. A missing owner, ambiguous definition, or
+// BindRolesWithDefinitions expands composed queries, aggregates and typed
+// plans against their owning definitions. A missing owner, ambiguous definition, or
 // site with no matching statements returns an error and no partial workload.
 // Supply named Variants for SQL that is not registered in a definition.
 func (inv SQLInventory) BindRolesWithDefinitions(
@@ -92,11 +92,11 @@ func (site SQLSite) bindStatements(b SQLBinding, byName map[string][]tabula.Defi
 	if b.NoAccess && len(b.Access) > 0 {
 		return nil, fmt.Errorf("cannot combine NoAccess with Access")
 	}
-	if site.Kind == "typed_rows" {
+	if site.Kind == "typed_rows" || site.Kind == "typed_plan" {
 		return site.bindRowPlan(b, byName)
 	}
 	if b.Plan != "" {
-		return nil, fmt.Errorf("binding Plan requires a typed row plan")
+		return nil, fmt.Errorf("binding Plan requires a typed plan")
 	}
 	registered := site.Kind == "composed_query" || site.Kind == "aggregate"
 	if site.Dynamic && (strings.TrimSpace(site.Exception) == "" || len(b.Variants) == 0) {

@@ -287,10 +287,8 @@ func DefineAdvisoryLock[T, S any](view *View[T, S], key string, lock AdvisoryLoc
 func TryDefineAdvisoryLock[T, S any](view *View[T, S], key string, lock AdvisoryLock) (*AdvisoryLockPlan[T, S], error)
     TryDefineAdvisoryLock registers the complete operation or returns an error.
 
-func (p *AdvisoryLockPlan[T, S]) Acquire(ctx context.Context, s Session[S], args ...Binding) (bool, error)
-    Acquire reports whether this transaction holds the requested lock. Wait
-    returns true on success. Try returns false while another transaction holds a
-    conflicting lock. Direct rejects both modes.
+func (p *AdvisoryLockPlan[T, S]) Bind(s Session[S]) *BoundAdvisoryLockPlan[T, S]
+    Bind attaches the advisory lock plan to a session from its registry.
 
 type AdvisoryMode uint8
     AdvisoryMode selects an exclusive or shared transaction-level advisory lock.
@@ -355,6 +353,17 @@ type Binding struct {
 func BindValue[V any](slot Slot[V], value V) Binding
     BindValue pairs an input with a value of its declared Go type.
 
+type BoundAdvisoryLockPlan[T, S any] struct {
+	// Has unexported fields.
+}
+    BoundAdvisoryLockPlan executes a transaction-level advisory lock on one
+    session.
+
+func (b *BoundAdvisoryLockPlan[T, S]) Acquire(ctx context.Context, args ...Binding) (bool, error)
+    Acquire reports whether this transaction holds the requested lock. Wait
+    returns true on success. Try returns false while another transaction holds a
+    conflicting lock. Direct rejects both modes.
+
 type BoundMutationPlan[T, S any] struct {
 	rowExecution[T, S]
 	// Has unexported fields.
@@ -371,6 +380,17 @@ func (b *BoundMutationPlan[T, S]) UpdateMany(ctx context.Context, set string, fi
     affected row count, including zero. The filter list selects optional
     predicates.
 
+type BoundRoutinePlan[T, S any] struct {
+	// Has unexported fields.
+}
+    BoundRoutinePlan executes a registered function on one session.
+
+func (b *BoundRoutinePlan[T, S]) All(ctx context.Context, args ...Binding) ([]T, error)
+    All decodes every value of a RoutineSet call, including an empty result.
+
+func (b *BoundRoutinePlan[T, S]) One(ctx context.Context, args ...Binding) (T, error)
+    One decodes the single value of a RoutineOne call into the registered view.
+
 type BoundRowsPlan[T, S any] struct {
 	rowExecution[T, S]
 	// Has unexported fields.
@@ -379,7 +399,12 @@ type BoundRowsPlan[T, S any] struct {
 
 func (b *BoundRowsPlan[T, S]) Count(ctx context.Context, filters []string, values ...Binding) (int64, error)
     Count counts unpaged result rows (groups for grouped queries). Supply only
-    the bindings used by the selected WHERE predicates.
+    the bindings used by the selected WHERE predicates. A locking plan returns
+    ErrOperationDenied.
+
+func (b *BoundRowsPlan[T, S]) Exists(ctx context.Context, filters []string, values ...Binding) (bool, error)
+    Exists reports whether a visible row satisfies the selected filter. Declare
+    WithExists to enable it. It ignores data-page ordering and bounds.
 
 func (b *BoundRowsPlan[T, S]) Find(ctx context.Context, choice RowChoice, values ...Binding) ([]T, error)
     Find returns the selected data page. It executes one registered statement.
@@ -387,6 +412,7 @@ func (b *BoundRowsPlan[T, S]) Find(ctx context.Context, choice RowChoice, values
 func (b *BoundRowsPlan[T, S]) List(ctx context.Context, choice RowChoice, values ...Binding) ([]T, int64, error)
     List returns a data page and the exact count before pagination. Both
     registered calls and all bindings are validated before the first execution.
+    A locking plan returns ErrOperationDenied.
 
 type CallMethod uint8
     CallMethod is the driver operation authorized for one execution.
@@ -703,35 +729,6 @@ const (
 	// Try returns false immediately on an advisory lock conflict.
 	Try
 )
-type LockedRows[T, S any] struct {
-	// Has unexported fields.
-}
-    LockedRows is one registered, single-table locking read.
-
-func DefineLockedRows[T, K, S, R any](view *View[R, S], key string, table *Table[T, K, S], spec LockedRowsSpec[S]) *LockedRows[R, S]
-    DefineLockedRows registers a projected, physical row lock. The table must
-    own the lock's occurrence. Its scope and soft-deletion rules apply.
-
-func TryDefineLockedRows[T, K, S, R any](view *View[R, S], key string, table *Table[T, K, S], spec LockedRowsSpec[S]) (*LockedRows[R, S], error)
-    TryDefineLockedRows registers the complete lock or returns a declaration
-    error.
-
-func (p *LockedRows[T, S]) All(ctx context.Context, s Session[S], args ...Binding) ([]T, error)
-    All locks and decodes every selected row in a writable transaction.
-
-type LockedRowsSpec[S any] struct {
-	Lock      RowLock
-	Where     Pred
-	ScopeType PGType[S]
-	Select    []Projection
-	// DeletedField declares an explicit catalog type and optional encoder for
-	// the table's soft-delete column. Supply the FieldOf this occurrence.
-	DeletedField SoftDeleteColumn
-}
-    LockedRowsSpec selects rows of the lock's occurrence and projects them into
-    a view. Omit Where to select all visible rows. A column-scoped table needs
-    ScopeType and can execute only on a scoped session.
-
 type LogConfig struct {
 	Logger        *slog.Logger
 	Level         LogLevel
@@ -949,6 +946,9 @@ func Ge[V any](a, b Expr[V]) Pred
 
 func Gt[V any](a, b Expr[V]) Pred
     Gt compares two expressions using PostgreSQL greater-than semantics.
+
+func IsDistinct[V any](left, right Expr[V]) Pred
+    IsDistinct compares values using PostgreSQL's null-safe inequality.
 
 func IsNotDistinct[V any](left, right Expr[V]) Pred
     IsNotDistinct compares values using PostgreSQL's null-safe equality.
@@ -1345,11 +1345,8 @@ func DefineRoutine[T, S, V any](view *View[T, S], key string, r *Routine[V], arg
 func TryDefineRoutine[T, S, V any](view *View[T, S], key string, r *Routine[V], args ...RoutineArgument) (*RoutinePlan[T, S], error)
     TryDefineRoutine registers the complete call or returns a declaration error.
 
-func (p *RoutinePlan[T, S]) All(ctx context.Context, s Session[S], args ...Binding) ([]T, error)
-    All decodes every value of a RoutineSet call, including an empty result.
-
-func (p *RoutinePlan[T, S]) One(ctx context.Context, s Session[S], args ...Binding) (T, error)
-    One decodes the single value of a RoutineOne call into the registered view.
+func (p *RoutinePlan[T, S]) Bind(s Session[S]) *BoundRoutinePlan[T, S]
+    Bind attaches the function plan to a session from its registry.
 
 type RoutineRequirement struct {
 	Signature, ResultType                 string
@@ -1664,8 +1661,7 @@ func (r *Rows[T, K, S]) WithLogger(logger *slog.Logger) *Rows[T, K, S]
 type RowsPlan[T, S any] struct {
 	// Has unexported fields.
 }
-    RowsPlan owns the registered data and exact-count shapes for one output
-    view.
+    RowsPlan owns the registered read shapes for one output view.
 
 func DefineRows[T, R, S any](out *View[T, S], name string, src RowSource[R, S], spec RowsSpec, project ...Projection) *RowsPlan[T, S]
     DefineRows registers a named single-table read. It panics on declaration
@@ -1688,8 +1684,14 @@ type RowsSpec struct {
 	GroupBy []RowColumn
 	Orders  []RowOrder
 	Pages   RowPages
+	// Lock applies to every data page. A locking plan supports Find only
+	// and requires an ungrouped, non-aggregate projection.
+	Lock RowLock
+	// WithExists registers a boolean existence check for each filter and
+	// scope choice of an unlocked, non-aggregate plan.
+	WithExists bool
 }
-    RowsSpec declares the finite alternatives for Find, List and Count. GroupBy
+    RowsSpec declares the finite alternatives for a single-table read. GroupBy
     lists the physical fields that determine each aggregate group.
 
 type SQLAuthority struct {
@@ -1862,13 +1864,6 @@ type SoftDelete struct {
     SoftDelete configures status-value soft deletion on a ",deleted" column.
     Leave TableSpec.SoftDelete nil for *time.Time (deleted_at IS NULL) or bool
     (is_deleted = FALSE).
-
-type SoftDeleteColumn interface {
-	// Has unexported methods.
-}
-    SoftDeleteColumn supplies the catalog type and encoder of a soft-delete
-    field to LockedRowsSpec. Use a Field returned by FieldOf for the same
-    relation occurrence as the row lock.
 
 type SortDirection uint8
     SortDirection selects the order of a composed query. SortDefault uses the
@@ -3213,7 +3208,7 @@ type SQLBinding struct {
 }
     SQLBinding assigns one inventoried site to its execution roles. Definition
     names the owning table or view when the collector cannot resolve it. Prefix
-    optionally narrows the variants of that one composed query. Manual Variants
+    optionally narrows the registered variants of one plan. Manual Variants
     carry their own Access or NoAccess requirements. Skip requires a registered
     exception.
 
@@ -3245,10 +3240,11 @@ func (inv SQLInventory) BindRolesWithDefinitions(
 	defs []tabula.Definition,
 	views []tabula.ViewDefinition,
 ) (RoleStatements, error)
-    BindRolesWithDefinitions expands each static composed query or aggregate
-    against its owning definition. A missing owner, ambiguous definition, or
-    site with no matching statements returns an error and no partial workload.
-    Supply named Variants for SQL that is not registered in a definition.
+    BindRolesWithDefinitions expands composed queries, aggregates and typed
+    plans against their owning definitions. A missing owner, ambiguous
+    definition, or site with no matching statements returns an error and no
+    partial workload. Supply named Variants for SQL that is not registered in a
+    definition.
 
 type SQLMethod struct {
 	Receiver, Method string
@@ -3289,8 +3285,11 @@ type SQLSite struct {
 	Dynamic   bool   `json:",omitempty"`
 	Exception string `json:",omitempty"`
 }
-    SQLSite describes a static or dynamic SQL call, composed query definition,
-    or single-table aggregate call. ID is independent of line numbers.
+    SQLSite describes an SQL call or a registered statement declaration or use.
+    Typed row families, including locking reads, use Kind "typed_rows".
+    Transaction advisory locks and routine plans use "typed_plan" with the
+    declaring function or concrete method receiver. ID is independent of line
+    numbers.
 
 type Statement struct {
 	Name     string

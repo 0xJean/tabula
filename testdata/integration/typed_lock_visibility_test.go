@@ -30,9 +30,7 @@ func addStatusLock[V any](t *testing.T, db *sql.DB, f *effectFixture, name, sqlT
 	}
 	desc := q.Define(f.reg, q.TableSpec[record, int64]{Name: table, RelationScope: q.Global(), SoftDelete: visibility})
 	rel := q.FromTable(desc, "r", q.Global())
-	f.statusLocks[name] = q.DefineLockedRows(f.view, name, desc, q.LockedRowsSpec[struct{}]{
-		Lock:         q.ForRows(q.ForShare, rel, q.Wait),
-		DeletedField: q.FieldOf(rel, "status", kind),
-		Select:       []q.Projection{q.Project(q.Output(f.view, "id", q.Int8()), q.FieldOf(rel, "id", q.Int8()).Expr())},
-	})
+	source := q.RowsFrom(desc, rel, q.FieldOf(rel, "status", kind).Column())
+	f.statusLocks[name] = q.DefineRows(f.view, name, source, q.RowsSpec{Lock: q.ForRows(q.ForShare, rel, q.Wait)},
+		q.Project(q.Output(f.view, "id", q.Int8()), q.FieldOf(rel, "id", q.Int8()).Expr()))
 }

@@ -6,7 +6,7 @@ no hidden behaviour.
 
 ## 1. Where the logger comes from
 
-Registered lock and routine calls use the owning view and statement key, such as `entries.lock_item.lock` or `entries.lookup_item.call`. Advisory keys and function arguments follow the same bound-value logging policy as other inputs. [Registered operations](COOKBOOK.md#registered-locks-and-functions)
+Registered lock and routine calls use the owning view and statement key, such as `entries.lock_item.global.data.sort.by_id.first` or `entries.lookup_item.call`. Advisory keys and function arguments follow the same bound-value logging policy as other inputs. [Registered operations](COOKBOOK.md#registered-locks-and-functions)
 
 - The library uses the standard library `log/slog`. The core takes no third-party logging
   dependency.
@@ -33,7 +33,7 @@ reg := tabula.NewRegistry(tabula.RegistryConfig[Scope]{
 })
 ```
 
-A typed row plan reports the registered definition and shape key for each execution. A page and its exact count have separate keys. `RowFilter.Observe` accepts `Quiet()` and `Secret()`. A shape that reads or assigns a secret field redacts its bind values, including the scope and cursor parameters.
+A typed row plan reports the registered definition and shape key for each execution. A page, its exact count and an optional existence check have separate keys. Internal soft-delete status parameters are always redacted. `RowFilter.Observe` accepts `Quiet()` and `Secret()`. A shape that reads or assigns a secret field redacts its bind values, including the scope and cursor parameters.
 
 ## 2. Switches
 

@@ -175,11 +175,13 @@ func (p buildPackage) inventory(
 						addSite(owner, site, exprs...)
 					}
 
-					if rowExecutionMethod(sigRecvName, node.Sel.Name) {
+					if kind := typedPlanSiteKind(sigRecvName, node.Sel.Name); kind != "" {
 						call := selectorCalls[node]
-						site := SQLSite{File: rel, Line: pos.Line, Receiver: sigRecvName, Method: node.Sel.Name, Kind: "typed_rows"}
+						site := SQLSite{File: rel, Line: pos.Line, Receiver: sigRecvName, Method: node.Sel.Name, Kind: kind}
 						if call != nil {
 							site.Definition, site.QueryKey = source.rowPlan(methodReceiver(node, sel, call), 0)
+						} else if sel.Kind() == types.MethodVal {
+							site.Definition, site.QueryKey = source.rowPlan(node.X, 0)
 						}
 						addSite(owner, site, node)
 					}
@@ -276,12 +278,15 @@ func (p buildPackage) inventory(
 					rel, _ := filepath.Rel(root, pos.Filename)
 					rel = filepath.ToSlash(rel)
 
-					if fnPkg == tabulaPkgPath && rowDeclaration(fnName) {
-						site := SQLSite{File: rel, Line: pos.Line, Receiver: tabulaPkgPath, Method: fnName, Kind: "typed_rows"}
+					if kind := typedPlanSiteKind(fnPkg, fnName); kind != "" {
+						site := SQLSite{File: rel, Line: pos.Line, Receiver: tabulaPkgPath, Method: fnName, Kind: kind}
 						var expr ast.Expr = node
 						if call := identCalls[node]; call != nil {
 							site.Definition, site.QueryKey = source.rowPlan(call, 0)
-							expr = call.Args[1]
+							expr = call
+							if len(call.Args) > 1 {
+								expr = call.Args[1]
+							}
 						}
 						addSite(owner, site, expr)
 					}

@@ -5,7 +5,8 @@ v1.0 a minor version may contain breaking changes.
 
 ## v0.4.0 — unreleased
 
-- Register a locking read with a target occurrence, lock strength and wait mode. Transaction advisory locks support shared and exclusive acquisition in both PostgreSQL key spaces.
+- Use `RowsSpec.Lock` to lock filtered, ordered or paginated rows with `plan.Bind(session).Find`. Transaction advisory locks support shared and exclusive acquisition in both PostgreSQL key spaces. Routine and advisory plans use the same session-binding style.
+- `RowsSpec.WithExists` registers a boolean `SELECT EXISTS` per scope and filter. `IsDistinct` and `IsNotDistinct` provide null-safe inequality and equality. Role inventory binds existence checks independently of data and count statements.
 - Declare scalar and set-returning functions by exact input and result types. Registered calls preserve the declared read or write effect. Role readiness can verify the function signature, catalog properties and effective privileges, including `UPDATE` on any column for a row lock. [Examples](docs/COOKBOOK.md#registered-locks-and-functions)
 
 - Typed relation occurrences, fields, input slots and projections carry their PostgreSQL types through compilation. Each registered shape records its ordered parameters, output columns, effects and grants in `Definition.StatementShapes`.

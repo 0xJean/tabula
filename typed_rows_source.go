@@ -72,6 +72,9 @@ func RowsFrom[T, K, S any](table *Table[T, K, S], rel Rel[T], columns ...RowColu
 	}
 	special := func(i int) *fieldRef {
 		col := table.cols[i]
+		if !typedIdent(col.name) {
+			panic(fmt.Sprintf("tabula.RowsFrom: invalid scope or soft-delete column %q", col.name))
+		}
 		if f := declared[col.name].ref; f != nil {
 			return f
 		}
@@ -274,6 +277,9 @@ func compileRowFamily[T, S any](d *descriptor[T, S], name string, src rowSource,
 		shape, err := c.finishShape(key, query, src.scopeType, meta)
 		if err != nil {
 			return nil, err
+		}
+		if pos, ok := shape.layout.positions[src.liveValue.input]; ok {
+			shape.shape.Inputs[pos].Secret = true
 		}
 		shapes = append(shapes, shape)
 		family.shapes[rowVariant{scope, filters, form}] = shape

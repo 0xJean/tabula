@@ -13,18 +13,21 @@ func TestRowInventoryRoleBinding(t *testing.T) {
 	inv, err := CollectSQL(t.Context(), InventoryConfig{Dir: "testdata/rowplans", Patterns: []string{"."}})
 	require.NoError(t, err)
 	require.Empty(t, inv.Findings)
-	require.Len(t, inv.Sites, 8)
+	require.Len(t, inv.Sites, 9)
 	bind := make(map[string]SQLBinding)
 	var countSite, unknown SQLSite
 	for _, site := range inv.Sites {
 		b := SQLBinding{Roles: []string{"reader"}}
 		switch site.Method {
-		case "DefineRows", "Count", "List":
+		case "DefineRows", "Count", "Exists", "List":
 			require.Equal(t, "entries", site.Definition)
 			require.Equal(t, "items_by_rank", site.QueryKey)
-			if site.Method == "Count" {
+			switch site.Method {
+			case "Count":
 				countSite = site
 				b.Roles = []string{"counter"}
+			case "Exists":
+				b.Roles = []string{"checker"}
 			}
 		case "TryDefineUpdateMany", "UpdateMany":
 			require.Equal(t, "public.items", site.Definition)
@@ -54,7 +57,17 @@ func TestRowInventoryRoleBinding(t *testing.T) {
 	require.Equal(t, snap, RenderSnapshot(defs))
 	work, err := inv.BindRolesWithDefinitions(bind, defs, nil)
 	require.NoError(t, err)
-	require.Len(t, work["reader"], 7)
+	require.Len(t, work["reader"], 8)
+	require.Len(t, work["checker"], 1)
+	exists := work["checker"][0]
+	require.Contains(t, exists.SQL, "SELECT EXISTS (SELECT 1 FROM")
+	require.NotContains(t, exists.SQL, "ORDER BY")
+	require.Equal(t, []string{"rank"}, exists.Shape.Privileges[0].Columns)
+	for _, stmt := range work["reader"] {
+		if stmt.Shape.Result[0].Name == "exists" {
+			require.Contains(t, stmt.Name, "items_by_rank.global.exists")
+		}
+	}
 	require.Len(t, work["counter"], 1)
 	stmt := work["counter"][0]
 	require.NotNil(t, stmt.Shape)
@@ -107,6 +120,9 @@ func TestRowWorkloadPolicyNeeds(t *testing.T) {
 	require.Equal(t, []tabula.ShapeAccess{{Relation: table, Command: "SELECT"}}, lock.Shape.Access)
 	routine := definitionStatement(d, "routine", "read_routine")
 	require.False(t, routine.NoAccess)
+	routine.Shape.Effects |= tabula.EffectAdvisoryLock
+	routine.Shape.Routines = []tabula.RoutineRequirement{{Signature: "public.evaluate()", ResultType: "pg_catalog.int8"}}
+	require.True(t, routine.needsPolicyAccess())
 	key := "evaluate.global.data"
 	d = tabula.Definition{Name: "entries", Statements: map[string]string{key: "SELECT public.evaluate()"},
 		StatementShapes: map[string]tabula.StatementShape{key: {Effects: tabula.EffectRead}}, StatementQueries: map[string]string{key: "evaluate"}}

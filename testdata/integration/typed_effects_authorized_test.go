@@ -76,43 +76,43 @@ func TestTypedLockRoutineAuthorized(t *testing.T) {
 			ro := authorizedEffectRunner(t, driver, db, pool, f.role, auth, q.StatementPolicy{}, nil, true)
 			id := q.BindValue(f.id, int64(1))
 			require.NoError(t, run(ctx, func(c context.Context, s session) error {
-				first, err := f.routines["small"].One(c, s, q.BindValue(f.small, int32(9)))
+				first, err := f.routines["small"].Bind(s).One(c, q.BindValue(f.small, int32(9)))
 				require.NoError(t, err)
 				require.EqualValues(t, 109, first.ID)
-				second, err := f.routines["large"].One(c, s, q.BindValue(f.id, int64(9)))
+				second, err := f.routines["large"].Bind(s).One(c, q.BindValue(f.id, int64(9)))
 				require.NoError(t, err)
 				require.EqualValues(t, 209, second.ID)
-				_, err = f.routines["large"].One(ctx, s, q.BindValue(f.id, int64(9)))
+				_, err = f.routines["large"].Bind(s).One(ctx, q.BindValue(f.id, int64(9)))
 				require.ErrorIs(t, err, q.ErrCallbackContext)
 				for _, n := range []int64{0, 1, 3} {
-					rows, err := f.routines["series"].All(c, s, q.BindValue(f.id, n))
+					rows, err := f.routines["series"].Bind(s).All(c, q.BindValue(f.id, n))
 					require.NoError(t, err)
 					require.Len(t, rows, int(n))
 					for i, row := range rows {
 						require.EqualValues(t, i+1, row.ID)
 					}
 				}
-				inserted, err := f.routines["add_one"].One(c, s, q.BindValue(f.id, int64(7)))
+				inserted, err := f.routines["add_one"].Bind(s).One(c, q.BindValue(f.id, int64(7)))
 				require.NoError(t, err)
 				require.EqualValues(t, 7, inserted.ID)
-				many, err := f.routines["add_set"].All(c, s, q.BindValue(f.id, int64(2)))
+				many, err := f.routines["add_set"].Bind(s).All(c, q.BindValue(f.id, int64(2)))
 				require.NoError(t, err)
 				require.Equal(t, []lockResult{{1}, {2}}, many)
 				for _, lock := range f.statusLocks {
-					visible, err := lock.All(c, s)
+					visible, err := lock.Bind(s).Find(c, q.RowChoice{})
 					require.NoError(t, err)
 					require.Equal(t, []lockResult{{1}}, visible)
 				}
-				held, err := f.row[q.Wait].All(c, s, id)
+				held, err := f.row[q.Wait].Bind(s).Find(c, q.RowChoice{}, id)
 				require.NoError(t, err)
 				require.Equal(t, []lockResult{{1}}, held)
 				require.NoError(t, run(ctx, func(other context.Context, s session) error {
-					got, err := f.row[q.SkipLocked].All(other, s, id)
+					got, err := f.row[q.SkipLocked].Bind(s).Find(other, q.RowChoice{}, id)
 					require.Empty(t, got)
 					return err
 				}))
 				err = run(ctx, func(other context.Context, s session) error {
-					_, err := f.row[q.NoWait].All(other, s, id)
+					_, err := f.row[q.NoWait].Bind(s).Find(other, q.RowChoice{}, id)
 					return err
 				})
 				require.Equal(t, "55P03", q.SQLState(err))
@@ -120,35 +120,35 @@ func TestTypedLockRoutineAuthorized(t *testing.T) {
 			}))
 			checkTransactionLocks(ctx, t, run, func(ctx context.Context, s session, name string, key int64, pair [2]int32) (bool, error) {
 				if name == "attempt" || name == "big" {
-					return f.advisory[name].Acquire(ctx, s, q.BindValue(f.id, key))
+					return f.advisory[name].Bind(s).Acquire(ctx, q.BindValue(f.id, key))
 				}
-				return f.advisory[name].Acquire(ctx, s, q.BindValue(f.small, pair[0]), q.BindValue(f.part, pair[1]))
+				return f.advisory[name].Bind(s).Acquire(ctx, q.BindValue(f.small, pair[0]), q.BindValue(f.part, pair[1]))
 			})
 			checkRestricted := func(ctx context.Context, s session) {
 				t.Helper()
-				_, err := f.row[q.Wait].All(ctx, s, id)
+				_, err := f.row[q.Wait].Bind(s).Find(ctx, q.RowChoice{}, id)
 				require.ErrorIs(t, err, q.ErrReadOnly)
 				require.Empty(t, q.SQLState(err))
-				_, err = f.routines["add_one"].One(ctx, s, id)
+				_, err = f.routines["add_one"].Bind(s).One(ctx, id)
 				require.ErrorIs(t, err, q.ErrReadOnly)
 				require.Empty(t, q.SQLState(err))
-				_, err = f.routines["add_set"].All(ctx, s, id)
+				_, err = f.routines["add_set"].Bind(s).All(ctx, id)
 				require.ErrorIs(t, err, q.ErrReadOnly)
 				require.Empty(t, q.SQLState(err))
-				row, err := f.routines["large"].One(ctx, s, id)
+				row, err := f.routines["large"].Bind(s).One(ctx, id)
 				require.NoError(t, err)
 				require.EqualValues(t, 201, row.ID)
 			}
 			require.NoError(t, ro(ctx, func(c context.Context, s session) error {
 				checkRestricted(c, s)
-				held, err := f.advisory["attempt"].Acquire(c, s, id)
+				held, err := f.advisory["attempt"].Bind(s).Acquire(c, id)
 				require.True(t, held)
 				return err
 			}))
 			direct := effectDirect(t, driver, auth)
 			checkRestricted(ctx, direct)
 			for _, name := range []string{"big", "attempt"} {
-				_, err := f.advisory[name].Acquire(ctx, direct, id)
+				_, err := f.advisory[name].Bind(direct).Acquire(ctx, id)
 				require.ErrorIs(t, err, q.ErrReadOnly)
 				require.Empty(t, q.SQLState(err))
 			}
@@ -157,11 +157,11 @@ func TestTypedLockRoutineAuthorized(t *testing.T) {
 			policy := q.StatementPolicy{Read: []string{"select"}, Write: []string{"insert", "update"}, RequireReturning: true}
 			restricted := authorizedEffectRunner(t, driver, db, pool, f.role, auth, policy, nil, false)
 			require.NoError(t, restricted(ctx, func(c context.Context, s session) error {
-				_, err := f.routines["large"].One(c, s, id)
+				_, err := f.routines["large"].Bind(s).One(c, id)
 				require.NoError(t, err)
-				_, err = f.routines["add_one"].One(c, s, id)
+				_, err = f.routines["add_one"].Bind(s).One(c, id)
 				require.ErrorIs(t, err, q.ErrForbiddenStatement)
-				_, err = f.routines["add_set"].All(c, s, id)
+				_, err = f.routines["add_set"].Bind(s).All(c, id)
 				require.ErrorIs(t, err, q.ErrForbiddenStatement)
 				return nil
 			}))
@@ -179,7 +179,7 @@ func TestTypedLockRoutineAuthorized(t *testing.T) {
 			require.NoError(t, err)
 			guarded := authorizedEffectRunner(t, driver, db, pool, f.role, auth, q.StatementPolicy{}, guard, false)
 			err = guarded(ctx, func(c context.Context, s session) error {
-				_, err := get.One(c, s, q.BindValue(setting, "demo.scope"))
+				_, err := get.Bind(s).One(c, q.BindValue(setting, "demo.scope"))
 				return err
 			})
 			require.ErrorIs(t, err, q.ErrForbiddenStatement)
@@ -192,7 +192,7 @@ func TestTypedLockRoutineAuthorized(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, missing, 1)
 			err = ro(ctx, func(c context.Context, s session) error {
-				_, err := drifted.One(c, s, id)
+				_, err := drifted.Bind(s).One(c, id)
 				return err
 			})
 			require.ErrorIs(t, err, q.ErrReadOnly)
@@ -200,14 +200,14 @@ func TestTypedLockRoutineAuthorized(t *testing.T) {
 			_, err = db.ExecContext(ctx, "REVOKE EXECUTE ON FUNCTION "+f.schema+".lookup(bigint) FROM "+f.role)
 			require.NoError(t, err)
 			err = run(ctx, func(c context.Context, s session) error {
-				_, err := f.routines["large"].One(c, s, id)
+				_, err := f.routines["large"].Bind(s).One(c, id)
 				return err
 			})
 			require.Equal(t, "42501", q.SQLState(err))
 			_, err = db.ExecContext(ctx, "REVOKE UPDATE(note) ON "+f.table+" FROM "+f.role)
 			require.NoError(t, err)
 			err = run(ctx, func(c context.Context, s session) error {
-				_, err := f.row[q.Wait].All(c, s, id)
+				_, err := f.row[q.Wait].Bind(s).Find(c, q.RowChoice{}, id)
 				return err
 			})
 			require.Equal(t, "42501", q.SQLState(err))

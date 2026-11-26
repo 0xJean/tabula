@@ -44,6 +44,13 @@ WHERE attrelid = pg_catalog.to_regclass($1) AND attname = $2 AND attnum > 0 AND 
 	if len(s.Result) == 0 {
 		return nil
 	}
+	if s.Effects&tabula.EffectRowLock != 0 {
+		var err error
+		query, err = lockProjectionQuery(query)
+		if err != nil {
+			return err
+		}
+	}
 	return checkReadResult(ctx, tx, query, params, s.Result)
 }
 

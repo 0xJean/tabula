@@ -27,9 +27,11 @@ if len(missing) > 0 {
 
 One read-only query checks effective grants for the named role, including inherited and PUBLIC grants. It reads PostgreSQL catalogs without assuming that role or executing the named functions. Use qualified relation names and function signatures such as `public.find_item(integer, public.item_kind[])`. Supply schema and column names as they appear in the catalog. Use `Privileges.Columns` for named column grants. `AnyColumnSelect` requires access to at least one column. `ForceRLS` checks the ENABLE and FORCE flags independently of SELECT access. Owned-sequence requirements come from `Privileges.Sequences`.
 
+A registered existence check requires access to its scope, soft-delete and predicate columns. A check that references no columns needs SELECT on any one column of its table.
+
 A locking read needs `SELECT` on the columns it references and `UPDATE` on any column of each locked table. Pass `StatementShape.AnyColumnUpdate` to `ReadinessNeeds.AnyColumnUpdate`. A missing grant yields `UPDATE ANY COLUMN`. PostgreSQL also filters lockable rows through both the SELECT and UPDATE row-security policies. [Lock privileges](https://www.postgresql.org/docs/17/sql-select.html) · [Policies by command](https://www.postgresql.org/docs/17/sql-createpolicy.html)
 
-Pass the shape's `Routines` to `ReadinessNeeds.Routines`. The check resolves schema, function name and ordered input types in the catalog and checks the result type, scalar or set cardinality, invoker or definer mode, and a read declaration's STABLE or IMMUTABLE volatility. Include the shape's `SchemaUsage` and `Privileges` to verify schema access and EXECUTE on the exact overload. Review function bodies and declare any caller-side table dependencies in the application's role workload. [Function catalog](https://www.postgresql.org/docs/17/catalog-pg-proc.html)
+`RoleStatements.Readiness` collects locking and routine requirements from the selected shapes. When assembling the check manually, pass the shape's `Routines` to `ReadinessNeeds.Routines`. The check resolves schema, function name and ordered input types in the catalog and checks the result type, scalar or set cardinality, invoker or definer mode, and a read declaration's STABLE or IMMUTABLE volatility. Include the shape's `SchemaUsage` and `Privileges` to verify schema access and EXECUTE on the exact overload. Review function bodies and declare any caller-side table dependencies in the application's role workload. [Function catalog](https://www.postgresql.org/docs/17/catalog-pg-proc.html)
 
 An absent role returns one role finding. Absent objects and missing grants appear in the sorted results. A canceled query or database error fails the check. The application owns its startup deadline, role selection and response to findings. RLS policy behavior and excess grants have separate audits.
 
@@ -91,6 +93,8 @@ Specify each adapter or interface that accepts SQL. Argument positions start at 
 The default inventory covers production sources selected by the current Go build configuration. Use `Tests: true` for test files and `Tags` for optional code. Run once per supported build configuration. Calls through interfaces need the interface receiver in `Methods`. Site IDs survive line moves and distinguish repeated calls. An ID changing after an edit calls for reviewing its role assignment and exception.
 
 Assign each site ID to an entry such as `{"Roles":["docs_reader"]}` in a bindings file. Run `tabula inventory --config inventory.json --bindings bindings.json > workload.json` to collect statements and check their assignments together. `SQLInventory.BindRoles` reports missing or retired assignments. A dynamic entry supplies named `Variants` with their SQL. An explicitly skipped site requires a registered exception. A static site can supply `Access` for command coverage. The same site can be assigned to several roles.
+
+Inventory records declarations and uses of typed row locks, transaction advisory locks and routine calls. For an indirect plan, supply its owning `Definition` and `Plan`. The registered effect and result cardinality must match the source method. A row lock contributes both SELECT and UPDATE policy access. A routine needs reviewed `Access` or `NoAccess` for its body. Role readiness uses its exact function signature, and a dedicated advisory lock records the privilege for its built-in overload.
 
 For composed queries and aggregates, add `--snapshot statements.sql`, generated with `sqlcheck.RenderAllSnapshot(reg.Defined(), reg.DefinedViews())`. The collector resolves literal descriptor names in direct declarations and single-assignment local or private package handles. A query key such as `list` can be reused on several views. Each role receives the variants registered for its own view and query. An optional `Prefix` selects a subset of those variants.
 
@@ -247,7 +251,9 @@ Each policy must match exactly one rule. Unmatched policies, overlapping matches
 For a typed statement with no registered table access, review the routine
 body and declare its caller-context `Access`, or set `NoAccess` after that
 review. Role binding and policy coverage enforce the declaration even for a
-scalar function called without a `FROM` clause.
+scalar function called without a `FROM` clause. The dedicated PostgreSQL
+transaction advisory lock has no table dependency. Row locks require SELECT
+and UPDATE policy coverage, together with UPDATE on at least one column.
 
 `tabula check-coverage --config workload.json` checks catalog policy coverage on RLS-enabled tables. It accounts for permissive policies, `ALL`, `PUBLIC`, inherited roles, FORCE and role bypass. `INSERT … RETURNING` requires SELECT coverage. In the example workload, a writer with the required column grants and only an INSERT policy can pass `verify-roles`. Running `check-coverage` then reports a missing SELECT policy for `add-note`. Targeted `ON CONFLICT` needs SELECT coverage and `DO UPDATE` also needs UPDATE.
 

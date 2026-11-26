@@ -113,13 +113,13 @@ func TestTypedRoutineDispatch(t *testing.T) {
 			s.eachRows = [][]any{{int64(3)}, {int64(5)}}
 			run := func(s Session[customTenant], args ...Binding) error {
 				if tc.card == RoutineOne {
-					row, err := plan.One(t.Context(), s, args...)
+					row, err := plan.Bind(s).One(t.Context(), args...)
 					if err == nil {
 						require.EqualValues(t, 4, row.ID)
 					}
 					return err
 				}
-				rows, err := plan.All(t.Context(), s, args...)
+				rows, err := plan.Bind(s).All(t.Context(), args...)
 				if err == nil {
 					require.Equal(t, []typedResult{{3}, {5}}, rows)
 				}
@@ -133,10 +133,10 @@ func TestTypedRoutineDispatch(t *testing.T) {
 			require.NoError(t, span.err)
 			require.Error(t, run(s, BindValue(Input("id", Int8()), 7)))
 			if tc.card == RoutineOne {
-				_, err := plan.All(t.Context(), s, arg)
+				_, err := plan.Bind(s).All(t.Context(), arg)
 				require.Error(t, err)
 			} else {
-				_, err := plan.One(t.Context(), s, arg)
+				_, err := plan.Bind(s).One(t.Context(), arg)
 				require.Error(t, err)
 			}
 			require.Equal(t, 1, s.calls)
@@ -164,7 +164,7 @@ func TestTypedRoutineScanError(t *testing.T) {
 		*dst[0].(*int64) = 9
 		return bad
 	}
-	row, err := plan.One(t.Context(), s)
+	row, err := plan.Bind(s).One(t.Context())
 	require.ErrorIs(t, err, bad)
 	require.Zero(t, row)
 }
@@ -172,15 +172,15 @@ func TestTypedRoutineScanError(t *testing.T) {
 func TestTypedUnregisteredLockAndRoutine(t *testing.T) {
 	s := new(fakeSession)
 	var routine RoutinePlan[typedResult, customTenant]
-	_, err := routine.One(t.Context(), s)
+	_, err := routine.Bind(s).One(t.Context())
 	require.ErrorIs(t, err, ErrStatementAuthority)
-	_, err = routine.All(t.Context(), s)
+	_, err = routine.Bind(s).All(t.Context())
 	require.ErrorIs(t, err, ErrStatementAuthority)
-	var rows LockedRows[typedResult, customTenant]
-	_, err = rows.All(t.Context(), s)
+	var rows RowsPlan[typedResult, customTenant]
+	_, err = rows.Bind(s).Find(t.Context(), RowChoice{})
 	require.ErrorIs(t, err, ErrStatementAuthority)
 	var lock AdvisoryLockPlan[lockFlag, customTenant]
-	_, err = lock.Acquire(t.Context(), s)
+	_, err = lock.Bind(s).Acquire(t.Context())
 	require.ErrorIs(t, err, ErrStatementAuthority)
 	require.Empty(t, s.lastQuery)
 }

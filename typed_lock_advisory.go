@@ -124,14 +124,25 @@ func TryDefineAdvisoryLock[T, S any](view *View[T, S], key string, lock Advisory
 	return &AdvisoryLockPlan[T, S]{effectRows[T, S]{view, shape}}, nil
 }
 
+// BoundAdvisoryLockPlan executes a transaction-level advisory lock on one session.
+type BoundAdvisoryLockPlan[T, S any] struct {
+	plan    *AdvisoryLockPlan[T, S]
+	session Session[S]
+}
+
+// Bind attaches the advisory lock plan to a session from its registry.
+func (p *AdvisoryLockPlan[T, S]) Bind(s Session[S]) *BoundAdvisoryLockPlan[T, S] {
+	return &BoundAdvisoryLockPlan[T, S]{plan: p, session: s}
+}
+
 // Acquire reports whether this transaction holds the requested lock. Wait
 // returns true on success. Try returns false while another transaction holds
 // a conflicting lock. Direct rejects both modes.
-func (p *AdvisoryLockPlan[T, S]) Acquire(ctx context.Context, s Session[S], args ...Binding) (bool, error) {
-	if p == nil || p.query.shape == nil {
+func (b *BoundAdvisoryLockPlan[T, S]) Acquire(ctx context.Context, args ...Binding) (bool, error) {
+	if b == nil || b.plan == nil || b.plan.query.shape == nil {
 		return false, ErrStatementAuthority
 	}
 	var held bool
-	err := p.query.scan(ctx, s, CallScan, args, func() []any { return []any{&held} })
+	err := b.plan.query.scan(ctx, b.session, CallScan, args, func() []any { return []any{&held} })
 	return held, err
 }

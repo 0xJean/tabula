@@ -265,7 +265,7 @@ func TestRegisteredRowPlans(t *testing.T) {
 			exec("CREATE POLICY visible ON " + table + " FOR SELECT TO " + reader + " USING (scope_id=NULLIF(current_setting('demo.scope',true),'')::bigint)")
 			rlsTable := tabula.Define(reg, tabula.TableSpec[planItem, int64]{Name: table, ReadOnly: true, RelationScope: tabula.ByRLS()})
 			rs := tabula.FromTable(rlsTable, "r", tabula.ByRLS())
-			read := tabula.DefineRows(out, "visible", tabula.RowsFrom(rlsTable, rs), tabula.RowsSpec{},
+			read := tabula.DefineRows(out, "visible", tabula.RowsFrom(rlsTable, rs), tabula.RowsSpec{WithExists: true},
 				tabula.Project(tabula.Output(out, "id", tabula.Int8()), tabula.FieldOf(rs, "id", tabula.Int8()).Expr()),
 				tabula.Project(tabula.Output(out, "label", tabula.Text()), tabula.FieldOf(rs, "label", tabula.Text()).Expr()))
 			inv = sqlcheck.SQLInventory{Sites: []sqlcheck.SQLSite{{ID: "rls", Kind: "typed_rows", Method: "DefineRows", Definition: "entries", QueryKey: "visible"}}}
@@ -298,9 +298,18 @@ func TestRegisteredRowPlans(t *testing.T) {
 					require.NoError(t, err)
 					require.EqualValues(t, 1, count)
 					require.Equal(t, tc.id, rows[0].ID)
+					found, err := read.Bind(s).Exists(ctx, nil)
+					require.NoError(t, err)
+					require.True(t, found)
 					return nil
 				})
 			}
+			run(reader, 3, func(ctx context.Context, s tabula.Session[itemScope]) error {
+				found, err := read.Bind(s).Exists(ctx, nil)
+				require.NoError(t, err)
+				require.False(t, found)
+				return nil
+			})
 			exec("ALTER TABLE " + table + " NO FORCE ROW LEVEL SECURITY")
 			missing := verify()
 			require.Len(t, missing, 1)

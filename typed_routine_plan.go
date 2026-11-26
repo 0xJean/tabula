@@ -76,12 +76,24 @@ func TryDefineRoutine[T, S, V any](view *View[T, S], key string, r *Routine[V], 
 	return &RoutinePlan[T, S]{query: effectRows[T, S]{view, shape}, set: r.requirement.ReturnsSet}, nil
 }
 
+// BoundRoutinePlan executes a registered function on one session.
+type BoundRoutinePlan[T, S any] struct {
+	plan    *RoutinePlan[T, S]
+	session Session[S]
+}
+
+// Bind attaches the function plan to a session from its registry.
+func (p *RoutinePlan[T, S]) Bind(s Session[S]) *BoundRoutinePlan[T, S] {
+	return &BoundRoutinePlan[T, S]{plan: p, session: s}
+}
+
 // One decodes the single value of a RoutineOne call into the registered view.
-func (p *RoutinePlan[T, S]) One(ctx context.Context, s Session[S], args ...Binding) (T, error) {
+func (b *BoundRoutinePlan[T, S]) One(ctx context.Context, args ...Binding) (T, error) {
 	var row T
-	if p == nil || p.query.shape == nil {
+	if b == nil || b.plan == nil || b.plan.query.shape == nil {
 		return row, ErrStatementAuthority
 	}
+	p := b.plan
 	if p.set {
 		return row, errors.New("tabula: One requires a scalar routine")
 	}
@@ -89,7 +101,7 @@ func (p *RoutinePlan[T, S]) One(ctx context.Context, s Session[S], args ...Bindi
 	if p.query.shape.shape.Effects&EffectWrite != 0 {
 		method = CallReturning
 	}
-	err := p.query.scan(ctx, s, method, args, func() []any {
+	err := p.query.scan(ctx, b.session, method, args, func() []any {
 		decoder := readBinding[T, S]{d: &p.query.view.descriptor}
 		return decoder.addrs(&row)
 	})
@@ -101,10 +113,11 @@ func (p *RoutinePlan[T, S]) One(ctx context.Context, s Session[S], args ...Bindi
 }
 
 // All decodes every value of a RoutineSet call, including an empty result.
-func (p *RoutinePlan[T, S]) All(ctx context.Context, s Session[S], args ...Binding) ([]T, error) {
-	if p == nil || p.query.shape == nil {
+func (b *BoundRoutinePlan[T, S]) All(ctx context.Context, args ...Binding) ([]T, error) {
+	if b == nil || b.plan == nil || b.plan.query.shape == nil {
 		return nil, ErrStatementAuthority
 	}
+	p := b.plan
 	if !p.set {
 		return nil, errors.New("tabula: All requires a set-returning routine")
 	}
@@ -112,11 +125,11 @@ func (p *RoutinePlan[T, S]) All(ctx context.Context, s Session[S], args ...Bindi
 	if p.query.shape.shape.Effects&EffectWrite != 0 {
 		method = CallReturningEach
 	}
-	return p.query.all(ctx, s, method, args)
+	return p.query.all(ctx, b.session, method, args)
 }
 
 // effectRows shares the authorized channel, registry observation and existing
-// view decoder between routine and lock statements. It never sends SQL text
+// view decoder between routines and advisory locks. It never sends SQL text
 // through a legacy Session method.
 type effectRows[T, S any] struct {
 	view  *View[T, S]

@@ -17,7 +17,7 @@ func rowDeclaration(name string) bool {
 func rowExecutionMethod(recv, method string) bool {
 	switch recv {
 	case tabulaPkgPath + ".BoundRowsPlan":
-		return method == "Count" || method == "Find" || method == "List"
+		return method == "Count" || method == "Exists" || method == "Find" || method == "List"
 	case tabulaPkgPath + ".BoundMutationPlan":
 		return method == "UpdateMany" || method == "DeleteMany"
 	}
@@ -33,7 +33,7 @@ func rowFunction(info *types.Info, call *ast.CallExpr) string {
 		id = f.Sel
 	}
 	fn, ok := info.Uses[id].(*types.Func)
-	if ok && fn.Pkg() != nil && fn.Pkg().Path() == tabulaPkgPath && rowDeclaration(fn.Name()) {
+	if ok && fn.Pkg() != nil && fn.Pkg().Path() == tabulaPkgPath && typedPlanSiteKind(tabulaPkgPath, fn.Name()) != "" {
 		return fn.Name()
 	}
 	return ""
@@ -58,7 +58,8 @@ func (s inventorySource) rowPlan(expr ast.Expr, depth int) (definition, key stri
 		if selector, ok := unwrapCallTarget(e.Fun).(*ast.SelectorExpr); ok && selector.Sel.Name == "Bind" {
 			if sel := s.info.Selections[selector]; sel != nil {
 				_, recv := methodReceiverNames(sel)
-				if recv == tabulaPkgPath+".RowsPlan" || recv == tabulaPkgPath+".MutationPlan" {
+				switch recv {
+				case tabulaPkgPath + ".RowsPlan", tabulaPkgPath + ".MutationPlan", tabulaPkgPath + ".RoutinePlan", tabulaPkgPath + ".AdvisoryLockPlan":
 					return s.rowPlan(methodReceiver(selector, sel, e), depth+1)
 				}
 			}

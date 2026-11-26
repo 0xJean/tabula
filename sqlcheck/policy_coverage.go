@@ -242,7 +242,7 @@ func CheckPolicyCoverage(ctx context.Context, db *sql.DB, work RoleStatements) (
 				continue
 			}
 			auto, err := inferAccess(s.SQL)
-			if s.NoAccess {
+			if s.NoAccess || s.builtInAdvisoryLock() && len(s.Access) == 0 {
 				if len(auto) > 0 {
 					findings = append(findings, fmt.Sprintf("%s/%s: NoAccess cannot override inferred table access", role, s.Name))
 				}

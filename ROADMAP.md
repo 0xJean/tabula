@@ -81,6 +81,12 @@ Design record: [docs/DESIGN-v0.3.1.md](docs/DESIGN-v0.3.1.md).
 - Tables can register individual scalar aggregates for SQL snapshots and role verification.
 - Composed lists accept a maximum offset. Table keyset lists report invalid options through their error result. [Migration guide](docs/MIGRATION.md#from-v030-to-v032)
 
+## v0.4 — registered PostgreSQL statements
+
+The v0.4.0 candidate registers single-table reads, aggregates and conditional writes. Each permitted predicate, ordering and page variant has SQL that can be prepared and explained under its assigned role. A registry can require this execution path for selected runners and read-only pools.
+
+The same registry records row locks, transaction advisory locks and calls to declared PostgreSQL functions. The next patch adds explicit joins, set membership and pattern matching. Expression and aggregate extensions follow, then writes with returned rows. [Release sequence](docs/DESIGN-v0.4.md#release-sequence-and-acceptance)
+
 ## v1.0 — stability and ecosystem adapters
 
 - API freeze and semver compatibility promise.
@@ -89,5 +95,4 @@ Design record: [docs/DESIGN-v0.3.1.md](docs/DESIGN-v0.3.1.md).
 
 ## Out of scope
 
-Generated joins or preloading, AutoMigrate or DDL generation, global hooks or callbacks,
-databases other than PostgreSQL.
+Relationship inference from struct fields, preloading, AutoMigrate or DDL generation, global hooks or callbacks, and databases other than PostgreSQL.

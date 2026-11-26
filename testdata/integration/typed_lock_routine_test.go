@@ -38,8 +38,8 @@ type effectFixture struct {
 
 	id          q.Slot[int64]
 	small, part q.Slot[int32]
-	row         map[q.LockWait]*q.LockedRows[lockResult, struct{}]
-	statusLocks map[string]*q.LockedRows[lockResult, struct{}]
+	row         map[q.LockWait]*q.RowsPlan[lockResult, struct{}]
+	statusLocks map[string]*q.RowsPlan[lockResult, struct{}]
 	advisory    map[string]*q.AdvisoryLockPlan[advisoryResult, struct{}]
 	routines    map[string]*q.RoutinePlan[lockResult, struct{}]
 }
@@ -85,11 +85,11 @@ func newEffectFixture(t *testing.T, db *sql.DB, reg *q.Registry[struct{}]) *effe
 	rel := q.FromTable(tab, "i", q.Global())
 	id := q.FieldOf(rel, "id", q.Int8()).Expr()
 	f.id, f.small, f.part = q.Input("key", q.Int8()), q.Input("first", q.Int4()), q.Input("second", q.Int4())
-	f.row = make(map[q.LockWait]*q.LockedRows[lockResult, struct{}])
+	f.row = make(map[q.LockWait]*q.RowsPlan[lockResult, struct{}])
 	for wait, key := range map[q.LockWait]string{q.Wait: "hold", q.NoWait: "nowait", q.SkipLocked: "skip"} {
-		f.row[wait] = q.DefineLockedRows(f.view, key, tab, q.LockedRowsSpec[struct{}]{
-			Lock: q.ForRows(q.ForUpdate, rel, wait), Where: q.Eq(id, f.id.Expr()), Select: []q.Projection{q.Project(q.Output(f.view, "id", q.Int8()), id)},
-		})
+		f.row[wait] = q.DefineRows(f.view, key, q.RowsFrom(tab, rel), q.RowsSpec{
+			Lock: q.ForRows(q.ForUpdate, rel, wait), RowFilter: q.RowFilter{Where: q.Eq(id, f.id.Expr())},
+		}, q.Project(q.Output(f.view, "id", q.Int8()), id))
 	}
 	f.advisory = make(map[string]*q.AdvisoryLockPlan[advisoryResult, struct{}])
 	for key, lock := range map[string]q.AdvisoryLock{
@@ -116,7 +116,7 @@ func newEffectFixture(t *testing.T, db *sql.DB, reg *q.Registry[struct{}]) *effe
 	call("add_one", spec)
 	spec.Name, spec.Cardinality = "add_set", q.RoutineSet
 	call("add_set", spec)
-	f.statusLocks = make(map[string]*q.LockedRows[lockResult, struct{}])
+	f.statusLocks = make(map[string]*q.RowsPlan[lockResult, struct{}])
 	exec("CREATE TYPE " + ns + ".item_state AS ENUM ('open', 'closed')")
 	exec("CREATE DOMAIN " + ns + ".item_rank AS integer")
 	addStatusLock(t, db, f, "notes", "text", q.Text(), `open'\entry`, "closed", true)
@@ -181,26 +181,26 @@ func TestTypedLockRoutineSQL(t *testing.T) {
 			}
 			for key, value := range map[string]any{"notes": `open'\entry`, "groups": "open", "jobs": int32(7)} {
 				require.NoError(t, run(ctx, func(_ context.Context, s session) error {
-					ids, err := rows(s, view.Statements[key+".lock"], value)
+					ids, err := rows(s, view.Statements[key+".global.data"], value)
 					require.Equal(t, []int64{1}, ids)
 					return err
 				}))
 			}
 			// Keep the holder's transaction open until both competing reads return.
 			require.NoError(t, run(ctx, func(_ context.Context, holder session) error {
-				ids, err := rows(holder, view.Statements["hold.lock"], 1)
+				ids, err := rows(holder, view.Statements["hold.global.data"], 1)
 				require.NoError(t, err)
 				require.Equal(t, []int64{1}, ids)
-				ids, err = rows(holder, view.Statements["hold.lock"], 2)
+				ids, err = rows(holder, view.Statements["hold.global.data"], 2)
 				require.NoError(t, err)
 				require.Empty(t, ids)
 				require.NoError(t, run(ctx, func(_ context.Context, s session) error {
-					ids, err := rows(s, view.Statements["skip.lock"], 1)
+					ids, err := rows(s, view.Statements["skip.global.data"], 1)
 					require.Empty(t, ids)
 					return err
 				}))
 				err = run(ctx, func(_ context.Context, s session) error {
-					_, err := rows(s, view.Statements["nowait.lock"], 1)
+					_, err := rows(s, view.Statements["nowait.global.data"], 1)
 					return err
 				})
 				require.Equal(t, "55P03", q.SQLState(err))
@@ -235,7 +235,7 @@ func TestTypedLockRoutineSQL(t *testing.T) {
 					visible, err := rows(s, "SELECT id FROM "+f.table+" WHERE id = $1", 1)
 					require.NoError(t, err)
 					require.Equal(t, []int64{1}, visible)
-					locked, err := rows(s, view.Statements["hold.lock"], 1)
+					locked, err := rows(s, view.Statements["hold.global.data"], 1)
 					require.Equal(t, expected, locked)
 					return err
 				}))
@@ -246,9 +246,9 @@ func TestTypedLockRoutineSQL(t *testing.T) {
 			probePolicy([]int64{1})
 			_, err = db.ExecContext(ctx, "REVOKE UPDATE(note) ON "+f.table+" FROM "+f.role)
 			require.NoError(t, err)
-			require.Equal(t, []sqlcheck.MissingRequirement{{Kind: "TABLE", Object: view.StatementShapes["hold.lock"].AnyColumnUpdate[0], Privilege: "UPDATE ANY COLUMN"}}, check("hold.lock"))
+			require.Equal(t, []sqlcheck.MissingRequirement{{Kind: "TABLE", Object: view.StatementShapes["hold.global.data"].AnyColumnUpdate[0], Privilege: "UPDATE ANY COLUMN"}}, check("hold.global.data"))
 			err = run(ctx, func(_ context.Context, s session) error {
-				_, err := rows(s, view.Statements["hold.lock"], 1)
+				_, err := rows(s, view.Statements["hold.global.data"], 1)
 				return err
 			})
 			require.Equal(t, "42501", q.SQLState(err))

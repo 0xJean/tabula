@@ -14,6 +14,7 @@ func definitionStatement(d tabula.Definition, key, name string) Statement {
 	stmt := Statement{Name: name, SQL: d.Statements[key]}
 	if shape, ok := d.StatementShapes[key]; ok {
 		stmt.Shape = &shape
+		stmt.NoAccess = stmt.builtInAdvisoryLock()
 		for _, a := range shape.Access {
 			stmt.Access = append(stmt.Access, PolicyAccess{Table: a.Relation, Command: a.Command})
 		}
@@ -58,7 +59,7 @@ func (site SQLSite) bindRowPlan(b SQLBinding, defs map[string][]tabula.Definitio
 		if prefix != "" && key != prefix && !strings.HasPrefix(key, prefix+".") {
 			continue
 		}
-		if !matchesRowMethod(key, plan, site.Method) {
+		if !site.matchesTypedShape(key, plan, shape) {
 			continue
 		}
 		selected[key] = true
@@ -96,12 +97,18 @@ func (site SQLSite) bindRowPlan(b SQLBinding, defs map[string][]tabula.Definitio
 
 // A routine body can read tables even when its calling SQL has no FROM clause.
 func (s Statement) needsPolicyAccess() bool {
-	return s.Shape != nil && len(s.Shape.Access) == 0 && len(s.Access) == 0 && !s.NoAccess
+	return s.Shape != nil && len(s.Shape.Access) == 0 && len(s.Access) == 0 && !s.NoAccess && !s.builtInAdvisoryLock()
+}
+
+// The dedicated transaction advisory operation has no table or routine body.
+func (s Statement) builtInAdvisoryLock() bool {
+	return s.Shape != nil && s.Shape.Effects == tabula.EffectRead|tabula.EffectAdvisoryLock &&
+		len(s.Shape.Routines) == 0 && len(s.Shape.Access) == 0
 }
 
 func (s *Statement) bindPolicyAccess(b SQLBinding) error {
 	if !s.needsPolicyAccess() {
-		if b.NoAccess || len(b.Access) > 0 {
+		if b.NoAccess && !s.NoAccess || len(b.Access) > 0 {
 			return fmt.Errorf("%s already has registered policy access", s.Name)
 		}
 		return nil
@@ -145,7 +152,11 @@ func matchesRowMethod(key, plan, method string) bool {
 		return form == "count"
 	case "Find":
 		return form == "data"
-	case "List", "DefineRows", "TryDefineRows":
+	case "Exists":
+		return form == "exists"
+	case "DefineRows", "TryDefineRows":
+		return form == "count" || form == "data" || form == "exists"
+	case "List":
 		return form == "count" || form == "data"
 	case "UpdateMany", "DefineUpdateMany", "TryDefineUpdateMany":
 		return form == "set"
@@ -166,21 +177,27 @@ func (r RoleStatements) Readiness(role string) (ReadinessNeeds, error) {
 	}
 	var n ReadinessNeeds
 	var privileges []tabula.DefinedPrivilege
+	seenRoutine := make(map[tabula.RoutineRequirement]bool)
 	for _, stmt := range work {
 		s := stmt.Shape
 		if s == nil {
 			continue
 		}
-		if len(s.AnyColumnUpdate) > 0 {
-			return ReadinessNeeds{}, fmt.Errorf("%s: unsupported any-column UPDATE requirement", stmt.Name)
+		for _, routine := range s.Routines {
+			if !seenRoutine[routine] {
+				n.Routines = append(n.Routines, routine)
+				seenRoutine[routine] = true
+			}
 		}
 		privileges = append(privileges, s.Privileges...)
 		n.SchemaUsage = append(n.SchemaUsage, s.SchemaUsage...)
 		n.ForceRLS = append(n.ForceRLS, s.ForceRLS...)
 		n.AnyColumnSelect = append(n.AnyColumnSelect, s.AnyColumnSelect...)
+		n.AnyColumnUpdate = append(n.AnyColumnUpdate, s.AnyColumnUpdate...)
 	}
 	n.Privileges, _ = CollectPrivilegeNeeds([]tabula.Definition{{Name: role, Privileges: privileges}})
-	for _, names := range []*[]string{&n.SchemaUsage, &n.ForceRLS, &n.AnyColumnSelect} {
+	slices.SortStableFunc(n.Routines, func(a, b tabula.RoutineRequirement) int { return strings.Compare(a.Signature, b.Signature) })
+	for _, names := range []*[]string{&n.SchemaUsage, &n.ForceRLS, &n.AnyColumnSelect, &n.AnyColumnUpdate} {
 		slices.Sort(*names)
 		*names = slices.Compact(*names)
 	}
