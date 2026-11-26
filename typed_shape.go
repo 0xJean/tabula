@@ -61,6 +61,8 @@ type StatementShape struct {
 	SchemaUsage     []string
 	AnyColumnSelect []string
 	AnyColumnUpdate []string
+	// Routines records the catalog contracts of called PostgreSQL functions.
+	Routines []RoutineRequirement
 	// UnscopedOnly marks a shape that omits a declared column-scope predicate.
 	// It can be bound only to an unscoped session.
 	UnscopedOnly bool
@@ -106,6 +108,7 @@ func cloneShape(s StatementShape) StatementShape {
 	s.SchemaUsage = slices.Clone(s.SchemaUsage)
 	s.AnyColumnSelect = slices.Clone(s.AnyColumnSelect)
 	s.AnyColumnUpdate = slices.Clone(s.AnyColumnUpdate)
+	s.Routines = slices.Clone(s.Routines)
 	return s
 }
 

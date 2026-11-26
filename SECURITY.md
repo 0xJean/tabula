@@ -16,6 +16,8 @@ Send the following details to the maintainers. [Report a vulnerability](https://
 
 ## Security Design Guarantees
 
+- Registered physical row locks require writable transactions. Advisory locks require explicit transactions. Direct rejects both lock effects and function calls declared writable. Read declarations require a reviewed function body and a matching catalog contract. The executing role, server transaction mode and session guards apply to the call. [Role verification](docs/AUTHORIZATION.md#check-a-role-at-startup)
+
 - **Identifiers never come from untrusted input**: table, column, and sort identifiers are
   validated at definition time (`Define` / `MustOrderSpec` / `View.DefineQuery`). Dynamic
   values always bind via numbered PostgreSQL placeholders (`$1..$n`). Composed query

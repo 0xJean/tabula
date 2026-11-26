@@ -72,7 +72,7 @@ func TestReadinessPostgres(t *testing.T) {
 		{Function: sig, Privilege: "EXECUTE"},
 	}}})
 	derived := ReadinessNeeds{Privileges: privs}
-	manual := ReadinessNeeds{SchemaUsage: []string{schema}, AnyColumnSelect: []string{items}, ForceRLS: []string{items}, SequenceUsage: []string{seq}}
+	manual := ReadinessNeeds{SchemaUsage: []string{schema}, AnyColumnSelect: []string{items}, AnyColumnUpdate: []string{items}, ForceRLS: []string{items}, SequenceUsage: []string{seq}}
 	found, err := CheckReadiness(ctx, db, role, derived, manual)
 	require.NoError(t, err)
 	require.Empty(t, found)
@@ -111,12 +111,13 @@ func TestReadinessPostgres(t *testing.T) {
 		{"TABLE", absent, "", "ENABLE RLS"},
 		{"TABLE", absent, "", "FORCE RLS"},
 		{"TABLE", absent, "", "SELECT ANY COLUMN"},
+		{"TABLE", absent, "", "UPDATE ANY COLUMN"},
 	}, check(role, ReadinessNeeds{
 		Privileges: PrivilegeNeeds{
 			Columns:     map[string]map[string]map[string]bool{items: {"SELECT": {"extra": true}, "UPDATE": {"missing": true}}},
 			TableDelete: map[string]bool{absent: true}, Sequences: [][2]string{{items, "extra"}},
 			Functions: []string{fn + "(text)", schema + ".unknown()", fn + "(" + schema + ".missing_type)"},
-		}, SchemaUsage: []string{schema + "_missing"}, AnyColumnSelect: []string{absent},
+		}, SchemaUsage: []string{schema + "_missing"}, AnyColumnSelect: []string{absent}, AnyColumnUpdate: []string{absent},
 		ForceRLS: []string{absent}, SequenceUsage: []string{absent},
 	}))
 	cols := map[string]bool{}
@@ -126,6 +127,23 @@ func TestReadinessPostgres(t *testing.T) {
 	many := ReadinessNeeds{Privileges: PrivilegeNeeds{Columns: map[string]map[string]map[string]bool{items: {"SELECT": cols}}}}
 	require.Len(t, check(role, many, many), len(cols))
 	require.Equal(t, []MissingRequirement{{"TABLE", items, "", "SELECT ANY COLUMN"}}, check(auditor, ReadinessNeeds{AnyColumnSelect: []string{items}, ForceRLS: []string{items}}))
+	require.Equal(t, []MissingRequirement{{"TABLE", items, "", "UPDATE ANY COLUMN"}}, check(auditor, ReadinessNeeds{AnyColumnUpdate: []string{items}}))
+	contract := tabula.RoutineRequirement{Signature: sig, ResultType: "pg_catalog.int4"}
+	require.Empty(t, check(role, ReadinessNeeds{Routines: []tabula.RoutineRequirement{contract}}))
+	for _, change := range []func(*tabula.RoutineRequirement){
+		func(r *tabula.RoutineRequirement) { r.ResultType = "pg_catalog.int8" },
+		func(r *tabula.RoutineRequirement) { r.ReturnsSet = true },
+		func(r *tabula.RoutineRequirement) { r.ReadOnly = true },
+		func(r *tabula.RoutineRequirement) { r.SecurityDefiner = true },
+	} {
+		drift := contract
+		change(&drift)
+		missing := check(role, ReadinessNeeds{Routines: []tabula.RoutineRequirement{drift, drift}})
+		require.Len(t, missing, 1)
+		require.Equal(t, "FUNCTION", missing[0].Kind)
+		require.Equal(t, sig, missing[0].Object)
+		require.Contains(t, missing[0].Privilege, drift.ResultType)
+	}
 	require.NoError(t, tx.Rollback())
 	for _, clause := range []string{"NO FORCE ROW LEVEL SECURITY", "DISABLE ROW LEVEL SECURITY"} {
 		mustExec("ALTER TABLE " + items + " " + clause)

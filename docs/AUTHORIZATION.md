@@ -27,6 +27,10 @@ if len(missing) > 0 {
 
 One read-only query checks effective grants for the named role, including inherited and PUBLIC grants. It reads PostgreSQL catalogs without assuming that role or executing the named functions. Use qualified relation names and function signatures such as `public.find_item(integer, public.item_kind[])`. Supply schema and column names as they appear in the catalog. Use `Privileges.Columns` for named column grants. `AnyColumnSelect` requires access to at least one column. `ForceRLS` checks the ENABLE and FORCE flags independently of SELECT access. Owned-sequence requirements come from `Privileges.Sequences`.
 
+A locking read needs `SELECT` on the columns it references and `UPDATE` on any column of each locked table. Pass `StatementShape.AnyColumnUpdate` to `ReadinessNeeds.AnyColumnUpdate`. A missing grant yields `UPDATE ANY COLUMN`. PostgreSQL also filters lockable rows through both the SELECT and UPDATE row-security policies. [Lock privileges](https://www.postgresql.org/docs/17/sql-select.html) · [Policies by command](https://www.postgresql.org/docs/17/sql-createpolicy.html)
+
+Pass the shape's `Routines` to `ReadinessNeeds.Routines`. The check resolves schema, function name and ordered input types in the catalog and checks the result type, scalar or set cardinality, invoker or definer mode, and a read declaration's STABLE or IMMUTABLE volatility. Include the shape's `SchemaUsage` and `Privileges` to verify schema access and EXECUTE on the exact overload. Review function bodies and declare any caller-side table dependencies in the application's role workload. [Function catalog](https://www.postgresql.org/docs/17/catalog-pg-proc.html)
+
 An absent role returns one role finding. Absent objects and missing grants appear in the sorted results. A canceled query or database error fails the check. The application owns its startup deadline, role selection and response to findings. RLS policy behavior and excess grants have separate audits.
 
 ## Registered execution

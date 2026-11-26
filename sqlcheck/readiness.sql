@@ -3,7 +3,7 @@ WITH target AS (
 ), requested AS (
     SELECT DISTINCT * FROM pg_catalog.jsonb_to_recordset($2::jsonb) AS need(
         "Kind" text, "Object" text, "Column" text, "Privilege" text,
-        "Schema" text, "Name" text, "Args" jsonb
+        "Schema" text, "Name" text, "Args" jsonb, "Routine" jsonb
     )
 ), missing AS (
     SELECT 'ROLE' AS kind, $1::text AS object, '' AS col, 'EXISTS' AS privilege
@@ -27,7 +27,16 @@ WITH target AS (
                   LEFT JOIN pg_catalog.pg_namespace ns ON ns.nspname::text = arg->>'Schema'
                   LEFT JOIN pg_catalog.pg_type typ ON typ.typnamespace = ns.oid AND typ.typname::text = arg->>'Name'
                   ORDER BY pos
-              ) AND pg_catalog.has_function_privilege(r.oid, p.oid, 'EXECUTE')
+              ) AND CASE WHEN q."Privilege" = 'EXECUTE' THEN pg_catalog.has_function_privilege(r.oid, p.oid, 'EXECUTE')
+                    ELSE p.prokind = 'f' AND p.provariadic = 0
+                      AND p.proretset = (q."Routine"->>'ReturnsSet')::boolean
+                      AND p.prosecdef = (q."Routine"->>'SecurityDefiner')::boolean
+                      AND (NOT (q."Routine"->>'ReadOnly')::boolean OR p.provolatile IN ('i','s'))
+                      AND p.prorettype = (
+                        SELECT t.oid FROM pg_catalog.pg_type t JOIN pg_catalog.pg_namespace ns ON ns.oid = t.typnamespace
+                        WHERE ns.nspname::text = q."Routine"->>'ResultSchema' AND t.typname::text = q."Routine"->>'ResultName'
+                      )
+                END
         )
         WHEN q."Kind" = 'SEQUENCE' AND q."Column" = '' THEN
             CASE WHEN c.relkind = 'S' THEN pg_catalog.has_sequence_privilege(r.oid, c.oid, 'USAGE') END
@@ -44,6 +53,7 @@ WITH target AS (
             WHEN q."Kind" = 'COLUMN' THEN a.attnum IS NOT NULL AND pg_catalog.has_column_privilege(r.oid, c.oid, a.attnum, q."Privilege")
             WHEN q."Privilege" = 'DELETE' THEN pg_catalog.has_table_privilege(r.oid, c.oid, 'DELETE')
             WHEN q."Privilege" = 'SELECT ANY COLUMN' THEN pg_catalog.has_any_column_privilege(r.oid, c.oid, 'SELECT')
+            WHEN q."Privilege" = 'UPDATE ANY COLUMN' THEN pg_catalog.has_any_column_privilege(r.oid, c.oid, 'UPDATE')
         END
     END) IS NOT TRUE
 )

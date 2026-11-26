@@ -5,6 +5,9 @@ v1.0 a minor version may contain breaking changes.
 
 ## v0.4.0 — unreleased
 
+- Register a locking read with a target occurrence, lock strength and wait mode. Transaction advisory locks support shared and exclusive acquisition in both PostgreSQL key spaces.
+- Declare scalar and set-returning functions by exact input and result types. Registered calls preserve the declared read or write effect. Role readiness can verify the function signature, catalog properties and effective privileges, including `UPDATE` on any column for a row lock. [Examples](docs/COOKBOOK.md#registered-locks-and-functions)
+
 - Typed relation occurrences, fields, input slots and projections carry their PostgreSQL types through compilation. Each registered shape records its ordered parameters, output columns, effects and grants in `Definition.StatementShapes`.
 - The adapter interface accepts a statement issued by its registry for one session and operation. A snapshot can be inspected independently of execution. [Typed query design](docs/DESIGN-v0.4.md)
 

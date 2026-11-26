@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/0xJean/tabula"
 )
 
 // ReadinessNeeds describes minimum capabilities for one role. Privileges accepts
@@ -17,9 +19,11 @@ import (
 type ReadinessNeeds struct {
 	Privileges      PrivilegeNeeds
 	SchemaUsage     []string
-	AnyColumnSelect []string // SELECT on at least one column of each relation
-	ForceRLS        []string // both ENABLE and FORCE ROW LEVEL SECURITY
-	SequenceUsage   []string // named sequences in addition to column-owned sequences
+	AnyColumnSelect []string                    // SELECT on at least one column of each relation
+	AnyColumnUpdate []string                    // UPDATE on at least one column of each locked relation
+	Routines        []tabula.RoutineRequirement // exact function catalog contracts
+	ForceRLS        []string                    // both ENABLE and FORCE ROW LEVEL SECURITY
+	SequenceUsage   []string                    // named sequences in addition to column-owned sequences
 }
 
 // MissingRequirement identifies one unmet capability. Column is set for a named
@@ -46,6 +50,12 @@ type readinessItem struct {
 	MissingRequirement
 	Schema, Name string
 	Args         []readinessType
+	Routine      *readinessRoutine
+}
+
+type readinessRoutine struct {
+	ResultSchema, ResultName              string
+	ReturnsSet, ReadOnly, SecurityDefiner bool
 }
 
 func checkReadiness(ctx context.Context, db queryer, role string, groups []ReadinessNeeds) ([]MissingRequirement, error) {
@@ -123,6 +133,7 @@ func readinessItems(n ReadinessNeeds) ([]readinessItem, error) {
 		{n.Privileges.Functions, "FUNCTION", "EXECUTE"},
 		{n.SchemaUsage, "SCHEMA", "USAGE"},
 		{n.AnyColumnSelect, "TABLE", "SELECT ANY COLUMN"},
+		{n.AnyColumnUpdate, "TABLE", "UPDATE ANY COLUMN"},
 		{n.ForceRLS, "TABLE", "ENABLE RLS"},
 		{n.ForceRLS, "TABLE", "FORCE RLS"},
 		{n.SequenceUsage, "SEQUENCE", "USAGE"},
@@ -133,5 +144,38 @@ func readinessItems(n ReadinessNeeds) ([]readinessItem, error) {
 			}
 		}
 	}
+	for _, routine := range n.Routines {
+		item, err := routineItem(routine)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
 	return out, nil
+}
+
+func routineItem(r tabula.RoutineRequirement) (readinessItem, error) {
+	result, err := resolveReadinessItem(MissingRequirement{Kind: "TYPE", Object: r.ResultType})
+	if err != nil {
+		return readinessItem{}, err
+	}
+	returns := "RETURNS "
+	if r.ReturnsSet {
+		returns += "SETOF "
+	}
+	contract := returns + r.ResultType
+	if r.ReadOnly {
+		contract += " STABLE OR IMMUTABLE"
+	}
+	if r.SecurityDefiner {
+		contract += " SECURITY DEFINER"
+	} else {
+		contract += " SECURITY INVOKER"
+	}
+	item, err := resolveReadinessItem(MissingRequirement{Kind: "FUNCTION", Object: r.Signature, Privilege: contract})
+	if err != nil {
+		return readinessItem{}, err
+	}
+	item.Routine = &readinessRoutine{result.Schema, result.Name, r.ReturnsSet, r.ReadOnly, r.SecurityDefiner}
+	return item, nil
 }
