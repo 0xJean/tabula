@@ -22,6 +22,8 @@ Read the README at the Git tag or commit your application builds. The [migration
 
 The [v0.4 design](docs/DESIGN-v0.4.md) describes typed predicates, per-shape verification and the driver interface for registered queries.
 
+On the development branch, `DefineRows`, `DefineUpdateMany` and `DefineDeleteMany` register the exact statements a single-table plan can execute. The inventory expands those statements for each assigned PostgreSQL role. [Registered row plans](docs/COOKBOOK.md#registered-single-table-reads-and-writes)
+
 ## Install v0.3.11
 
 Run `go get github.com/0xJean/tabula@v0.3.11` in your application module with Go 1.26 or later. For the native driver and telemetry modules, use the matching version with `go get github.com/0xJean/tabula/pgxdriver@v0.3.11` and/or `go get github.com/0xJean/tabula/oteltabula@v0.3.11`.
