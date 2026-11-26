@@ -195,6 +195,9 @@ func (v *View[T, S]) TryDefineQuery(key string, spec QuerySpec, opts ...Statemen
 	if v == nil || v.reg == nil {
 		return nil, errors.New("tabula.DefineQuery: view is not defined")
 	}
+	if v.reg.deny&DenyLegacySQL != 0 {
+		return nil, ErrLegacySQL
+	}
 	fail := func(format string, args ...any) error {
 		return fmt.Errorf(v.prefix()+".DefineQuery "+v.name+"."+key+": "+format, args...)
 	}

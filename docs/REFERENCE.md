@@ -76,6 +76,10 @@ const (
 	ErrInsufficientPrivilege staticError = "insufficient PostgreSQL privilege"
 	ErrCanceled              staticError = "statement canceled"
 )
+const ErrLegacySQL legacySQLDenial = "tabula: this operation requires a registered statement"
+    ErrLegacySQL means the operation needs hand-written SQL or a shape that has
+    not been registered. It also matches ErrCapabilityDenied.
+
 const ErrStatementAuthority staticError = "tabula: statement authority or session does not match"
     ErrStatementAuthority reports an unregistered call, a different registry's
     credential, or a call delivered to a different session.
@@ -273,9 +277,16 @@ type AuthorizedSQL struct {
 	Effects    ShapeEffects
 	// SecretArgs uses the same bind order as Args.
 	SecretArgs []bool
+
+	// Has unexported fields.
 }
     AuthorizedSQL is the driver view of a successfully verified call. Its fields
     describe this call only. Editing the view cannot authorize SQL.
+
+func (q AuthorizedSQL) ObservationContext(ctx context.Context) context.Context
+    ObservationContext attaches the registered key and redaction policy before
+    a driver starts observing the call. It preserves the descriptor's logger,
+    scope label and treatment of empty results.
 
 type AuthorizedSession interface {
 	ExecAuthorized(context.Context, AuthorizedStatement) (int64, error)
@@ -292,6 +303,10 @@ type AuthorizedStatement struct {
     AuthorizedStatement is an opaque call bound to one registered shape, one
     session instance and its ordered parameters. Applications cannot construct
     it from SQL text, a snapshot or a verification credential.
+
+func (c AuthorizedStatement) Method() CallMethod
+    Method identifies the intended driver operation. The driver verifies it with
+    Open before using the SQL or arguments.
 
 type Binding struct {
 	// Has unexported fields.
@@ -330,6 +345,9 @@ const (
 	DenyUnscopedWrites
 	// DenyCopy rejects binary COPY operations checked via Rows.CheckCopy.
 	DenyCopy
+	// DenyLegacySQL requires registered descriptor calls and forbids SQL
+	// fragments, raw session methods and raw transaction access.
+	DenyLegacySQL
 )
 type Column[T any] struct {
 	Name string
@@ -719,6 +737,12 @@ func Text() PGType[string]
 
 func Timestamptz() PGType[time.Time]
     Timestamptz declares PostgreSQL timestamp with time zone.
+
+func Varchar(n int) PGType[string]
+    Varchar declares PostgreSQL character varying with a column length in
+    characters. Verification checks the column modifier. The parameter uses
+    unbounded varchar so comparisons preserve the entire value and PostgreSQL
+    applies its native length rules on assignment.
 
 type Pred = Expr[bool]
     Pred is a PostgreSQL boolean expression. A nullable predicate follows SQL
@@ -1224,6 +1248,10 @@ type SQLAuthority struct {
     SQLAuthority verifies registered statements for a driver on behalf of one
     registry. It cannot sign SQL or change which statements that registry owns.
 
+func (a SQLAuthority) DeniesLegacySQL() bool
+    DeniesLegacySQL reports whether this credential requires registered SQL on
+    its runner or Direct pool. A zero credential leaves ordinary SQL available.
+
 func (a SQLAuthority) IsZero() bool
     IsZero reports whether this is the unset credential.
 
@@ -1324,7 +1352,12 @@ type SessionProof struct {
 type ShapeAccess struct{ Relation, Command string }
     ShapeAccess identifies one physical relation and command for policy checks.
 
-type ShapeColumn struct{ Relation, Name, Type string }
+type ShapeColumn struct {
+	Relation, Name, Type string
+	// TypeMod is the expected pg_attribute.atttypmod when the declaration
+	// specifies a modifier. Nil requests verification of the type OID alone.
+	TypeMod *int32 `json:",omitempty"`
+}
     ShapeColumn records the declared PostgreSQL type of a referenced physical
     column for catalog verification. Relation is its quoted, qualified table.
 
@@ -1808,8 +1841,11 @@ func SetLocalRole(ctx context.Context, tx pgx.Tx, role string) error
 TYPES
 
 type DirectConfig struct {
-	SessionKey tabula.SessionKey
-	Observer   *tabula.Observer
+	// SQLAuthority accepts calls issued by one registry. A strict credential
+	// also rejects direct SQL text on sessions of this pool.
+	SQLAuthority tabula.SQLAuthority
+	SessionKey   tabula.SessionKey
+	Observer     *tabula.Observer
 }
     DirectConfig configures A4 session signing and B1/B3 observability on a
     read-only DirectPool created by DirectWithConfig.
@@ -1854,8 +1890,14 @@ type RawSession[S any] struct {
 func (s *RawSession[S]) Each(ctx context.Context, query string, args []any, decode func(func(...any) error) error) error
     Each streams all rows of query through decode.
 
+func (s *RawSession[S]) EachAuthorized(ctx context.Context, call tabula.AuthorizedStatement, visit func(func(...any) error) error) error
+    EachAuthorized verifies a registered streaming call for this instance.
+
 func (s *RawSession[S]) Exec(ctx context.Context, query string, args ...any) (int64, error)
     Exec executes query and returns the affected row count.
+
+func (s *RawSession[S]) ExecAuthorized(ctx context.Context, call tabula.AuthorizedStatement) (int64, error)
+    ExecAuthorized verifies a registered mutation for this raw-session instance.
 
 func (s *RawSession[S]) ReadOnly() bool
     ReadOnly reports whether this handle permits only reads.
@@ -1864,11 +1906,17 @@ func (s *RawSession[S]) Returning(ctx context.Context, query string, args []any,
     Returning executes a write with RETURNING and maps pgx.ErrNoRows to
     sql.ErrNoRows.
 
+func (s *RawSession[S]) SQLAuthority() tabula.SQLAuthority
+    SQLAuthority returns the credential of the underlying session.
+
 func (s *RawSession[S]) Savepoint(ctx context.Context, fn func(context.Context, *Session[S]) error) error
     Savepoint runs fn inside a nested pgx transaction (PostgreSQL SAVEPOINT).
 
 func (s *RawSession[S]) Scan(ctx context.Context, query string, args []any, dest ...any) error
     Scan executes a single-row query and maps pgx.ErrNoRows to sql.ErrNoRows.
+
+func (s *RawSession[S]) ScanAuthorized(ctx context.Context, call tabula.AuthorizedStatement, dest ...any) error
+    ScanAuthorized verifies a registered single-row call for this instance.
 
 func (s *RawSession[S]) Scope() S
     Scope returns the session's bound scope value.
@@ -1966,11 +2014,14 @@ type RunnerOptions struct {
 	// An empty value keeps unscoped access restricted to READ ONLY transactions.
 	UnscopedReadRole string
 	Timeouts         Timeouts
-	SessionKey       tabula.SessionKey
-	ExposeTx         bool
-	Tracer           tabula.Tracer
-	Metrics          tabula.Metrics
-	Log              tabula.LogConfig
+	// SQLAuthority verifies descriptor calls from one registry. Its DenyLegacySQL
+	// policy also disables raw session methods and raw transaction access.
+	SQLAuthority tabula.SQLAuthority
+	SessionKey   tabula.SessionKey
+	ExposeTx     bool
+	Tracer       tabula.Tracer
+	Metrics      tabula.Metrics
+	Log          tabula.LogConfig
 	// RawErrorDiagnostics passes original errors to the statement tracer. Driver
 	// messages can contain bound values. The default traces the class and SQLSTATE.
 	RawErrorDiagnostics bool
@@ -2009,19 +2060,29 @@ func NewSession[S any](tx pgx.Tx, scope S, policy ScopePolicy[S]) *Session[S]
     NewSession wraps an existing pgx.Tx with scope and policy as an unsealed
     migration handle. Keyed registries require a Runner or keyed DirectPool.
 
-func (s *Session[S]) Each(ctx context.Context, query string, args []any, decode func(func(...any) error) error) error
-    Each streams rows through decode. The runner closes an unfinished cursor at
-    transaction or savepoint exit. A resumed consumer receives ErrSessionClosed.
+func (s *Session[S]) Each(ctx context.Context, query string, args []any, visit func(func(...any) error) error) error
+    Each streams rows on a runner that allows SQL text. The runner closes an
+    unfinished cursor at transaction or savepoint exit.
+
+func (s *Session[S]) EachAuthorized(ctx context.Context, call tabula.AuthorizedStatement, visit func(func(...any) error) error) error
+    EachAuthorized streams a registered read or multirow write. A returning
+    write uses the write policy and holds the cursor until iteration ends.
 
 func (s *Session[S]) Exec(ctx context.Context, query string, args ...any) (int64, error)
-    Exec executes query and returns the affected row count.
+    Exec executes SQL text on a runner that allows it.
+
+func (s *Session[S]) ExecAuthorized(ctx context.Context, call tabula.AuthorizedStatement) (int64, error)
+    ExecAuthorized executes a registered mutation and returns its affected-row
+    count.
 
 func (s *Session[S]) ReadOnly() bool
     ReadOnly reports whether this handle permits only reads.
 
 func (s *Session[S]) Returning(ctx context.Context, query string, args []any, dest ...any) error
-    Returning executes a write with RETURNING and maps pgx.ErrNoRows to
-    sql.ErrNoRows.
+    Returning reads one row from a write on a runner that allows SQL text.
+
+func (s *Session[S]) SQLAuthority() tabula.SQLAuthority
+    SQLAuthority returns the registry credential configured on the runner.
 
 func (s *Session[S]) Savepoint(ctx context.Context, fn func(context.Context, *Session[S]) error) (err error)
     Savepoint runs fn inside a nested pgx transaction (PostgreSQL SAVEPOINT).
@@ -2029,7 +2090,11 @@ func (s *Session[S]) Savepoint(ctx context.Context, fn func(context.Context, *Se
     closed when Savepoint returns.
 
 func (s *Session[S]) Scan(ctx context.Context, query string, args []any, dest ...any) error
-    Scan executes a single-row query and maps pgx.ErrNoRows to sql.ErrNoRows.
+    Scan reads a single row on a runner that allows SQL text.
+
+func (s *Session[S]) ScanAuthorized(ctx context.Context, call tabula.AuthorizedStatement, dest ...any) error
+    ScanAuthorized decodes one result of a registered read or write. A write
+    follows the runner's Returning policy.
 
 func (s *Session[S]) Scope() S
     Scope returns the session's bound scope value.
@@ -2798,6 +2863,11 @@ type DirectOption func(*directConfig)
 func DirectObserver(obs *tabula.Observer) DirectOption
     DirectObserver attaches a session-level Observer to a DirectPool.
 
+func DirectSQLAuthority(a tabula.SQLAuthority) DirectOption
+    DirectSQLAuthority binds the pool to registered calls issued by a registry.
+    A strict credential also rejects direct SQL text on every session of the
+    pool.
+
 func DirectSessionKey(key tabula.SessionKey) DirectOption
     DirectSessionKey binds a SessionKey to a DirectPool so every pointer
     returned by DirectPool.Session carries a valid SessionProof for A4 sealed
@@ -2847,8 +2917,14 @@ type RawSession[S any] struct {
 func (s *RawSession[S]) Each(ctx context.Context, query string, args []any, decode func(func(...any) error) error) error
     Each streams all rows of query through decode.
 
+func (s *RawSession[S]) EachAuthorized(ctx context.Context, call tabula.AuthorizedStatement, visit func(func(...any) error) error) error
+    EachAuthorized verifies a registered streaming call for this instance.
+
 func (s *RawSession[S]) Exec(ctx context.Context, query string, args ...any) (int64, error)
     Exec executes a statement and returns its affected row count.
+
+func (s *RawSession[S]) ExecAuthorized(ctx context.Context, call tabula.AuthorizedStatement) (int64, error)
+    ExecAuthorized verifies a registered mutation for this raw-session instance.
 
 func (s *RawSession[S]) ReadOnly() bool
     ReadOnly reports whether this handle permits only reads.
@@ -2857,12 +2933,18 @@ func (s *RawSession[S]) Returning(ctx context.Context, query string, args []any,
     Returning executes a write with RETURNING and scans the returned row into
     dest.
 
+func (s *RawSession[S]) SQLAuthority() tabula.SQLAuthority
+    SQLAuthority returns the credential of the underlying session.
+
 func (s *RawSession[S]) Savepoint(ctx context.Context, name string, fn func(context.Context) error) error
     Savepoint runs fn inside a PostgreSQL SAVEPOINT on the underlying
     transaction.
 
 func (s *RawSession[S]) Scan(ctx context.Context, query string, args []any, dest ...any) error
     Scan executes a single-row query and scans into dest.
+
+func (s *RawSession[S]) ScanAuthorized(ctx context.Context, call tabula.AuthorizedStatement, dest ...any) error
+    ScanAuthorized verifies a registered single-row call for this instance.
 
 func (s *RawSession[S]) Scope() S
     Scope returns the session's bound scope value.
@@ -2974,6 +3056,9 @@ type RunnerOptions struct {
 	// Timeouts bounds lock waits, statement duration, idle-in-transaction duration
 	// and whole-attempt Go context duration.
 	Timeouts Timeouts
+	// SQLAuthority verifies descriptor calls from one registry. Its DenyLegacySQL
+	// policy also disables raw session methods and raw transaction access.
+	SQLAuthority tabula.SQLAuthority
 	// SessionKey signs every Session created by this runner for A4 sealed
 	// registries.
 	SessionKey tabula.SessionKey
@@ -3036,19 +3121,29 @@ func NewSession[S any](tx *sql.Tx, scope S, policy ScopePolicy[S]) *Session[S]
     NewSession wraps an existing *sql.Tx with scope and policy as an unsealed
     migration handle. Keyed registries require a Runner or keyed DirectPool.
 
-func (s *Session[S]) Each(ctx context.Context, query string, args []any, decode func(func(...any) error) error) error
-    Each streams rows through decode. The runner closes an unfinished cursor at
-    transaction or savepoint exit. A resumed consumer receives ErrSessionClosed.
+func (s *Session[S]) Each(ctx context.Context, query string, args []any, visit func(func(...any) error) error) error
+    Each streams rows on a runner that allows SQL text. The runner closes an
+    unfinished cursor at transaction or savepoint exit.
+
+func (s *Session[S]) EachAuthorized(ctx context.Context, call tabula.AuthorizedStatement, visit func(func(...any) error) error) error
+    EachAuthorized streams a registered read or multirow write. A returning
+    write uses the write policy and holds the cursor until iteration ends.
 
 func (s *Session[S]) Exec(ctx context.Context, query string, args ...any) (int64, error)
-    Exec executes a statement and returns its affected row count.
+    Exec executes SQL text on a runner that allows it.
+
+func (s *Session[S]) ExecAuthorized(ctx context.Context, call tabula.AuthorizedStatement) (int64, error)
+    ExecAuthorized executes a registered mutation and returns its affected-row
+    count.
 
 func (s *Session[S]) ReadOnly() bool
     ReadOnly reports whether this handle permits only reads.
 
 func (s *Session[S]) Returning(ctx context.Context, query string, args []any, dest ...any) error
-    Returning executes a write with RETURNING and scans the returned row into
-    dest.
+    Returning reads one row from a write on a runner that allows SQL text.
+
+func (s *Session[S]) SQLAuthority() tabula.SQLAuthority
+    SQLAuthority returns the registry credential configured on the runner.
 
 func (s *Session[S]) Savepoint(ctx context.Context, name string, fn func(context.Context) error) (err error)
     Savepoint runs fn inside a PostgreSQL SAVEPOINT. On error or panic, changes
@@ -3056,7 +3151,11 @@ func (s *Session[S]) Savepoint(ctx context.Context, name string, fn func(context
     transaction usable; on success the savepoint is released.
 
 func (s *Session[S]) Scan(ctx context.Context, query string, args []any, dest ...any) error
-    Scan executes a single-row query and scans into dest.
+    Scan reads a single row on a runner that allows SQL text.
+
+func (s *Session[S]) ScanAuthorized(ctx context.Context, call tabula.AuthorizedStatement, dest ...any) error
+    ScanAuthorized decodes one result of a registered read or write. A write
+    follows the runner's Returning policy.
 
 func (s *Session[S]) Scope() S
     Scope returns the session's bound scope value.

@@ -72,11 +72,14 @@ type RunnerOptions struct {
 	// An empty value keeps unscoped access restricted to READ ONLY transactions.
 	UnscopedReadRole string
 	Timeouts         Timeouts
-	SessionKey       tabula.SessionKey
-	ExposeTx         bool
-	Tracer           tabula.Tracer
-	Metrics          tabula.Metrics
-	Log              tabula.LogConfig
+	// SQLAuthority verifies descriptor calls from one registry. Its DenyLegacySQL
+	// policy also disables raw session methods and raw transaction access.
+	SQLAuthority tabula.SQLAuthority
+	SessionKey   tabula.SessionKey
+	ExposeTx     bool
+	Tracer       tabula.Tracer
+	Metrics      tabula.Metrics
+	Log          tabula.LogConfig
 	// RawErrorDiagnostics passes original errors to the statement tracer. Driver
 	// messages can contain bound values. The default traces the class and SQLSTATE.
 	RawErrorDiagnostics bool

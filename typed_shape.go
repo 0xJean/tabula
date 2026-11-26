@@ -41,7 +41,12 @@ type ShapeAccess struct{ Relation, Command string }
 
 // ShapeColumn records the declared PostgreSQL type of a referenced physical
 // column for catalog verification. Relation is its quoted, qualified table.
-type ShapeColumn struct{ Relation, Name, Type string }
+type ShapeColumn struct {
+	Relation, Name, Type string
+	// TypeMod is the expected pg_attribute.atttypmod when the declaration
+	// specifies a modifier. Nil requests verification of the type OID alone.
+	TypeMod *int32 `json:",omitempty"`
+}
 
 // StatementShape describes the inputs, results, effects and minimum grants for
 // one SQL string in Definition.Statements under the same key.
@@ -65,6 +70,9 @@ type StatementShape struct {
 // statement effects, before a registry can issue an executable call.
 type compiledShape struct {
 	observationKey string
+	tableName      string
+	action         string
+	fixedMethod    CallMethod
 	sources        []*occurrence
 	authority      *statementIssuer
 	key            string
@@ -88,6 +96,12 @@ func cloneShape(s StatementShape) StatementShape {
 	}
 	s.Access = slices.Clone(s.Access)
 	s.PhysicalColumns = slices.Clone(s.PhysicalColumns)
+	for i, col := range s.PhysicalColumns {
+		if col.TypeMod != nil {
+			mod := *col.TypeMod
+			s.PhysicalColumns[i].TypeMod = &mod
+		}
+	}
 	s.ForceRLS = slices.Clone(s.ForceRLS)
 	s.SchemaUsage = slices.Clone(s.SchemaUsage)
 	s.AnyColumnSelect = slices.Clone(s.AnyColumnSelect)
@@ -185,6 +199,11 @@ func (d *descriptor[T, S]) registerShapes(plan string, shapes []*compiledShape) 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	entry := &d.entry.def
+	for _, owner := range entry.StatementQueries {
+		if owner == plan {
+			return fmt.Errorf("tabula: %s plan %q already registered", d.name, plan)
+		}
+	}
 	keys := make(map[string]bool)
 	types := make(map[physicalColumn]catalogType)
 	for _, s := range shapes {
@@ -200,12 +219,14 @@ func (d *descriptor[T, S]) registerShapes(plan string, shapes []*compiledShape) 
 		}
 		keys[s.key] = true
 		for col, kind := range s.columns {
-			local, batched := types[col]
-			prior, defined := r.typedColumns[col]
-			if (batched && !sameSQLType(local, kind)) || (defined && !sameSQLType(prior, kind)) {
-				return fmt.Errorf("tabula: conflicting PostgreSQL types for %s.%s", col.table.sql(), typedQuote(col.name))
+			if old, ok := r.typedColumns[col]; ok {
+				if err := col.record(types, old); err != nil {
+					return err
+				}
 			}
-			types[col] = kind
+			if err := col.record(types, kind); err != nil {
+				return err
+			}
 		}
 	}
 	if r.typedColumns == nil {
@@ -221,6 +242,7 @@ func (d *descriptor[T, S]) registerShapes(plan string, shapes []*compiledShape) 
 	for _, s := range shapes {
 		s.authority = r.statementIssuer
 		s.observationKey = d.name + "." + s.key
+		s.tableName, s.action = d.name, plan
 		entry.Statements[s.key] = s.sql
 		entry.StatementQueries[s.key] = plan
 		entry.StatementShapes[s.key] = cloneShape(s.shape)
@@ -251,21 +273,23 @@ func (c *typedCompiler) finishShape(key, query string, scopeType catalogType, me
 				return nil, fmt.Errorf("tabula: missing scope predicate for relation %q", src.alias)
 			}
 			meta.UnscopedOnly = !c.params.scoped
-			if c.params.scoped {
-				col := physicalColumn{src.table, src.scopeColumn}
-				if prior, ok := columnTypes[col]; ok && !sameSQLType(prior, scopeType) {
-					return nil, fmt.Errorf("tabula: conflicting scope column type for %s.%s", src.table.sql(), typedQuote(col.name))
-				}
-				columnTypes[col] = scopeType
-			}
 		}
+	}
+	for _, slot := range c.params.order {
+		schemas = append(schemas, slot.kind.schema)
+	}
+	if c.params.scoped {
+		if !sameSQLType(c.scopeType, scopeType) {
+			return nil, fmt.Errorf("tabula: scope slot type differs from its declaration")
+		}
+		schemas = append(schemas, scopeType.schema)
 	}
 	slices.Sort(schemas)
 	slices.Sort(forced)
 	meta.SchemaUsage, meta.ForceRLS = slices.Compact(schemas), slices.Compact(forced)
 	meta.PhysicalColumns = nil
 	for col, kind := range columnTypes {
-		meta.PhysicalColumns = append(meta.PhysicalColumns, ShapeColumn{col.table.sql(), col.name, kind.qualified()})
+		meta.PhysicalColumns = append(meta.PhysicalColumns, col.snapshot(kind))
 	}
 	slices.SortFunc(meta.PhysicalColumns, func(a, b ShapeColumn) int {
 		return cmp.Or(cmp.Compare(a.Relation, b.Relation), cmp.Compare(a.Name, b.Name))

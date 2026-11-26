@@ -22,9 +22,16 @@ type readQueries struct {
 // DirectOption customizes a read-only DirectPool created by Direct.
 type DirectOption func(*directConfig)
 
+// DirectSQLAuthority binds the pool to registered calls issued by a registry.
+// A strict credential also rejects direct SQL text on every session of the pool.
+func DirectSQLAuthority(a tabula.SQLAuthority) DirectOption {
+	return func(c *directConfig) { c.authority = a }
+}
+
 type directConfig struct {
-	key tabula.SessionKey
-	obs *tabula.Observer
+	authority tabula.SQLAuthority
+	key       tabula.SessionKey
+	obs       *tabula.Observer
 }
 
 // DirectSessionKey binds a SessionKey to a DirectPool so every pointer
@@ -101,6 +108,7 @@ func Direct[S any](driverName, postgresURL string, policy ScopePolicy[S], opts .
 			policy.IsUnscoped,
 			policy.ScopeLog,
 			cfg.key,
+			cfg.authority,
 			cfg.obs,
 			db.Close,
 		),

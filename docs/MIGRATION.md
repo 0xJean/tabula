@@ -6,6 +6,12 @@ Follow this guide when upgrading an application to v0.3. For the full surface af
 
 Name a physical table by schema and relation. Declare `TableSpec.RelationScope` for a table whose rows depend on database RLS or are shared globally. A table with a tagged scope column can use `ByScopeColumn()` directly. A plan can use several references to the same table by declaring separate occurrences. Use its fields and slots consistently in the plan and pass runtime values with `BindValue`. [Compilation and role verification](DESIGN-v0.4.md#compilation-binding-and-snapshots)
 
+Typed SQL now spells out each slot's catalog type, including a column-scoped parameter. Refresh stored SQL snapshots and rerun per-role PREPARE and EXPLAIN. A domain or enum retains its own type identity. Declare a bounded character column with `Varchar(n)` to verify the length in `pg_attribute.atttypmod` alongside its type OID. Contradictory declarations for a column fail during registration. PostgreSQL returns zero matches for an overlength equality parameter and applies its native length check on write, including SQLSTATE `22001`. Parameter casts always use the type without its length modifier. [PostgreSQL character types](https://www.postgresql.org/docs/17/datatype-character.html)
+
+### Enable registered SQL by role
+
+Create each strict registry with `Deny: tabula.DenyLegacySQL`. Pass `reg.SQLAuthority()` to its runner or Direct pool during startup. First migrate string predicates, raw statements and dynamically selected columns to registered plans. Regenerate the role's SQL snapshot after switching because the fixed count, list and grouping statements now include the actual scoped and unscoped live-row variants. The zero capability keeps existing registrations and executions available. Use keyed literals for extended option structs. [Registered execution](AUTHORIZATION.md#registered-execution)
+
 ## From v0.3.10 to v0.3.11
 
 Existing keyed `TableSpec` declarations continue to use `WriteDefault`, including the `ReadOnly` and `AllowDelete` flags. The signatures of `Define`, `TryDefine` and bound methods are unchanged. Convert positional `TableSpec` literals to keyed fields before upgrading because the struct gains two fields.

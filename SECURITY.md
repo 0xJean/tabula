@@ -10,6 +10,10 @@ Send the following details to the maintainers. [Report a vulnerability](https://
 - Minimal reproduction steps or a failing Go test.
 - Any suggested remediation if known.
 
+## Registered statements
+
+`DenyLegacySQL` rejects SQL text and raw transaction entry on a runner carrying the registry's credential. A statement must originate from a registered shape and match the driver method and receiving session. Public observation metadata and SQL snapshots grant no execution authority. Configure PostgreSQL privileges and row policies for the same role. [Registered execution](docs/AUTHORIZATION.md#registered-execution)
+
 ## Security Design Guarantees
 
 - **Identifiers never come from untrusted input**: table, column, and sort identifiers are

@@ -59,6 +59,7 @@ func (c *typedCompiler) project(owner *registration, projections []Projection) (
 		if projection.target != owner || projection.index != i || !projection.compatible || projection.part == nil {
 			return nil, nil, fmt.Errorf("tabula: incompatible projection for output %q at position %d", projection.field.Name, i+1)
 		}
+		c.hasSecret = c.hasSecret || owner.def.Columns[i].Secret
 		part, err := projection.part.render(c)
 		if err != nil {
 			return nil, nil, err

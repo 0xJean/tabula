@@ -9,7 +9,7 @@ import (
 // registry. It cannot sign SQL or change which statements that registry owns.
 type SQLAuthority struct{ issuer *statementIssuer }
 
-type statementIssuer struct{ _ byte }
+type statementIssuer struct{ strict bool }
 
 // SQLAuthority returns this registry's verification credential. Pass it to a
 // driver that executes authorized statements for this registry.
@@ -17,6 +17,10 @@ func (r *Registry[S]) SQLAuthority() SQLAuthority { return SQLAuthority{r.statem
 
 // IsZero reports whether this is the unset credential.
 func (a SQLAuthority) IsZero() bool { return a.issuer == nil }
+
+// DeniesLegacySQL reports whether this credential requires registered SQL on
+// its runner or Direct pool. A zero credential leaves ordinary SQL available.
+func (a SQLAuthority) DeniesLegacySQL() bool { return a.issuer != nil && a.issuer.strict }
 
 // ErrStatementAuthority reports an unregistered call, a different registry's
 // credential, or a call delivered to a different session.
@@ -39,6 +43,9 @@ const (
 )
 
 func (s *compiledShape) permitsMethod(method CallMethod) bool {
+	if s.fixedMethod != 0 {
+		return s.fixedMethod == method
+	}
 	write := s.shape.Effects&EffectWrite != 0
 	rows := len(s.shape.Result) != 0
 	switch method {
@@ -57,11 +64,17 @@ func (s *compiledShape) permitsMethod(method CallMethod) bool {
 // session instance and its ordered parameters. Applications cannot construct it
 // from SQL text, a snapshot or a verification credential.
 type AuthorizedStatement struct {
-	method CallMethod
-	shape  *compiledShape
-	owner  any
-	args   []any
+	method           CallMethod
+	shape            *compiledShape
+	owner            any
+	args             []any
+	secret           []bool
+	quiet, allSecret bool
 }
+
+// Method identifies the intended driver operation. The driver verifies it
+// with Open before using the SQL or arguments.
+func (c AuthorizedStatement) Method() CallMethod { return c.method }
 
 // AuthorizedSQL is the driver view of a successfully verified call. Its
 // fields describe this call only. Editing the view cannot authorize SQL.
@@ -70,7 +83,20 @@ type AuthorizedSQL struct {
 	Args       []any
 	Effects    ShapeEffects
 	// SecretArgs uses the same bind order as Args.
-	SecretArgs []bool
+	SecretArgs       []bool
+	table, action    string
+	quiet, allSecret bool
+}
+
+// ObservationContext attaches the registered key and redaction policy before
+// a driver starts observing the call. It preserves the descriptor's logger,
+// scope label and treatment of empty results.
+func (q AuthorizedSQL) ObservationContext(ctx context.Context) context.Context {
+	meta, _ := StatementMetaFrom(ctx)
+	meta.Key, meta.Table, meta.Action = q.Key, q.table, q.action
+	meta.Quiet, meta.AllSecret = q.quiet, q.allSecret || meta.AllSecret
+	meta.SecretArgs = q.SecretArgs
+	return WithStatementMeta(ctx, meta)
 }
 
 // Open validates a compiled call for the receiving session. Drivers pass their
@@ -80,11 +106,10 @@ func (a SQLAuthority) Open(owner any, method CallMethod, call AuthorizedStatemen
 		return AuthorizedSQL{}, ErrStatementAuthority
 	}
 	s := call.shape
-	secret := make([]bool, len(s.shape.Inputs))
-	for i, input := range s.shape.Inputs {
-		secret[i] = input.Secret
-	}
-	return AuthorizedSQL{Query: s.sql, Key: s.observationKey, Args: slices.Clone(call.args), Effects: s.shape.Effects, SecretArgs: secret}, nil
+	return AuthorizedSQL{
+		Query: s.sql, Key: s.observationKey, Args: slices.Clone(call.args), Effects: s.shape.Effects,
+		SecretArgs: slices.Clone(call.secret), table: s.tableName, action: s.action, quiet: call.quiet, allSecret: call.allSecret,
+	}, nil
 }
 
 // AuthorizedSession is the driver channel used for registered queries. Every
@@ -96,7 +121,7 @@ type AuthorizedSession interface {
 	EachAuthorized(context.Context, AuthorizedStatement, func(func(...any) error) error) error
 }
 
-// bindCall is the only constructor for driver calls. Validate the registry's
+// bindCall binds a typed shape to a driver call. Validate the registry's
 // session proof before consulting session scope or invoking the driver.
 func (r *Registry[S]) bindCall(shape *compiledShape, s Session[S], method CallMethod, values []Binding) (AuthorizedStatement, error) {
 	if err := r.checkSession(s); err != nil {
@@ -131,5 +156,9 @@ func (r *Registry[S]) bindCall(shape *compiledShape, s Session[S], method CallMe
 	if err != nil {
 		return AuthorizedStatement{}, err
 	}
-	return AuthorizedStatement{method, shape, s, args}, nil
+	secret := make([]bool, len(shape.shape.Inputs))
+	for i, input := range shape.shape.Inputs {
+		secret[i] = input.Secret
+	}
+	return AuthorizedStatement{method: method, shape: shape, owner: s, args: args, secret: secret}, nil
 }
