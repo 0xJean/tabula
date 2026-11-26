@@ -230,7 +230,7 @@ Each cell gets a new rollback-only transaction with explicit identity and transa
 
 `postgresfixture.Installation` describes a revision, base bytes and ordered named migrations. Include every input that affects installation. `Through("002_notes.sql")` selects the inclusive prefix. `TemplateName` derives a stable name from the length-framed inputs. The fixture uses an advisory lock on a shared maintenance database, installs into staging, then publishes a complete template. `Fixture.Clone` returns a fresh `Database` with `Name()` and `Drop(ctx)` for test cleanup.
 
-The host supplies a `Backend` that clones and drops databases on the supplied maintenance connection and runs its installer against the staging database. The installer must close its staging connections before returning. Give concurrent workers the same maintenance database on a disposable cluster. Reserve the fixture's `tabula_tpl_<digest>` and `tabula_stg_<digest>` names. Each `Clone` records the server time on its template and holds a shared lock through the copy. [Fixture integration test](../postgresfixture/fixture_integration_test.go)
+The host supplies a `Backend` that clones and drops databases on the supplied maintenance connection and runs its installer against the staging database. The installer must close its staging connections before returning. Give concurrent workers the same maintenance database on a disposable cluster. Reserve the fixture's `tabula_tpl_<digest>` and `tabula_stg_<digest>` names. Preparing or cloning a template records its last use with the server clock. A clone holds the shared template lock through the physical copy. [Fixture integration test](../postgresfixture/fixture_integration_test.go)
 
 Call `Fixture.Prune(ctx, maxIdle, keep...)` to remove idle templates and abandoned stages. It skips active copies and the templates of the supplied installations. A missing or invalid last-use mark preserves the template. The host's `Backend.Drop` handles template flags and related resources. A later `Clone` rebuilds a pruned template. [Fixture migration notes](MIGRATION.md#from-v033-to-v034)
 
@@ -242,9 +242,12 @@ Set `"AuditSecurityCalls": true` in `inventory.json` (or `InventoryConfig.AuditS
 
 ## Process login roles
 
-Give each process its own login when independent test suites share a disposable cluster. Acquire the login after its membership roles exist, then pass its name to the test database's CONNECT grant and its credentials directly to the client configuration.
+Give each process its own login when independent test suites share a disposable cluster. If installation migrations create the member roles, call `Prepare` first. Concurrent workers can prepare the same installation. The first publishes the template and the others refresh its last-use mark. Each process can then acquire its login and use it across test clones.
 
 ```go
+if err := fixture.Prepare(ctx, plan); err != nil {
+    return err
+}
 login, err := fixture.AcquireLoginRole(ctx, postgresfixture.LoginRoleOptions{
     MemberOf: []string{"fixture_reader", "fixture_writer"},
     Label:    "suite_2",

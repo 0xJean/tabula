@@ -11,8 +11,7 @@ import (
 const (
 	templatePrefix = "tabula_tpl_"
 	stagePrefix    = "tabula_stg_"
-	// usedMark prefixes the database comment recording the last Clone, in
-	// UTC from the server clock.
+	// usedMark prefixes the template's last-use time in UTC from the server.
 	usedMark = "tabula fixture template; last used "
 )
 
@@ -27,7 +26,7 @@ func databaseExists(ctx context.Context, conn *sql.Conn, name string) (bool, err
 	return exists, err
 }
 
-// markUsed records the server time of the latest Clone on the template.
+// markUsed records the server time when a template is prepared for use.
 func markUsed(ctx context.Context, conn *sql.Conn, template string) error {
 	var stmt string
 	if err := conn.QueryRowContext(ctx, `SELECT pg_catalog.format('COMMENT ON DATABASE %I IS %L', $1::text,
@@ -59,10 +58,10 @@ func (c pruneCandidate) eligible(maxIdle time.Duration) bool {
 	return err == nil && lastUsed.Before(c.now.Add(-maxIdle))
 }
 
-// Prune drops cached templates whose last Clone is older than maxIdle and
+// Prune drops cached templates whose last use is older than maxIdle and
 // staging databases abandoned by interrupted builds, except the templates of
-// keep. Each template or stage is dropped through Backend.Drop while holding the same
-// advisory lock that Clone holds through the physical copy. Templates with
+// keep. Prepare and both clone methods refresh the last-use mark. Prune takes
+// the template lock exclusively before calling Backend.Drop. Templates with
 // missing or invalid last-use marks are kept. Prune returns the names it
 // dropped, including partial results if another drop failed. It also reaps
 // process logins and leased clones observed idle for maxIdle. Its result

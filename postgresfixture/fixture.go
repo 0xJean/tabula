@@ -175,6 +175,14 @@ func releaseLock(ctx context.Context, conn *sql.Conn, query, key string) error {
 	return nil
 }
 
+// Prepare installs and publishes the template for p, or refreshes its last-use
+// mark if it already exists. It requires no login lease and creates no test
+// clone. Call Prepare before acquiring a login whose member roles are created
+// by the installation.
+func (f Fixture) Prepare(ctx context.Context, p Installation) error {
+	return f.withPreparedTemplate(ctx, p, nil, nil)
+}
+
 // Clone installs a template once per digest and clones it for one test. A
 // shared advisory lock protects the template through the physical copy,
 // allowing concurrent copies. Publication is serialized on the staging name.
@@ -183,40 +191,54 @@ func (f Fixture) Clone(ctx context.Context, p Installation) (Database, error) {
 }
 
 func (f Fixture) clone(ctx context.Context, p Installation, login *LoginRole) (Database, error) {
+	var db Database
+	err := f.withPreparedTemplate(ctx, p, login, func(conn *sql.Conn, template string) error {
+		name, err := freshName(clonePrefix)
+		if err != nil {
+			return err
+		}
+		if err := f.Backend.Clone(ctx, conn, template, name); err != nil {
+			return err
+		}
+		db = Database{name: name, fixture: f}
+		return nil
+	})
+	return db, err
+}
+
+// Hold the shared template lock through preparation and any subsequent copy
+// so Prune cannot remove the source between publication and the copy.
+func (f Fixture) withPreparedTemplate(ctx context.Context, p Installation, login *LoginRole, use func(*sql.Conn, string) error) error {
 	if f.Admin == nil || f.Backend == nil {
-		return Database{}, errors.New("fixture requires Admin and Backend")
+		return errors.New("fixture requires Admin and Backend")
 	}
 	template, err := p.TemplateName()
 	if err != nil {
-		return Database{}, err
+		return err
 	}
 	conn, err := f.Admin.Conn(ctx)
 	if err != nil {
-		return Database{}, err
+		return err
 	}
 	defer func() { _ = conn.Close() }()
 	if login != nil {
 		if err := login.checkCloneLease(ctx, conn); err != nil {
-			return Database{}, err
+			return err
 		}
 	}
 	if err := acquireLock(ctx, conn, lockShared, template); err != nil {
-		return Database{}, err
+		return err
 	}
 	// If unlocking fails, releaseLock discards the connection. A successfully
 	// created database still belongs to the caller and can be dropped normally.
 	defer func() { _ = releaseLock(ctx, conn, unlockShared, template) }()
 	if err := f.prepare(ctx, conn, template, p); err != nil {
-		return Database{}, err
+		return err
 	}
-	name, err := freshName(clonePrefix)
-	if err != nil {
-		return Database{}, err
+	if use != nil {
+		return use(conn, template)
 	}
-	if err := f.Backend.Clone(ctx, conn, template, name); err != nil {
-		return Database{}, err
-	}
-	return Database{name: name, fixture: f}, nil
+	return nil
 }
 
 func (f Fixture) prepare(ctx context.Context, conn *sql.Conn, template string, p Installation) (err error) {

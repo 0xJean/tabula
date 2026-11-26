@@ -3,6 +3,10 @@
 All notable changes are listed here. The project follows semantic versioning; before
 v1.0 a minor version may contain breaking changes.
 
+## v0.3.10 — 2026-11-26
+
+- `postgresfixture.Fixture.Prepare(ctx, plan)` installs the cached template once or refreshes its last-use mark. It requires no login lease and creates no test clone. When migrations create member roles, call `Prepare`, acquire the process login with those roles in `LoginRoleOptions.MemberOf`, then call `CloneWithLease`. [Cold-start example](docs/AUTHORIZATION.md#process-login-roles)
+
 ## v0.3.9 — 2026-11-26
 
 - `postgresfixture.LoginRoleOptions.Label` adds an optional readable suffix to each independently generated process login. Existing unlabeled roles retain their lease and cleanup behavior.
