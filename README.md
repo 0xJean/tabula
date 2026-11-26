@@ -12,13 +12,13 @@
 Declarative descriptors, explicit SQL, verified against a real PostgreSQL.
 
 Tabula describes PostgreSQL tables and result rows with Go struct tags, derives the
-plain single-table statements from them, decodes the rows of hand-written SQL, and
-checks every registered statement against a real database. It is not an ORM: it never
+plain single-table statements from them and decodes the rows of hand-written SQL.
+Typed plans register each permitted statement for verification against PostgreSQL. It is not an ORM: it never
 builds joins, never generates DDL, and never runs hidden callbacks.
 
-**Integrating v0.3?** Start with the [application integration guide](docs/INTEGRATION.md). It maps each task to its package or command. The [complete Go API and CLI reference](docs/REFERENCE.md) is generated from this checkout.
+The integration guide maps each task to its package or command. The API and CLI reference is generated from this checkout. [Integration guide](docs/INTEGRATION.md) · [Go API and CLI reference](docs/REFERENCE.md)
 
-Read the README at the Git tag or commit your application builds. The [migration guide](docs/MIGRATION.md) covers upgrading to v0.3. The [changelog](CHANGELOG.md) records release status.
+Read the README at the Git tag or commit your application builds. The [migration guide](docs/MIGRATION.md) covers upgrading to v0.4 and earlier releases. The [changelog](CHANGELOG.md) records release status.
 
 A registry can restrict selected runners and Direct pools to the SQL shapes it issued. Pass its `SQLAuthority` to each role that needs this policy. [Registered execution](docs/AUTHORIZATION.md#registered-execution)
 
@@ -26,7 +26,7 @@ The [v0.4 design](docs/DESIGN-v0.4.md) describes typed predicates, per-shape ver
 
 On the development branch, `DefineRows`, `DefineUpdateMany` and `DefineDeleteMany` register the exact statements a single-table plan can execute. The inventory expands those statements for each assigned PostgreSQL role. [Registered row plans](docs/COOKBOOK.md#registered-single-table-reads-and-writes)
 
-The development branch registers physical row locks, transaction advisory locks and calls to declared PostgreSQL functions. Each statement identifies its result, session requirements and minimum grants. [Lock and routine examples](docs/COOKBOOK.md#registered-locks-and-functions)
+Set `RowsSpec.Lock` on a filtered or ordered page, or enable `WithExists` on an unlocked plan for a boolean result. Registered transaction advisory locks and PostgreSQL functions also use `plan.Bind(session)`. Each statement identifies its result, session requirements and minimum grants. [Lock and routine examples](docs/COOKBOOK.md#registered-locks-and-functions)
 
 ## Install v0.3.11
 

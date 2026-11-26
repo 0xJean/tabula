@@ -74,7 +74,7 @@ func (b *rowExecution[T, S]) run(ctx context.Context, action string, call Author
 // BoundRowsPlan executes registered statements on one authorized session.
 type BoundRowsPlan[T, S any] struct {
 	rowExecution[T, S]
-	page rowPagePlan
+	plan *RowsPlan[T, S]
 }
 
 // Bind attaches this read plan to a session from the same registry.
@@ -84,17 +84,35 @@ func (p *RowsPlan[T, S]) Bind(s Session[S]) *BoundRowsPlan[T, S] {
 		bound.bindErr = ErrStatementAuthority
 		return &bound
 	}
-	return &BoundRowsPlan[T, S]{bindRowExecution(&p.view.descriptor, p.family, s), p.page}
+	return &BoundRowsPlan[T, S]{bindRowExecution(&p.view.descriptor, p.family, s), p}
+}
+
+func (b *BoundRowsPlan[T, S]) checkRead() error {
+	if b == nil || b.plan == nil {
+		return ErrStatementAuthority
+	}
+	return b.bindErr
+}
+
+func (b *BoundRowsPlan[T, S]) checkSummary() error {
+	if err := b.checkRead(); err != nil {
+		return err
+	}
+	if b.plan.lock.declared {
+		return ErrOperationDenied
+	}
+	return nil
 }
 
 func (b *BoundRowsPlan[T, S]) dataCall(choice RowChoice, bindings []Binding) (AuthorizedStatement, error) {
-	if b.bindErr != nil {
-		return AuthorizedStatement{}, b.bindErr
+	if err := b.checkRead(); err != nil {
+		return AuthorizedStatement{}, err
 	}
-	if (choice.Order == "") != (len(b.page.orders) == 0) || choice.Order != "" && b.page.orders[choice.Order] == nil {
+	page := &b.plan.page
+	if (choice.Order == "") != (len(page.orders) == 0) || choice.Order != "" && page.orders[choice.Order] == nil {
 		return AuthorizedStatement{}, fmt.Errorf("tabula: unregistered row order %q", choice.Order)
 	}
-	values, err := b.page.addPage(choice, slices.Clip(bindings))
+	values, err := page.addPage(choice, slices.Clip(bindings))
 	if err != nil {
 		return AuthorizedStatement{}, err
 	}
@@ -139,8 +157,12 @@ func (b *BoundRowsPlan[T, S]) Find(ctx context.Context, choice RowChoice, values
 }
 
 // Count counts unpaged result rows (groups for grouped queries). Supply only
-// the bindings used by the selected WHERE predicates.
+// the bindings used by the selected WHERE predicates. A locking plan returns
+// ErrOperationDenied.
 func (b *BoundRowsPlan[T, S]) Count(ctx context.Context, filters []string, values ...Binding) (int64, error) {
+	if err := b.checkSummary(); err != nil {
+		return 0, err
+	}
 	call, err := b.call(filters, "count", CallScan, values)
 	if err != nil {
 		return 0, err
@@ -148,9 +170,33 @@ func (b *BoundRowsPlan[T, S]) Count(ctx context.Context, filters []string, value
 	return b.count(ctx, call)
 }
 
+// Exists reports whether a visible row satisfies the selected filter.
+// Declare WithExists to enable it. It ignores data-page ordering and bounds.
+func (b *BoundRowsPlan[T, S]) Exists(ctx context.Context, filters []string, values ...Binding) (bool, error) {
+	if err := b.checkSummary(); err != nil {
+		return false, err
+	}
+	if !b.plan.withExists {
+		return false, ErrOperationDenied
+	}
+	call, err := b.call(filters, "exists", CallScan, values)
+	if err != nil {
+		return false, err
+	}
+	var found bool
+	_, err = b.run(ctx, "exists", call, func(ctx context.Context) (int64, error) {
+		return -1, b.driver.ScanAuthorized(ctx, call, &found)
+	})
+	return found && err == nil, err
+}
+
 // List returns a data page and the exact count before pagination. Both
 // registered calls and all bindings are validated before the first execution.
+// A locking plan returns ErrOperationDenied.
 func (b *BoundRowsPlan[T, S]) List(ctx context.Context, choice RowChoice, values ...Binding) ([]T, int64, error) {
+	if err := b.checkSummary(); err != nil {
+		return nil, 0, err
+	}
 	data, err := b.dataCall(choice, values)
 	if err != nil {
 		return nil, 0, err

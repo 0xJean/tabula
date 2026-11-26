@@ -159,9 +159,10 @@ The driver boundary consists of `SQLAuthority`, `AuthorizedStatement` and `Autho
 
 | Version | PostgreSQL capabilities |
 | --- | --- |
-| v0.4.0 | Single-table typed relations, columns, slots, predicates and grouping. Find, List, Count, scalar/grouped aggregates, and predicate-based UpdateMany/DeleteMany. Finite assignment, ordering and page variants. Registry snapshots, per-role authorized execution and verified RLS-only scoping. |
-| First subsequent patch | Explicit inner, left and cross joins, including self-joins, with per-occurrence scope and privilege verification. |
-| Advanced read releases | Routine signatures, row and advisory lock effects, correlated and derived subqueries, LATERAL, set operations, read-only and recursive CTEs, windows and nested pagination. Publish by completed capability. |
-| Advanced write releases | Typed INSERT, UPDATE and DELETE source queries, conflict handling, write-authorized RETURNING streams and modifying CTEs. Publish by completed capability. |
+| v0.4.0 | Single-table typed relations, columns, bound slots, comparisons including `IsDistinct` and `IsNotDistinct`, boolean predicates and grouping. Registered Find, List, Count, opt-in `WithExists`, scalar and grouped aggregates, and affected-count UpdateMany/DeleteMany. Finite assignments, orders and page variants. `RowsSpec.Lock` on filtered and ordered data pages, transaction advisory locks and standalone function calls. Registry snapshots, per-role authorization and verified RLS-only scoping. |
+| First subsequent patch | Explicit inner, left and cross joins, including self-joins, with per-occurrence scope and privilege checks. Typed list and array membership (`In`, `Any`) and pattern matching (`Like`, `ILike`). |
+| Expression patch | Arithmetic, `Coalesce`, conditional `Case` expressions, explicit expression `Cast`, aggregate `FilterWhere` and `COUNT(DISTINCT ...)`. |
+| Write patch | Predicate-based `UpdateMany` with a write-authorized `RETURNING` stream. |
+| Further releases | Correlated and derived subqueries, LATERAL, set operations, read-only and recursive CTEs, windows, typed write sources, conflict handling and modifying CTEs. |
 
 The read and mutation compilers share projection types, relation identity, deterministic binding, effect declarations and shape registration. A modifying CTE consumes a mutation with a declared RETURNING shape. Each release requires SQL snapshots, ordered parameter/type assertions and definition-error tests. On both drivers, verify row visibility, nulls, affected rows, ordering, locks and errors against PostgreSQL 14–17. Include repeated sort values, an outer join with an out-of-scope match, invoker and definer roles, missing grants and writes embedded in reads.

@@ -191,6 +191,11 @@ func IsNotDistinct[V any](left, right Expr[V]) Pred {
 	return typedComparison("IS NOT DISTINCT FROM", left, right, false)
 }
 
+// IsDistinct compares values using PostgreSQL's null-safe inequality.
+func IsDistinct[V any](left, right Expr[V]) Pred {
+	return typedComparison("IS DISTINCT FROM", left, right, false)
+}
+
 type conjunction []Pred
 
 // And combines two or more typed predicates in declaration order.

@@ -1,12 +1,12 @@
-# Migrating to Tabula v0.3
+# Migrating to Tabula v0.4
 
-Follow this guide when upgrading an application to v0.3. For the full surface after the upgrade, see the [integration guide](INTEGRATION.md).
+Start with the section for the version you are adopting. The integration guide lists the APIs and commands available in this checkout. [Integration guide](INTEGRATION.md)
 
 ## Typed relation declarations in v0.4
 
-For an explicit row lock, declare its physical occurrence and select a waiting policy. For advisory locks, choose the bigint or two-integer overload and run the operation inside a transaction. When moving a function call to `DefineRoutine`, declare its exact signature, cardinality, effect and security mode. Add per-shape requirements to role readiness and use keyed `ReadinessNeeds` literals for the added fields. [Lock and function examples](COOKBOOK.md#registered-locks-and-functions)
+Set `RowsSpec.Lock = ForRows(strength, rel, wait)` on a single-table plan and execute `plan.Bind(session).Find` with its declared filters and page. Request `WithExists` on an unlocked row plan for a boolean result. For advisory locks, choose the bigint or two-integer overload and run the operation inside a transaction. When moving a function call to `DefineRoutine`, declare its exact signature, cardinality, effect and security mode. Bind the session once, then call `One`, `All` or, for an advisory lock, `Acquire`. Add per-shape requirements to role readiness and use keyed `ReadinessNeeds` literals for the added fields. [Lock and function examples](COOKBOOK.md#registered-locks-and-functions)
 
-Name a physical table by schema and relation. Declare `TableSpec.RelationScope` for a table whose rows depend on database RLS or are shared globally. A table with a tagged scope column can use `ByScopeColumn()` directly. A plan can use several references to the same table by declaring separate occurrences. Use its fields and slots consistently in the plan and pass runtime values with `BindValue`. [Compilation and role verification](DESIGN-v0.4.md#compilation-binding-and-snapshots)
+Name a physical table by schema and relation. Declare `TableSpec.RelationScope` for a table whose rows depend on database RLS or are shared globally. A table with a tagged scope column can use `ByScopeColumn()` directly. Declare one table occurrence for each single-table plan. Use its fields and slots consistently in the plan and pass runtime values with `BindValue`. [Compilation and role verification](DESIGN-v0.4.md#compilation-binding-and-snapshots)
 
 Typed SQL now spells out each slot's catalog type, including a column-scoped parameter. Refresh stored SQL snapshots and rerun per-role PREPARE and EXPLAIN. A domain or enum retains its own type identity. Declare a bounded character column with `Varchar(n)` to verify the length in `pg_attribute.atttypmod` alongside its type OID. Contradictory declarations for a column fail during registration. PostgreSQL returns zero matches for an overlength equality parameter and applies its native length check on write, including SQLSTATE `22001`. Parameter casts always use the type without its length modifier. [PostgreSQL character types](https://www.postgresql.org/docs/17/datatype-character.html)
 

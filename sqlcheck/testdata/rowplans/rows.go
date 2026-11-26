@@ -26,8 +26,8 @@ var rank = tb.FieldOf(rel, "rank", tb.Int4())
 var value = tb.Input("rank", tb.Int4())
 var where = tb.RowFilter{Where: tb.Ge(rank.Expr(), value.Expr())}
 var plan = tb.DefineRows(out, "items_by_rank", src, tb.RowsSpec{
-	RowFilter: where,
-	Orders:    []tb.RowOrder{{Name: "forward", Terms: []tb.RowTerm{tb.Asc(id)}}, {Name: "reverse", Terms: []tb.RowTerm{tb.Desc(id)}}},
+	RowFilter: where, WithExists: true,
+	Orders: []tb.RowOrder{{Name: "forward", Terms: []tb.RowTerm{tb.Asc(id)}}, {Name: "reverse", Terms: []tb.RowTerm{tb.Desc(id)}}},
 }, tb.Project(tb.Output(out, "id", tb.Int8()), id.Expr()))
 var change, _ = tb.TryDefineUpdateMany(src, "change_rank", tb.MutationSpec{RowFilter: where}, tb.RowSet{
 	Name: "rank", Assignments: []tb.RowAssignment{tb.Assign(rank, value.Expr())},
@@ -41,6 +41,7 @@ func use(ctx context.Context, s tb.Session[struct{}], indirect *tb.BoundRowsPlan
 	bound := plan.Bind(s)
 	_, _, _ = bound.List(ctx, tb.RowChoice{Order: "forward"}, tb.BindValue(value, 1))
 	_, _ = (*tb.BoundRowsPlan[result, struct{}]).Count(bound, ctx, nil, tb.BindValue(value, 1))
+	_, _ = bound.Exists(ctx, nil, tb.BindValue(value, 1))
 	_, _ = indirect.Find(ctx, tb.RowChoice{}, tb.BindValue(value, 1))
 	_, _ = change.Bind(s).UpdateMany(ctx, "rank", nil, tb.BindValue(value, 2))
 	_, _ = remove.Bind(s).DeleteMany(ctx, nil, tb.BindValue(value, 3))

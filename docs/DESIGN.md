@@ -2,15 +2,16 @@
 
 Tabula sits between raw `database/sql` and an ORM. It removes the repetitive parts of
 PostgreSQL access (column lists, scanning, nullable handling, single-table statements)
-and keeps the parts a reviewer must see (joins, locks, conditional writes) as SQL.
+and keeps the SQL for joins, locks and conditional writes available for review.
 
 ## Positioning
 
 1. **Declarative descriptors.** A Go struct with `db` tags describes one table or one row
    shape. Descriptors are defined once at package init and validated strictly: an invalid
    tag panics at start-up, not at the first query.
-2. **Explicit SQL.** Anything beyond single-table CRUD is written by hand. Tabula only
-   provides the column list and decodes the result.
+2. **Explicit SQL.** Single-table plans declare their projections, predicates, locks and
+   permitted writes. Each shape has a stable key and reviewable SQL. For a joined query
+   in v0.4.0, the caller supplies the SQL and a view decodes its result.
 3. **Verified against a real database.** Every derived or registered statement can be
    prepared and explained against the target schema, and the full SQL is kept in a
    reviewable snapshot.

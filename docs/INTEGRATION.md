@@ -1,10 +1,10 @@
-# Integrating Tabula v0.3
+# Integrating Tabula v0.4
 
 Start here when adding Tabula to an application. The [Go API and CLI reference](REFERENCE.md) lists the public packages, functions, methods, types, constants and command flags in this revision.
 
 ## Use the docs that match the build
 
-These pages describe **v0.3**. For a released version, select its Git tag and open the README there. For a development build, open the README at the exact commit you build. Its links to guides and the reference stay on that revision. The changelog records changes between versions. [Migration guide](MIGRATION.md) · [Changelog](../CHANGELOG.md)
+These pages describe **v0.4**. For a released version, select its Git tag and open the README there. For a development build, open the README at the exact commit you build. Its links to guides and the reference stay on that revision. The changelog records changes between versions. [Migration guide](MIGRATION.md) · [Changelog](../CHANGELOG.md)
 
 From an application checkout, ask Go which copy it actually selected. `Dir` locates its source and docs, including a local workspace or replacement. With a replacement, `Version` can still show the requested tag. Check `Replace.Dir` for the code actually in use. Run the second command as well if the application imports the separate pgxdriver module.
 
@@ -14,11 +14,11 @@ go list -m -json github.com/0xJean/tabula/pgxdriver
 go list -m -json github.com/0xJean/tabula/oteltabula
 ```
 
-Read a signature directly from the selected packages, for example with `go doc github.com/0xJean/tabula.Rows.SetWhere`. Build the CLI from the same core revision. From the v0.3 Tabula checkout, `go install ./cmd/tabula` installs that revision's binary. Run `tabula --help` to list commands and `tabula <command> -h` to inspect its flags.
+Read a signature directly from the selected packages, for example with `go doc github.com/0xJean/tabula.Rows.SetWhere`. Build the CLI from the same core revision. From that Tabula checkout, `go install ./cmd/tabula` installs that revision's binary. Run `tabula --help` to list commands and `tabula <command> -h` to inspect its flags.
 
 For a published patch, set `TABULA_VERSION` to its exact tag and run `go get "github.com/0xJean/tabula@$TABULA_VERSION"`. Applications using pgxdriver or oteltabula also pin `github.com/0xJean/tabula/pgxdriver` and `github.com/0xJean/tabula/oteltabula` to that tag.
 
-To try a local v0.3 checkout from an application that already depends on Tabula, set `TABULA_SRC` to its absolute path. Run this in the application module. The temporary workspace selects the local modules for this run. Include any sibling application modules your build needs in the `go work init` call.
+To try a local checkout from an application that already depends on Tabula, set `TABULA_SRC` to its absolute path. Run this in the application module. The temporary workspace selects the local modules for this run. Include any sibling application modules your build needs in the `go work init` call.
 
 ```sh
 (
@@ -47,10 +47,10 @@ To try a local v0.3 checkout from an application that already depends on Tabula,
 | Task | Start with | Reference or example |
 | --- | --- | --- |
 | Describe a table, composite key, soft delete, result projection or codec | `TableSpec`, `ViewSpec`, `Define`, `DefineView`, `RegisterType`, `RegisterZero`. Use `Statement` for application SQL and `Requires` or `RequiresFunction` for privileges. | [Core API](REFERENCE.md#tabula) |
-| Lock rows, coordinate transactions or call a declared function | `DefineLockedRows`, `DefineAdvisoryLock` and `DefineRoutine` register typed operations for an authorized session. | [Examples](COOKBOOK.md#registered-locks-and-functions) |
+| Lock rows, coordinate transactions or call a declared function | `RowsSpec.Lock` adds a lock to each registered data page. Bind an advisory lock or a function plan with `plan.Bind(session)`. | [Examples](COOKBOOK.md#registered-locks-and-functions) |
 | Map PostgreSQL values | `db:"…,json"`, `db:"…,zero"` and `db:"…,array"` select field codecs. Network columns accept `netip.Addr` or `netip.Prefix`. Driver array converters support one-dimensional string, int32, int64, float64 and bool slices. | [Network and array recipes](COOKBOOK.md#13-postgresql-network-addresses-and-arrays) |
 | Read, aggregate or lock rows | `Rows.Get`, `GetMany`, `Lock`, `LockMany`, `Find`, `List`, `ListKeyset` (with `KeysetPage.Next`), `Iter`, `Exists`, and package aggregates `Max`, `Min`, `Sum`, `Avg`, `CountBy`. Use `Filter` and `OrderSpec` for runtime values and sort choices, `LockMode` for row locks and `CountMode` for totals. | [Keyset pagination](COOKBOOK.md#6-keyset-pagination-without-offset) · [Streaming and locks](COOKBOOK.md#10-stream-a-worker-batch) |
-| Register a typed single-table plan | `RowsFrom`, `DefineRows`, `DefineUpdateMany` and `DefineDeleteMany` compile typed predicates, projections, groups and named alternatives. | [Registered row plans](COOKBOOK.md#registered-single-table-reads-and-writes) |
+| Register a typed single-table plan | `RowsFrom`, `DefineRows`, `DefineUpdateMany` and `DefineDeleteMany` compile typed predicates, projections, groups and named alternatives. Enable `RowsSpec.WithExists` for a boolean existence check. | [Registered row plans](COOKBOOK.md#registered-single-table-reads-and-writes) |
 | Execute handwritten SQL, composed view queries or embedded SQL files | Use `Rows.SelectIter` for table-shaped results, `View.Statement` + `ViewRows.One`/`Select`/`Iter` for full queries, `View.DefineQuery` (`Select`/`Where`/`Tail`/`CountBase`, `ScopeColumns`/`ScopeByRLS`/`ScopeGlobal`, `QueryParams`) for composed lists/counts/keyset pages, and `MustSQLFiles`/`LoadSQLFiles` for embedded `.sql` files. | [Composed queries](COOKBOOK.md#14-composed-view-queries-and-aggregates) · [Projection example](../example_test.go) |
 | Write one row or a batch | `Insert`, `Save`, `SetWhere`, `UpdateWhere`, `SetExpr`, `SoftDelete` and opt-in `Delete`. Use `InsertReturning` or `SaveReturning` for returned columns, `InsertMany` or `UpsertMany` for batches, and `DefineUpsert` for a conflict plan. Use `TableSpec.WriteMode` and `UpdateColumns` for role-specific writes and `RegistryConfig.Deny` for registry-wide limits. | [Batch and atomic updates](COOKBOOK.md#11-batch-upserts-and-atomic-updates) |
 | Integrate database/sql or lib/pq | Configure a role-bound `stdsql.NewRunner` with `ScopePolicy` (`ManagedVars`, `ScopeVars`, `ContextVars`, `UnscopedVars`), `RunnerOptions` (`Role`, `ReadOnly`, `Unscoped`, `UnscopedReadRole`, `Timeouts`, `SessionKey`, `ExposeTx`), `WithinShared`, `WithinRetry`, `WithinRaw` or `Direct` pools. Plug in array converters for lib/pq. | [stdsql](REFERENCE.md#stdsql) · [pqdriver](REFERENCE.md#pqdriver) |
@@ -68,7 +68,7 @@ Call the [sqlcheck Go API](REFERENCE.md#sqlcheck) in tests or use the commands b
 | Registered SQL or a committed snapshot, optionally as a role | `RenderAllSnapshot`, `ParseSnapshot`, `VerifyStatements`, `VerifyViewStatements` | [check](REFERENCE.md#tabula-check) |
 | Expected table RLS settings | `CheckRLS` | [check-rls](REFERENCE.md#tabula-check-rls) |
 | Login role hygiene (`NOINHERIT`, memberships, direct grants, ownership, `CREATE`) | `CheckLoginRole` | [check-login-role](REFERENCE.md#tabula-check-login-role) |
-| Handwritten SQL, typed row plans, composed queries, aggregates, security call sites and role bindings | `CollectSQL`, `DefaultSecurityCallTargets`, `SQLInventory.BindRolesWithDefinitions` | [inventory](REFERENCE.md#tabula-inventory) |
+| Handwritten SQL, registered row plans, locks, routine calls, composed queries, aggregates and role bindings | `CollectSQL`, `DefaultSecurityCallTargets`, `SQLInventory.BindRolesWithDefinitions` | [inventory](REFERENCE.md#tabula-inventory) |
 | Whether PostgreSQL can plan each role's own statements | `VerifyRoleStatements` | [verify-roles](REFERENCE.md#tabula-verify-roles) |
 | Startup readiness of the runner role | `RoleStatements.Readiness` derives requirements from typed statements assigned to the role. `CheckReadiness` checks effective grants and required table RLS flags in one query. | [Startup example](AUTHORIZATION.md#check-a-role-at-startup) |
 | Required descriptor privileges or exact direct grants on all configured objects | `CollectPrivilegeNeeds` and `CheckRolePrivileges` for descriptors. `CheckGrantManifest` for missing and extra grants with reconciliation SQL. | [grants](REFERENCE.md#tabula-grants) for the manifest |

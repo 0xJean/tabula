@@ -110,8 +110,11 @@ type InventoryConfig struct {
 	AuditSecurityCalls bool
 }
 
-// SQLSite describes a static or dynamic SQL call, composed query definition,
-// or single-table aggregate call. ID is independent of line numbers.
+// SQLSite describes an SQL call or a registered statement declaration or use.
+// Typed row families, including locking reads, use Kind "typed_rows".
+// Transaction advisory locks and routine plans use
+// "typed_plan" with the declaring function or concrete method receiver.
+// ID is independent of line numbers.
 type SQLSite struct {
 	ID, File         string
 	Line             int
