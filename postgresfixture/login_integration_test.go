@@ -21,7 +21,7 @@ import (
 )
 
 const loginWorkerEnv = "TABULA_FIXTURE_LOGIN_WORKER"
-const workerLabel = "worktree_0123456789abcdef"
+const workerLabel = "parallel_0123456789abcdef"
 
 func loginClient(t *testing.T, database string, login *postgresfixture.LoginRole) *sql.DB {
 	t.Helper()

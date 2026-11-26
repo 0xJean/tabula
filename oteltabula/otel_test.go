@@ -37,8 +37,8 @@ func TestTracerRecordsSuccessAndErrorSpans(t *testing.T) {
 
 	// 1. Successful statement span.
 	info := tabula.TraceInfo{
-		Key:    "orders.list",
-		Table:  "orders",
+		Key:    "items.list",
+		Table:  "items",
 		Action: "list",
 		Scope:  "t-1",
 		Role:   "app_reader",
@@ -58,7 +58,7 @@ func TestTracerRecordsSuccessAndErrorSpans(t *testing.T) {
 	require.Len(t, spans, 2)
 
 	okSpan := spans[0]
-	require.Equal(t, "orders.list", okSpan.Name())
+	require.Equal(t, "items.list", okSpan.Name())
 	require.Equal(t, trace.SpanKindClient, okSpan.SpanKind())
 	require.Equal(t, "custom.tabula", okSpan.InstrumentationScope().Name)
 	require.Equal(t, "0.3.1", okSpan.InstrumentationScope().Version)
@@ -66,8 +66,8 @@ func TestTracerRecordsSuccessAndErrorSpans(t *testing.T) {
 	attrs := attrMap(okSpan.Attributes())
 	require.Equal(t, "postgresql", attrs["db.system"].AsString())
 	require.Equal(t, "appdb", attrs["db.namespace"].AsString())
-	require.Equal(t, "orders.list", attrs["tabula.key"].AsString())
-	require.Equal(t, "orders", attrs["tabula.table"].AsString())
+	require.Equal(t, "items.list", attrs["tabula.key"].AsString())
+	require.Equal(t, "items", attrs["tabula.table"].AsString())
 	require.Equal(t, "list", attrs["tabula.action"].AsString())
 	require.Equal(t, "app_reader", attrs["tabula.role"].AsString())
 	require.Equal(t, "t-1", attrs["tabula.scope"].AsString())
@@ -103,7 +103,7 @@ func TestMetricsRecordsHistogramAndCounter(t *testing.T) {
 
 	info := tabula.TraceInfo{
 		Key:    "tabula.inline.abcdef012345",
-		Table:  "orders",
+		Table:  "items",
 		Action: "select",
 		Role:   "app_reader",
 		Scope:  "t-1",
@@ -144,7 +144,7 @@ func TestMetricsRecordsHistogramAndCounter(t *testing.T) {
 		require.False(t, hasKey, "tabula.key must be omitted from metrics")
 		vTable, okTable := dp.Attributes.Value("tabula.table")
 		require.True(t, okTable)
-		require.Equal(t, "orders", vTable.AsString())
+		require.Equal(t, "items", vTable.AsString())
 		if v, exists := dp.Attributes.Value("tabula.error_class"); exists && v.AsString() == string(tabula.ClassRLSDenied) {
 			sawRLS = true
 		}

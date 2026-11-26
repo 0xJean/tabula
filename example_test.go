@@ -49,37 +49,37 @@ func ExampleTable_DefineUpsert() {
 }
 
 func ExampleDefineView() {
-	type orderPart struct {
+	type jobPart struct {
 		ID   int64  `db:"id"`
 		Code string `db:"code"`
 	}
-	type customerPart struct {
+	type groupPart struct {
 		Name string `db:"name,zero"`
 	}
 	type summary struct {
-		Order    orderPart    `db:"o_"`
-		Customer customerPart `db:"c_"`
+		Job   jobPart   `db:"j_"`
+		Group groupPart `db:"g_"`
 	}
 
 	reg := tabula.NewRegistry(tabula.RegistryConfig[struct{}]{})
-	view := tabula.DefineView(reg, tabula.ViewSpec[summary]{Name: "public.order_summary"})
+	view := tabula.DefineView(reg, tabula.ViewSpec[summary]{Name: "public.job_summary"})
 
-	fmt.Println(view.SelectAs(map[string]string{"o_": "o", "c_": "c"}))
+	fmt.Println(view.SelectAs(map[string]string{"j_": "j", "g_": "g"}))
 	// Output:
-	// o.id AS o_id, o.code AS o_code, c.name AS c_name
+	// j.id AS j_id, j.code AS j_code, g.name AS g_name
 }
 
 func ExampleFilter() {
 	f := tabula.NewFilter("tenant-1")
 	f.AndIf(true, "status = ?", "active")
-	f.In("currency", "USD", "EUR")
+	f.In("category", "small", "large")
 	f.And("meta ?? ?", "verified")
 
 	fmt.Println(f.Where())
 	fmt.Println(f.Args())
 	// Output:
-	//  AND (status = $2) AND (currency IN ($3, $4)) AND (meta ? $5)
-	// [tenant-1 active USD EUR verified]
+	//  AND (status = $2) AND (category IN ($3, $4)) AND (meta ? $5)
+	// [tenant-1 active small large verified]
 }
 
 func ExampleMustOrderSpec() {

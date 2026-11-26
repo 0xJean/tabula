@@ -132,8 +132,8 @@ func walkFields(
 		case !tagged:
 			return fail(`exported field %s has no db tag (use db:"-" to skip)`, f.Name)
 		}
-		// Nested struct prefix: e.g. `Order OrderRow` with `db:"o_"` expands
-		// OrderRow's exported fields under prefix "o_" (o_id, o_code, ...).
+		// Nested struct prefix: e.g. `Job JobRow` with `db:"j_"` expands
+		// JobRow's exported fields under prefix "j_" (j_id, j_code, ...).
 		if nested != nil && !strings.Contains(tag, ",") && nested(f.Type) {
 			if err := walkFields(f.Type, index, namePrefix+tag, nested, visit, fail); err != nil {
 				return err

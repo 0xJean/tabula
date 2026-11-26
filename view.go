@@ -15,7 +15,7 @@ import (
 // or auxiliary lookup table) without requiring a key, scope, deleted, or
 // version column. It reuses the Registry's db-tag codecs (UUID, JSON, Zero,
 // Array, custom Scanner/Valuer) and supports nested struct column prefixes
-// (e.g. `Order OrderRow` tagged `db:"o_"` maps o_id, o_code, ...).
+// (e.g. `Job JobRow` tagged `db:"j_"` maps j_id, j_code, ...).
 type ViewSpec[T any] struct {
 	Name    string
 	Columns []Column[T]

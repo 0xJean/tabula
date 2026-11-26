@@ -115,25 +115,25 @@ registers the SQL into `Definition.Statements` so `sqlcheck` verifies it against
 ## 5. JOIN projection with nested `View` prefixes
 
 ```go
-type OrderPart struct {
+type JobPart struct {
     ID   int64  `db:"id"`
     Code string `db:"code"`
 }
-type CustomerPart struct {
+type GroupPart struct {
     Name string `db:"name,zero"`
 }
-type OrderSummary struct {
-    Order    OrderPart    `db:"o_"`
-    Customer CustomerPart `db:"c_"`
+type JobSummary struct {
+    Job    JobPart    `db:"j_"`
+    Group GroupPart `db:"g_"`
 }
 
-var orderView = tabula.DefineView(reg, tabula.ViewSpec[OrderSummary]{
-    Name: "public.order_summaries",
+var jobView = tabula.DefineView(reg, tabula.ViewSpec[JobSummary]{
+    Name: "public.job_summaries",
 })
 
-var listOrdersSQL = orderView.Statement("list",
-    "SELECT "+orderView.SelectAs(map[string]string{"o_": "o", "c_": "c"})+
-        " FROM public.orders o JOIN public.customers c ON c.id = o.customer_id WHERE o.tenant_id = $1",
+var listJobsSQL = jobView.Statement("list",
+    "SELECT "+jobView.SelectAs(map[string]string{"j_": "j", "g_": "g"})+
+        " FROM public.jobs j JOIN public.groups g ON g.id = j.group_id WHERE j.tenant_id = $1",
 )
 ```
 

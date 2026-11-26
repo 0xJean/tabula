@@ -8,7 +8,7 @@ If a test login needs roles created by the template installer, call `fixture.Pre
 
 ## From v0.3.8 to v0.3.9
 
-To identify a test worker in PostgreSQL, supply `LoginRoleOptions.Label` in a keyed options literal. Choose up to 25 ASCII lowercase letters, digits or underscores. The fixture rejects invalid labels. The worktree or suite that owns the label chooses how to shorten or normalize its own names. Empty preserves the v0.3.8 login format.
+To identify a test worker in PostgreSQL, supply `LoginRoleOptions.Label` in a keyed options literal. Choose up to 25 ASCII lowercase letters, digits or underscores. The fixture rejects invalid labels. The test suite chooses and normalizes its label before acquisition. Empty preserves the v0.3.8 login format.
 
 For crash recovery, replace `fixture.Clone(ctx, plan)` with `fixture.CloneWithLease(ctx, plan, login)`. Keep normal per-test `Database.Drop` cleanup. Use the same maintenance database for acquisition, cloning and pruning. `PruneClones(ctx, 0)` collects eligible clones immediately, including after their login role has been removed. The existing `Prune(ctx, maxIdle, ...)` applies its idle grace to leased clones. Ordinary and historical clones continue to use explicit cleanup. [Example and crash boundary](AUTHORIZATION.md#process-login-roles)
 

@@ -48,7 +48,7 @@ func TestViewDefineColsAndSelect(t *testing.T) {
 		onScan: func(query string, _ []any, dest ...any) error {
 			scannedQuery = query
 			*dest[0].(*int64) = 9
-			*dest[1].(*string) = "SKU-1"
+			*dest[1].(*string) = "ITEM-1"
 			require.NoError(t, dest[2].(*ZeroValue[string]).Scan(nil))
 			*dest[3].(*[]string) = []string{"r1"}
 			return nil
@@ -57,21 +57,21 @@ func TestViewDefineColsAndSelect(t *testing.T) {
 			scannedQuery = query
 			return scan(func(dest ...any) error {
 				*dest[0].(*int64) = 7
-				*dest[1].(*string) = "SKU-2"
+				*dest[1].(*string) = "ITEM-2"
 				require.NoError(t, dest[2].(*ZeroValue[string]).Scan("primary"))
 				*dest[3].(*[]string) = []string{"https://example.invalid"}
 				return nil
 			})
 		},
 	}
-	one, err := v.Bind(rec).One(t.Context(), stmt, "SKU-1")
+	one, err := v.Bind(rec).One(t.Context(), stmt, "ITEM-1")
 	require.NoError(t, err)
 	require.Equal(t, stmt, scannedQuery)
-	require.Equal(t, &projectionRow{ID: 9, Code: "SKU-1", Note: "", Tags: []string{"r1"}}, one)
+	require.Equal(t, &projectionRow{ID: 9, Code: "ITEM-1", Note: "", Tags: []string{"r1"}}, one)
 
-	list, err := v.Bind(rec).Select(t.Context(), stmt, "SKU-2")
+	list, err := v.Bind(rec).Select(t.Context(), stmt, "ITEM-2")
 	require.NoError(t, err)
-	require.Equal(t, []projectionRow{{ID: 7, Code: "SKU-2", Note: "primary", Tags: []string{"https://example.invalid"}}}, list)
+	require.Equal(t, []projectionRow{{ID: 7, Code: "ITEM-2", Note: "primary", Tags: []string{"https://example.invalid"}}}, list)
 }
 
 func TestLockByGetManyAndLockMany(t *testing.T) {

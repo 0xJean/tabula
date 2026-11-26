@@ -231,13 +231,13 @@ func (s *observedFakeSession) Each(ctx context.Context, q string, args []any, de
 
 func TestSQLFilesAndAggregatesUnit(t *testing.T) {
 	fsys := fstest.MapFS{
-		"sql/orders.sql":     {Data: []byte("SELECT id FROM orders\n")},
+		"sql/items.sql":      {Data: []byte("SELECT id FROM items\n")},
 		"sql/sub/report.sql": {Data: []byte("SELECT 1")},
 		"sql/readme.txt":     {Data: []byte("ignored")},
 	}
 	sf := MustSQLFiles(fsys, "sql")
-	require.Equal(t, []string{"orders.sql", "sub/report.sql"}, sf.Names())
-	require.Equal(t, "SELECT id FROM orders", sf.Get("orders.sql"))
+	require.Equal(t, []string{"items.sql", "sub/report.sql"}, sf.Names())
+	require.Equal(t, "SELECT id FROM items", sf.Get("items.sql"))
 	require.Equal(t, "SELECT 1", sf.Get("sub/report.sql"))
 	require.Panics(t, func() { _ = sf.Get("missing.sql") })
 	_, err := LoadSQLFiles(fsys, "nonexistent")

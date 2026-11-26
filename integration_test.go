@@ -89,17 +89,17 @@ func TestV03AgainstRealPostgres(t *testing.T) {
 		)`,
 		`CREATE TABLE ` + schema + `.pairs (
 			region_code text NOT NULL,
-			sku text NOT NULL,
+			code text NOT NULL,
 			priority integer NOT NULL,
 			created_by text NOT NULL,
-			PRIMARY KEY (region_code, sku)
+			PRIMARY KEY (region_code, code)
 		)`,
 		`CREATE TABLE ` + schema + `.flags (
 			id bigserial PRIMARY KEY,
 			name text NOT NULL,
 			is_deleted boolean NOT NULL DEFAULT false
 		)`,
-		`CREATE TABLE ` + schema + `.orders (
+		`CREATE TABLE ` + schema + `.jobs (
 			id bigserial PRIMARY KEY,
 			code text NOT NULL,
 			status text NOT NULL DEFAULT 'active'
@@ -231,17 +231,17 @@ func TestV03AgainstRealPostgres(t *testing.T) {
 
 		type pairKey struct {
 			Region string `db:"region_code"`
-			SKU    string `db:"sku"`
+			Code   string `db:"code"`
 		}
 		type pairRow struct {
 			Region    string `db:"region_code,key"`
-			SKU       string `db:"sku,key"`
+			Code      string `db:"code,key"`
 			Priority  int    `db:"priority"`
 			CreatedBy string `db:"created_by,once"`
 		}
 		pairs := tabula.Define(unscopedReg, tabula.TableSpec[pairRow, pairKey]{
 			Name:  schema + ".pairs",
-			Order: "region_code ASC, sku ASC",
+			Order: "region_code ASC, code ASC",
 		})
 
 		type flagRow struct {
@@ -253,13 +253,13 @@ func TestV03AgainstRealPostgres(t *testing.T) {
 			Name: schema + ".flags",
 		})
 
-		type orderRow struct {
+		type jobRow struct {
 			ID     int64  `db:"id,key,serial"`
 			Code   string `db:"code"`
 			Status string `db:"status,deleted"`
 		}
-		orders := tabula.Define(unscopedReg, tabula.TableSpec[orderRow, int64]{
-			Name:       schema + ".orders",
+		jobs := tabula.Define(unscopedReg, tabula.TableSpec[jobRow, int64]{
+			Name:       schema + ".jobs",
 			SoftDelete: &tabula.SoftDelete{DeletedValue: "deleted"},
 		})
 
@@ -270,19 +270,19 @@ func TestV03AgainstRealPostgres(t *testing.T) {
 
 		pr := pairs.Bind(sess)
 		require.NoError(t, pr.InsertMany(ctx, []pairRow{
-			{Region: "US", SKU: "WIDGET", Priority: 6, CreatedBy: "sys"},
-			{Region: "EU", SKU: "GADGET", Priority: 6, CreatedBy: "sys"},
+			{Region: "US", Code: "ALPHA", Priority: 6, CreatedBy: "sys"},
+			{Region: "EU", Code: "BETA", Priority: 6, CreatedBy: "sys"},
 		}))
 		locked, err := pr.LockMany(ctx, []pairKey{
-			{Region: "US", SKU: "WIDGET"},
-			{Region: "EU", SKU: "GADGET"},
+			{Region: "US", Code: "ALPHA"},
+			{Region: "EU", Code: "BETA"},
 		})
 		require.NoError(t, err)
 		require.Len(t, locked, 2)
 		require.Equal(t, "EU", locked[0].Region)
 		locked[0].Priority = 18
 		require.NoError(t, pr.Save(ctx, locked[0]))
-		gotPair, err := pr.Get(ctx, pairKey{Region: "EU", SKU: "GADGET"})
+		gotPair, err := pr.Get(ctx, pairKey{Region: "EU", Code: "BETA"})
 		require.NoError(t, err)
 		require.Equal(t, 18, gotPair.Priority)
 
@@ -297,17 +297,17 @@ func TestV03AgainstRealPostgres(t *testing.T) {
 		require.Nil(t, missingFlag)
 
 		// Status-value soft delete.
-		or := orders.Bind(sess)
-		oRow := orderRow{Code: "ord-1", Status: "pending"}
-		require.NoError(t, or.Insert(ctx, &oRow))
-		foundOrder, err := or.Get(ctx, oRow.ID)
+		boundJobs := jobs.Bind(sess)
+		job := jobRow{Code: "job-1", Status: "pending"}
+		require.NoError(t, boundJobs.Insert(ctx, &job))
+		foundJob, err := boundJobs.Get(ctx, job.ID)
 		require.NoError(t, err)
-		require.NotNil(t, foundOrder)
-		oRow.Status = "deleted"
-		require.NoError(t, or.SoftDelete(ctx, oRow))
-		missingOrder, err := or.Get(ctx, oRow.ID)
+		require.NotNil(t, foundJob)
+		job.Status = "deleted"
+		require.NoError(t, boundJobs.SoftDelete(ctx, job))
+		missingJob, err := boundJobs.Get(ctx, job.ID)
 		require.NoError(t, err)
-		require.Nil(t, missingOrder)
+		require.Nil(t, missingJob)
 	})
 
 	t.Run("keyset_pagination_count_modes_and_nested_view_join", func(t *testing.T) {

@@ -112,44 +112,44 @@ func (q *queryRecorderSession) Each(ctx context.Context, query string, args []an
 }
 
 func TestViewNestedStructPrefixes(t *testing.T) {
-	type orderPart struct {
+	type jobPart struct {
 		ID   int64  `db:"id"`
 		Code string `db:"code"`
 	}
-	type customerPart struct {
+	type groupPart struct {
 		ID   int64  `db:"id"`
 		Name string `db:"name,zero"`
 	}
 	type joinedRow struct {
-		Order    orderPart    `db:"o_"`
-		Customer customerPart `db:"c_"`
-		Total    int64        `db:"total"`
+		Job   jobPart   `db:"j_"`
+		Group groupPart `db:"g_"`
+		Total int64     `db:"total"`
 	}
 
 	reg := NewRegistry(RegistryConfig[customTenant]{})
-	v := DefineView(reg, ViewSpec[joinedRow]{Name: "public.orders_with_customers"})
-	require.Equal(t, "o_id, o_code, c_id, c_name, total", v.Cols())
+	v := DefineView(reg, ViewSpec[joinedRow]{Name: "public.jobs_with_groups"})
+	require.Equal(t, "j_id, j_code, g_id, g_name, total", v.Cols())
 	require.Equal(t,
-		"o.id AS o_id, o.code AS o_code, c.id AS c_id, c.name AS c_name, total",
-		v.SelectAs(map[string]string{"o_": "o", "c_": "c"}),
+		"j.id AS j_id, j.code AS j_code, g.id AS g_id, g.name AS g_name, total",
+		v.SelectAs(map[string]string{"j_": "j", "g_": "g"}),
 	)
 
 	rec := &recordingSession{
 		onScan: func(_ string, _ []any, dest ...any) error {
 			*dest[0].(*int64) = 11
-			*dest[1].(*string) = "ORD-11"
+			*dest[1].(*string) = "JOB-11"
 			*dest[2].(*int64) = 22
-			require.NoError(t, dest[3].(*ZeroValue[string]).Scan("Acme"))
+			require.NoError(t, dest[3].(*ZeroValue[string]).Scan("group-a"))
 			*dest[4].(*int64) = 500
 			return nil
 		},
 	}
-	got, err := v.Bind(rec).One(t.Context(), "SELECT "+v.SelectAs(map[string]string{"o_": "o", "c_": "c"}))
+	got, err := v.Bind(rec).One(t.Context(), "SELECT "+v.SelectAs(map[string]string{"j_": "j", "g_": "g"}))
 	require.NoError(t, err)
 	require.Equal(t, &joinedRow{
-		Order:    orderPart{ID: 11, Code: "ORD-11"},
-		Customer: customerPart{ID: 22, Name: "Acme"},
-		Total:    500,
+		Job:   jobPart{ID: 11, Code: "JOB-11"},
+		Group: groupPart{ID: 22, Name: "group-a"},
+		Total: 500,
 	}, got)
 }
 
