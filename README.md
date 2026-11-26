@@ -20,9 +20,9 @@ builds joins, never generates DDL, and never runs hidden callbacks.
 
 Read the README at the Git tag or commit your application builds. The [migration guide](docs/MIGRATION.md) covers upgrading to v0.3. The [changelog](CHANGELOG.md) records release status.
 
-## Install v0.3.8
+## Install v0.3.9
 
-Run `go get github.com/0xJean/tabula@v0.3.8` in your application module with Go 1.26 or later. If you use the native pgx/v5 adapter or the OpenTelemetry bridge, also run `go get github.com/0xJean/tabula/pgxdriver@v0.3.8` and/or `go get github.com/0xJean/tabula/oteltabula@v0.3.8`.
+Run `go get github.com/0xJean/tabula@v0.3.9` in your application module with Go 1.26 or later. If you use the native pgx/v5 adapter or the OpenTelemetry bridge, also run `go get github.com/0xJean/tabula/pgxdriver@v0.3.9` and/or `go get github.com/0xJean/tabula/oteltabula@v0.3.9`.
 
 ## Read a row by primary key
 
@@ -114,7 +114,7 @@ one transaction, configure a dedicated reader with `UnscopedReadRole`. [Runner m
 
 For startup checks, `sqlcheck.CheckReadiness` verifies the minimum effective grants and RLS flags of a runner role in one catalog query. [Role readiness example](docs/AUTHORIZATION.md#check-a-role-at-startup)
 
-Disposable test suites can lease a separate PostgreSQL login for each process and reclaim interrupted workers’ roles through `postgresfixture`. [Process login roles](docs/AUTHORIZATION.md#process-login-roles)
+Disposable test suites can label each process login, bind test databases to its lease and reclaim interrupted workers’ roles and idle clones through `postgresfixture`. [Process login roles](docs/AUTHORIZATION.md#process-login-roles)
 
 ## Contributing
 

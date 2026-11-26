@@ -15,7 +15,7 @@ const idleMark = " idle "
 // PostgreSQL roles are cluster-wide, advisory locks are local to one database.
 // Check both identities so another maintenance database or a replacement role
 // cannot be mistaken for an orphan. The name format alone never establishes ownership.
-const managedLogin = `r.rolname COLLATE "C" ~ '^tabula_login_[0-9a-f]{24}$'
+const managedLogin = `r.rolname COLLATE "C" ~ '` + loginNamePattern + `'
 	AND pg_catalog.split_part(pg_catalog.shobj_description(r.oid, 'pg_authid'), '` + idleMark + `', 1) = '` + loginMark + `' ||
 		(SELECT d.oid::text FROM pg_catalog.pg_database d WHERE d.datname = pg_catalog.current_database()) ||
 		'/' || r.oid::text`
@@ -116,7 +116,7 @@ func removeLogin(ctx context.Context, conn *sql.Conn, c loginCandidate, maxIdle 
 		return false, fmt.Errorf("ownership mark changed for fixture login %s", c.name)
 	}
 	if maxIdle != nil {
-		eligible, mark, err := loginIdle(comment, active, now, *maxIdle)
+		eligible, mark, err := fixtureIdle(comment, active, now, *maxIdle)
 		if err != nil {
 			return false, err
 		}
@@ -151,14 +151,14 @@ func removeLogin(ctx context.Context, conn *sql.Conn, c loginCandidate, maxIdle 
 }
 
 // The identity portion of comment has already been verified under the lock.
-// A nonempty mark is committed instead of dropping the role on this pass.
-func loginIdle(comment string, active bool, now time.Time, maxIdle time.Duration) (eligible bool, mark string, err error) {
+// A nonempty mark is written instead of dropping the object on this pass.
+func fixtureIdle(comment string, active bool, now time.Time, maxIdle time.Duration) (eligible bool, mark string, err error) {
 	base, stamp, marked := strings.Cut(comment, idleMark)
 	var since time.Time
 	if marked {
 		since, err = time.Parse(time.RFC3339Nano, stamp)
 		if err != nil {
-			return false, "", fmt.Errorf("invalid fixture login idle mark: %w", err)
+			return false, "", fmt.Errorf("invalid fixture idle mark: %w", err)
 		}
 	}
 	switch {

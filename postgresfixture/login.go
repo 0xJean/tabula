@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,6 +26,28 @@ type LoginRoleOptions struct {
 	MemberOf        []string
 	Inherit         bool
 	ConnectionLimit *int
+	// Label optionally appends 1–25 ASCII lowercase letters, digits or
+	// underscores to the generated name. Empty preserves the unlabeled form.
+	Label string
+}
+
+const (
+	loginPrefix      = "tabula_login_"
+	labelPattern     = "[a-z0-9_]{1,25}"
+	loginNamePattern = "^" + loginPrefix + "[0-9a-f]{24}(_" + labelPattern + ")?$"
+)
+
+var validLabel = regexp.MustCompile("^" + labelPattern + "$")
+
+func freshLoginName(label string) (string, error) {
+	if label != "" && !validLabel.MatchString(label) {
+		return "", errors.New("fixture login label must contain 1–25 ASCII lowercase letters, digits or underscores")
+	}
+	name, err := freshName(loginPrefix)
+	if err == nil && label != "" {
+		name += "_" + label
+	}
+	return name, err
 }
 
 func (o LoginRoleOptions) attributes() (string, error) {
@@ -104,7 +127,7 @@ func (f Fixture) AcquireLoginRole(ctx context.Context, opts LoginRoleOptions) (*
 	if err != nil {
 		return nil, err
 	}
-	name, err := freshName("tabula_login_")
+	name, err := freshLoginName(opts.Label)
 	if err != nil {
 		return nil, err
 	}
@@ -142,7 +165,7 @@ func createLogin(ctx context.Context, conn *sql.Conn, name, attrs, verifier stri
 	defer func() { _ = tx.Rollback() }()
 	// CREATE ROLE accepts no bind parameters. The name and verifier use fixed
 	// generated alphabets; attrs quotes each validated membership identifier.
-	if _, err = tx.ExecContext(ctx, "CREATE ROLE "+name+" "+attrs+" PASSWORD '"+verifier+"'"); err != nil {
+	if _, err = tx.ExecContext(ctx, "CREATE ROLE "+quoteLoginIdent(name)+" "+attrs+" PASSWORD '"+verifier+"'"); err != nil {
 		return 0, err
 	}
 	var oid, dbOID int64

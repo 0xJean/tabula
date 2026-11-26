@@ -3,6 +3,11 @@
 All notable changes are listed here. The project follows semantic versioning; before
 v1.0 a minor version may contain breaking changes.
 
+## v0.3.9 — 2026-11-26
+
+- `postgresfixture.LoginRoleOptions.Label` adds an optional readable suffix to each independently generated process login. Existing unlabeled roles retain their lease and cleanup behavior.
+- `Fixture.CloneWithLease` binds a test database to a process login. `Prune` and the standalone `PruneClones` can reclaim the database after the process exits and all clients disconnect. [Ownership and cleanup](docs/DESIGN-v0.3.9.md)
+
 ## v0.3.8 — 2026-11-26
 
 - A disposable `postgresfixture.Fixture` can acquire a distinct login per test process. A dedicated maintenance session protects it while business connections are idle. `Release` removes the login and its database CONNECT grants at shutdown. `Prune` reclaims abandoned logins after the configured idle interval. [Fixture login lifecycle](docs/DESIGN-v0.3.8.md)
