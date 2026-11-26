@@ -1873,11 +1873,17 @@ func (f Fixture) CloneWithLease(ctx context.Context, p Installation, login *Logi
     clients and call Database.Drop during normal cleanup. If publication and
     cleanup both fail, the error comes with the database handle for a retry.
 
+func (f Fixture) Prepare(ctx context.Context, p Installation) error
+    Prepare installs and publishes the template for p, or refreshes its last-use
+    mark if it already exists. It requires no login lease and creates no test
+    clone. Call Prepare before acquiring a login whose member roles are created
+    by the installation.
+
 func (f Fixture) Prune(ctx context.Context, maxIdle time.Duration, keep ...Installation) ([]string, error)
-    Prune drops cached templates whose last Clone is older than maxIdle and
+    Prune drops cached templates whose last use is older than maxIdle and
     staging databases abandoned by interrupted builds, except the templates
-    of keep. Each template or stage is dropped through Backend.Drop while
-    holding the same advisory lock that Clone holds through the physical copy.
+    of keep. Prepare and both clone methods refresh the last-use mark.
+    Prune takes the template lock exclusively before calling Backend.Drop.
     Templates with missing or invalid last-use marks are kept. Prune returns
     the names it dropped, including partial results if another drop failed.
     It also reaps process logins and leased clones observed idle for maxIdle.

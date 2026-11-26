@@ -2,6 +2,10 @@
 
 Follow this guide when upgrading an application to v0.3. For the full surface after the upgrade, see the [integration guide](INTEGRATION.md).
 
+## From v0.3.9 to v0.3.10
+
+If a test login needs roles created by the template installer, call `fixture.Prepare(ctx, plan)` at process startup. Then pass those roles in `LoginRoleOptions.MemberOf` to `AcquireLoginRole` and use `CloneWithLease` for each test. Preparing an existing template refreshes its last-use mark for pruning. Suites whose roles already exist can continue acquiring the login directly. [Cold-start example](AUTHORIZATION.md#process-login-roles)
+
 ## From v0.3.8 to v0.3.9
 
 To identify a test worker in PostgreSQL, supply `LoginRoleOptions.Label` in a keyed options literal. Choose up to 25 ASCII lowercase letters, digits or underscores. The fixture rejects invalid labels. The worktree or suite that owns the label chooses how to shorten or normalize its own names. Empty preserves the v0.3.8 login format.

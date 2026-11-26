@@ -76,6 +76,7 @@ Call the [sqlcheck Go API](REFERENCE.md#sqlcheck) in tests or use the commands b
 | Whether a role has policy coverage for the SQL commands it uses | `CheckPolicyCoverage` | [check-coverage](REFERENCE.md#tabula-check-coverage) |
 | Which rows a role sees or changes for a given scope | `RunRLSMatrix` | [test-rls](REFERENCE.md#tabula-test-rls) |
 | Clone a migrated database for an isolated test, optionally through a selected migration | `postgresfixture.Installation.Through` and `Fixture.Clone` with an application-supplied backend and installer | [postgresfixture](REFERENCE.md#postgresfixture) |
+| Install a test template before acquiring a login that needs migration-created roles | `postgresfixture.Fixture.Prepare` | [Cold-start example](AUTHORIZATION.md#process-login-roles) |
 | Give a test process its own login and clean up abandoned logins | `postgresfixture.Fixture.AcquireLoginRole`, `LoginRole.Release` and `Fixture.PruneLoginRoles` | [Fixture role lifecycle](AUTHORIZATION.md#process-login-roles) |
 | Reclaim a test process's idle databases after a crash | `Fixture.CloneWithLease` and `Fixture.PruneClones` | [Clone ownership](DESIGN-v0.3.9.md) |
 | Drop cached test templates that are no longer used | `postgresfixture.Fixture.Prune` | [postgresfixture](REFERENCE.md#postgresfixture) |

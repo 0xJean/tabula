@@ -33,6 +33,7 @@ func TestInstallIdentity(t *testing.T) {
 	require.Error(t, err)
 	_, err = (postgresfixture.Fixture{}).Clone(t.Context(), p)
 	require.Error(t, err)
+	require.Error(t, (postgresfixture.Fixture{}).Prepare(t.Context(), p))
 	require.Error(t, (postgresfixture.Database{}).Drop(t.Context()))
 	_, err = (postgresfixture.Fixture{}).Prune(t.Context(), time.Hour)
 	require.Error(t, err)
