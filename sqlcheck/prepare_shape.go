@@ -28,13 +28,16 @@ FROM pg_catalog.pg_prepared_statements WHERE name = $1`, name, i+1, in.Type).Sca
 	}
 	for _, col := range s.PhysicalColumns {
 		var matches bool
-		err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT FROM pg_catalog.pg_attribute
+		err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT FROM pg_catalog.pg_attribute AS a
 WHERE attrelid = pg_catalog.to_regclass($1) AND attname = $2 AND attnum > 0 AND NOT attisdropped
-  AND atttypid = pg_catalog.to_regtype($3))`, col.Relation, col.Name, col.Type).Scan(&matches)
+  AND a.atttypid = pg_catalog.to_regtype($3) AND ($4::integer IS NULL OR a.atttypmod = $4))`, col.Relation, col.Name, col.Type, col.TypeMod).Scan(&matches)
 		if err != nil {
 			return err
 		}
 		if !matches {
+			if col.TypeMod != nil {
+				return fmt.Errorf("physical column %s.%s differs from %s with type modifier %d", col.Relation, col.Name, col.Type, *col.TypeMod)
+			}
 			return fmt.Errorf("physical column %s.%s differs from %s", col.Relation, col.Name, col.Type)
 		}
 	}

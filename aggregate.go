@@ -70,6 +70,11 @@ func CountBy[V comparable, T, K, S any](ctx context.Context, rows *Rows[T, K, S]
 	if err := rows.checkOperation(selectOp); err != nil {
 		return nil, err
 	}
+	if where != nil {
+		if err := rows.rejectDynamic(); err != nil {
+			return nil, err
+		}
+	}
 	if _, ok := rows.t.byName[col]; !ok {
 		return nil, fmt.Errorf("%s.CountBy %s: column not declared: %s", rows.t.prefix(), rows.t.name, col)
 	}
@@ -87,11 +92,11 @@ func CountBy[V comparable, T, K, S any](ctx context.Context, rows *Rows[T, K, S]
 	query := "SELECT " + col + ", count(*) FROM " + rows.t.name + " WHERE true" + f.Where() + " GROUP BY " + col
 	args := f.Args()
 	action := "count_by"
-	key := rows.t.name + ".count_by_" + col
-	opCtx, span := rows.start(ctx, action, stmtMeta{key: key}, nil)
+	meta := rows.fixedMeta("count_by_"+col, true)
+	opCtx, span := rows.start(ctx, action, meta, nil)
 	out := make(map[V]int64)
 	var rowCount int64
-	execErr := rows.s.Each(opCtx, query, args, func(scan func(...any) error) error {
+	execErr := rows.executor(meta, nil).Each(opCtx, query, args, func(scan func(...any) error) error {
 		var k V
 		var n int64
 		if err := scan(wrap(&k), &n); err != nil {
@@ -101,7 +106,7 @@ func CountBy[V comparable, T, K, S any](ctx context.Context, rows *Rows[T, K, S]
 		rowCount++
 		return nil
 	})
-	span.finish(opCtx, query, rowCount, execErr, args, nil, false, false)
+	span.finish(opCtx, query, rowCount, execErr, args, nil, meta.secret, false)
 	if execErr != nil {
 		return nil, rows.fail(opCtx, execErr)
 	}
@@ -116,6 +121,11 @@ func scalarAggregate[V, T, K, S any](ctx context.Context, rows *Rows[T, K, S], a
 	if err := rows.checkOperation(selectOp); err != nil {
 		return zero, false, err
 	}
+	if where != nil {
+		if err := rows.rejectDynamic(); err != nil {
+			return zero, false, err
+		}
+	}
 	if _, ok := rows.t.byName[col]; !ok {
 		return zero, false, fmt.Errorf("%s.%s %s: column not declared: %s", rows.t.prefix(), fnName, rows.t.name, col)
 	}
@@ -129,7 +139,7 @@ func scalarAggregate[V, T, K, S any](ctx context.Context, rows *Rows[T, K, S], a
 	}
 	query := scalarSQL(fnName, col, rows.t.name) + f.Where()
 	args := f.Args()
-	meta := stmtMeta{key: rows.t.name + "." + action + "_" + col}
+	meta := rows.fixedMeta(action+"_"+col, true)
 	if err := rows.scan(ctx, action, meta, query, args, target); err != nil {
 		return zero, false, err
 	}

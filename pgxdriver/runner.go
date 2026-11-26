@@ -94,6 +94,9 @@ func (r *Runner[S]) WithinRawTxOptions(ctx context.Context, scope S, opts pgx.Tx
 	if fn == nil {
 		return errors.New("pgxdriver: callback is required")
 	}
+	if r.opts.SQLAuthority.DeniesLegacySQL() {
+		return tabula.ErrLegacySQL
+	}
 	if !r.opts.ExposeTx {
 		return fmt.Errorf("%w: pgxdriver runner does not enable ExposeTx", tabula.ErrCapabilityDenied)
 	}
@@ -153,6 +156,7 @@ func (r *Runner[S]) newBoundSession(tx pgx.Tx, scope S, unscoped, readOnly bool)
 		obs:         r.obs,
 		scopeLog:    r.compiled.policy.ScopeLog,
 		statements:  r.compiled.statements,
+		authority:   r.opts.SQLAuthority,
 		readQueries: readQueries{db: tx, guard: r.compiled.guard},
 	}
 	s.proof = r.opts.SessionKey.Sign(s)
@@ -311,6 +315,7 @@ func (st *sharedState[S]) mint(scope S, unscoped bool) *Session[S] {
 		obs:         obs,
 		scopeLog:    st.runner.compiled.policy.ScopeLog,
 		statements:  st.runner.compiled.statements,
+		authority:   st.runner.opts.SQLAuthority,
 		shared:      st,
 		readQueries: readQueries{db: st.tx, guard: st.runner.compiled.guard},
 	}

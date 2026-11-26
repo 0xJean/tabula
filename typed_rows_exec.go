@@ -45,7 +45,15 @@ func (b *rowExecution[T, S]) call(filters []string, form string, method CallMeth
 	if live := b.family.source.liveValue; live.input != nil {
 		bindings = append(slices.Clip(bindings), live)
 	}
-	return b.d.reg.bindCall(shape, b.s, method, bindings)
+	return b.bindShape(shape, method, bindings)
+}
+
+func (b *rowExecution[T, S]) bindShape(shape *compiledShape, method CallMethod, values []Binding) (AuthorizedStatement, error) {
+	call, err := b.d.reg.bindCall(shape, b.s, method, values)
+	if err == nil {
+		call.quiet = b.family.meta.quiet
+	}
+	return call, err
 }
 
 func (b *rowExecution[T, S]) run(ctx context.Context, action string, call AuthorizedStatement,
@@ -159,7 +167,7 @@ func (b *BoundRowsPlan[T, S]) List(ctx context.Context, choice RowChoice, values
 		}
 		countValues = append(countValues, Binding{in, data.args[position]})
 	}
-	call, err := b.d.reg.bindCall(count, b.s, CallScan, countValues)
+	call, err := b.bindShape(count, CallScan, countValues)
 	if err != nil {
 		return nil, 0, err
 	}

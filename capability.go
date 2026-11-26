@@ -14,4 +14,16 @@ const (
 	DenyUnscopedWrites
 	// DenyCopy rejects binary COPY operations checked via Rows.CheckCopy.
 	DenyCopy
+	// DenyLegacySQL requires registered descriptor calls and forbids SQL
+	// fragments, raw session methods and raw transaction access.
+	DenyLegacySQL
 )
+
+type legacySQLDenial string
+
+func (e legacySQLDenial) Error() string { return string(e) }
+func (legacySQLDenial) Unwrap() error   { return ErrCapabilityDenied }
+
+// ErrLegacySQL means the operation needs hand-written SQL or a shape that
+// has not been registered. It also matches ErrCapabilityDenied.
+const ErrLegacySQL legacySQLDenial = "tabula: this operation requires a registered statement"

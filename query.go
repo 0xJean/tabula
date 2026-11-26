@@ -54,6 +54,9 @@ type KeysetPage[T any] struct {
 // in deterministic (SortColumn, key...) order without OFFSET. Invalid listing
 // options return an error before the filter callback or database is used.
 func (r *Rows[T, K, S]) ListKeyset(ctx context.Context, where func(*Filter), l KeysetListing) (KeysetPage[T], error) {
+	if err := r.rejectDynamic(); err != nil {
+		return KeysetPage[T]{}, err
+	}
 	if err := r.checkOperation(selectOp); err != nil {
 		return KeysetPage[T]{}, err
 	}

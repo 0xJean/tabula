@@ -20,6 +20,8 @@ builds joins, never generates DDL, and never runs hidden callbacks.
 
 Read the README at the Git tag or commit your application builds. The [migration guide](docs/MIGRATION.md) covers upgrading to v0.3. The [changelog](CHANGELOG.md) records release status.
 
+A registry can restrict selected runners and Direct pools to the SQL shapes it issued. Pass its `SQLAuthority` to each role that needs this policy. [Registered execution](docs/AUTHORIZATION.md#registered-execution)
+
 The [v0.4 design](docs/DESIGN-v0.4.md) describes typed predicates, per-shape verification and the driver interface for registered queries.
 
 On the development branch, `DefineRows`, `DefineUpdateMany` and `DefineDeleteMany` register the exact statements a single-table plan can execute. The inventory expands those statements for each assigned PostgreSQL role. [Registered row plans](docs/COOKBOOK.md#registered-single-table-reads-and-writes)

@@ -29,6 +29,7 @@ type typedCompiler struct {
 	reads      map[physicalColumn]catalogType
 	selectCols map[physicalName]map[string]bool
 	hasSecret  bool
+	scopeType  catalogType
 }
 
 func newTypedCompiler(scoped bool, sources ...*occurrence) (*typedCompiler, error) {
@@ -59,17 +60,25 @@ func newTypedCompiler(scoped bool, sources ...*occurrence) (*typedCompiler, erro
 
 // scopePredicate emits only the declared occurrence's scope condition. A
 // database-enforced or global relation never reserves a session parameter.
-func (c *typedCompiler) scopePredicate(src *occurrence) (string, error) {
+func (c *typedCompiler) scopePredicate(src *occurrence, kind catalogType) (string, error) {
 	if _, ok := c.sources[src]; !ok {
 		return "", fmt.Errorf("tabula: undeclared scope occurrence")
 	}
 	if !c.params.scoped || src.scope != ByScopeColumn() {
 		return "", nil
 	}
+	if kind.goType == nil || kind.goType != src.scopeGoType || (c.scopeType.goType != nil && !sameSQLType(c.scopeType, kind)) {
+		return "", fmt.Errorf("tabula: incompatible PostgreSQL type for scope column on %q", src.alias)
+	}
+	col := physicalColumn{src.table, src.scopeColumn}
+	if err := col.record(c.reads, kind); err != nil {
+		return "", err
+	}
+	c.scopeType = kind
 	c.selectCols[src.table][src.scopeColumn] = true
 	c.sources[src] = true
 	c.hasSecret = c.hasSecret || src.scopeSecret
-	return "(" + typedQuote(src.alias) + "." + typedQuote(src.scopeColumn) + " = $1)", nil
+	return "(" + typedQuote(src.alias) + "." + typedQuote(src.scopeColumn) + " = " + kind.cast("$1") + ")", nil
 }
 
 // readRequirements records each physical table once, even if two aliases
@@ -112,10 +121,9 @@ func (c *typedCompiler) read(f *fieldRef) error {
 		return fmt.Errorf("tabula: field is outside the statement's relation scope")
 	}
 	column := physicalColumn{f.source.table, f.name}
-	if prev, ok := c.reads[column]; ok && !sameSQLType(prev, f.kind) {
-		return fmt.Errorf("tabula: conflicting PostgreSQL types for %s.%s", f.source.table.sql(), typedQuote(f.name))
+	if err := column.record(c.reads, f.kind); err != nil {
+		return err
 	}
-	c.reads[column] = f.kind
 	c.selectCols[f.source.table][f.name] = true
 	c.hasSecret = c.hasSecret || f.secret
 	return nil
@@ -137,7 +145,11 @@ func (s Slot[V]) Expr() Expr[V] {
 }
 
 func (i *typedInput) render(c *typedCompiler) (string, error) {
-	return c.params.parameter(i)
+	slot, err := c.params.parameter(i)
+	if err != nil {
+		return "", err
+	}
+	return i.kind.cast(slot), nil
 }
 
 func sameSQLType(a, b catalogType) bool {
@@ -191,8 +203,8 @@ func And(first, second Pred, rest ...Pred) Pred {
 func (terms conjunction) render(c *typedCompiler) (string, error) {
 	parts := make([]string, len(terms))
 	for i, term := range terms {
-		if term.part == nil {
-			return "", fmt.Errorf("tabula: undeclared predicate")
+		if term.part == nil || !sameSQLType(term.kind.id, Bool().id) {
+			return "", fmt.Errorf("tabula: AND requires a declared boolean predicate")
 		}
 		part, err := term.part.render(c)
 		if err != nil {

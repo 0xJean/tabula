@@ -103,6 +103,8 @@ bounded-cardinality labels (`db.system`, `tabula.table`, `tabula.action`, `tabul
 `tabula.error_class`) and omit per-tenant `tabula.scope` and statement/inline-fingerprint
 `tabula.key` values. See the [Go reference](REFERENCE.md#oteltabula).
 
+Registered driver calls use the statement key and parameter redaction metadata issued with the shape. A write that returns several rows emits one observation for its stream. The driver and descriptor use the existing signal mask to avoid duplicate observations. [Registered execution](AUTHORIZATION.md#registered-execution)
+
 ## 6. Database-side slow statement logs
 
 Client-side `LogSlow` captures Go-observed latency including connection checkout and network

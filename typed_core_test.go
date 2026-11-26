@@ -32,7 +32,7 @@ func TestTypedFieldsAndBindings(t *testing.T) {
 	require.Panics(t, func() { FieldOf(r, "id", Text()) })
 	comp, err := newTypedCompiler(true, r.source)
 	require.NoError(t, err)
-	scopePredicate, err := comp.scopePredicate(r.source)
+	scopePredicate, err := comp.scopePredicate(r.source, catalogType{})
 	require.NoError(t, err)
 	require.Empty(t, scopePredicate)
 	selects, fields, err := comp.project(view.entry, []Projection{Project(out, id.Expr())})
@@ -43,7 +43,7 @@ func TestTypedFieldsAndBindings(t *testing.T) {
 	filter := And(Eq(id.Expr(), in.Expr()), IsNotDistinct(FieldOf(r, "label", Text()).Expr(), label.Expr()), Eq(id.Expr(), in.Expr()))
 	sql, err := filter.part.render(comp)
 	require.NoError(t, err)
-	require.Equal(t, `(("i"."id" = $1) AND ("i"."label" IS NOT DISTINCT FROM $2) AND ("i"."id" = $1))`, sql)
+	require.Equal(t, `(("i"."id" = CAST($1 AS "pg_catalog"."int8")) AND ("i"."label" IS NOT DISTINCT FROM CAST($2 AS "pg_catalog"."text")) AND ("i"."id" = CAST($1 AS "pg_catalog"."int8")))`, sql)
 	args, err := comp.params.bind(nil, []Binding{BindValue(label, "value"), BindValue(in, 9)})
 	require.NoError(t, err)
 	require.Equal(t, []any{int64(9), "value"}, args)
@@ -53,7 +53,7 @@ func TestTypedFieldsAndBindings(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, shape.shape.Inputs, 2)
 	require.Equal(t, []ShapeColumn{
-		{r.source.table.sql(), "id", Int8().id.qualified()}, {r.source.table.sql(), "label", Text().id.qualified()},
+		{Relation: r.source.table.sql(), Name: "id", Type: Int8().id.qualified()}, {Relation: r.source.table.sql(), Name: "label", Type: Text().id.qualified()},
 	}, shape.shape.PhysicalColumns)
 	for _, param := range shape.shape.Inputs {
 		require.True(t, param.Secret)
@@ -84,12 +84,12 @@ func TestTypedFieldsAndBindings(t *testing.T) {
 	sr := FromTable(st, "j", ByScopeColumn())
 	scoped, err := newTypedCompiler(true, sr.source)
 	require.NoError(t, err)
-	scopePredicate, err = scoped.scopePredicate(sr.source)
+	scopePredicate, err = scoped.scopePredicate(sr.source, CatalogType[customTenant]("pg_catalog", "text", nil).id)
 	require.NoError(t, err)
-	require.Equal(t, `("j"."scope_id" = $1)`, scopePredicate)
+	require.Equal(t, `("j"."scope_id" = CAST($1 AS "pg_catalog"."text"))`, scopePredicate)
 	slot, err := in.Expr().part.render(scoped)
 	require.NoError(t, err)
-	require.Equal(t, "$2", slot)
+	require.Equal(t, `CAST($2 AS "pg_catalog"."int8")`, slot)
 	args, err = scoped.params.bind("scope", []Binding{BindValue(in, 7)})
 	require.NoError(t, err)
 	require.Equal(t, []any{"scope", int64(7)}, args)
@@ -118,7 +118,7 @@ func TestTypedShapeRegistrationAndAuthority(t *testing.T) {
 	shape, err := c.finishShape(key, query, catalogType{}, meta)
 	require.NoError(t, err)
 	require.Equal(t, []string{physical}, shape.shape.ForceRLS)
-	require.Equal(t, []string{"public"}, shape.shape.SchemaUsage)
+	require.Equal(t, []string{"pg_catalog", "public"}, shape.shape.SchemaUsage)
 	require.Equal(t, []ShapeInput{{Name: "id", Type: Int8().id.qualified()}}, shape.shape.Inputs)
 	extra := Input("later", Int8())
 	_, err = extra.Expr().part.render(c)
@@ -130,7 +130,7 @@ func TestTypedShapeRegistrationAndAuthority(t *testing.T) {
 	require.NoError(t, view.registerShapes(key, []*compiledShape{shape}))
 	snap := reg.DefinedViews()[0]
 	require.Equal(t, key, snap.StatementQueries[key])
-	require.Equal(t, `SELECT "i"."id" AS "id" FROM "public"."items" AS "i" WHERE ("i"."id" = $1)`, snap.Statements[key])
+	require.Equal(t, `SELECT "i"."id" AS "id" FROM "public"."items" AS "i" WHERE ("i"."id" = CAST($1 AS "pg_catalog"."int8"))`, snap.Statements[key])
 	snap.StatementShapes[key].Privileges[0].Columns[0] = "changed"
 	snap.StatementShapes[key].ForceRLS[0] = "changed"
 	snap.StatementShapes[key].PhysicalColumns[0].Name = "changed"
@@ -243,7 +243,7 @@ func TestTypedColumnScopeBinding(t *testing.T) {
 			_, err = c.finishShape("missing", sql, scopeType.id, StatementShape{Effects: EffectRead})
 			require.ErrorContains(t, err, "missing scope predicate")
 		}
-		filter, err := c.scopePredicate(src)
+		filter, err := c.scopePredicate(src, scopeType.id)
 		require.NoError(t, err)
 		key := "count_all_items"
 		if scoped {
@@ -267,7 +267,7 @@ func TestTypedColumnScopeBinding(t *testing.T) {
 		require.NoError(t, err)
 		if scoped {
 			require.Equal(t, []any{customTenant("group")}, query.Args)
-			require.Equal(t, []ShapeColumn{{src.table.sql(), "scope_id", scopeType.id.qualified()}}, shape.shape.PhysicalColumns)
+			require.Equal(t, []ShapeColumn{{Relation: src.table.sql(), Name: "scope_id", Type: scopeType.id.qualified()}}, shape.shape.PhysicalColumns)
 		} else {
 			require.Empty(t, query.Args)
 			require.Empty(t, shape.shape.PhysicalColumns)

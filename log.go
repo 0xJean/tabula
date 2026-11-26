@@ -88,6 +88,7 @@ func Quiet() StatementOption { return func(m *stmtMeta) { m.quiet = true } }
 func Secret() StatementOption { return func(m *stmtMeta) { m.secret = true } }
 
 type stmtMeta struct {
+	fixed  *compiledShape
 	key    string
 	quiet  bool
 	secret bool

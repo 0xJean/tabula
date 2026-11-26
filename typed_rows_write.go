@@ -136,10 +136,9 @@ func (src rowSource) renderMutation(c *typedCompiler, command string, set []RowA
 			// Assignment targets contribute a physical type and secrecy, but
 			// do not require SELECT unless an expression also reads them.
 			col := physicalColumn{src.rel.table, f.name}
-			if prior, ok := c.reads[col]; ok && !sameSQLType(prior, f.kind) {
-				return "", StatementShape{}, fmt.Errorf("tabula: conflicting assignment type for %q", f.name)
+			if err := col.record(c.reads, f.kind); err != nil {
+				return "", StatementShape{}, err
 			}
-			c.reads[col] = f.kind
 			c.hasSecret = c.hasSecret || f.secret
 			if err := checkRowExpr(a.part, nil); err != nil {
 				return "", StatementShape{}, err

@@ -3,8 +3,10 @@
 package integration_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"testing"
@@ -76,7 +78,7 @@ func TestRegisteredRowPlans(t *testing.T) {
 			exec("GRANT SELECT(id,scope_id,revision,removed),DELETE ON " + table + " TO " + remover)
 
 			trace := new(rowTracer)
-			reg := tabula.NewRegistry(tabula.RegistryConfig[itemScope]{Tracer: trace, ScopeID: func(s itemScope) any { return int64(s) }})
+			reg := tabula.NewRegistry(tabula.RegistryConfig[itemScope]{Deny: tabula.DenyLegacySQL, Tracer: trace, ScopeID: func(s itemScope) any { return int64(s) }})
 			tab := tabula.Define(reg, tabula.TableSpec[planItem, int64]{Name: table, AllowDelete: true})
 			rel := tabula.FromTable(tab, "i", tabula.ByScopeColumn())
 			scope := tabula.FieldOf(rel, "scope_id", tabula.CatalogType[itemScope]("pg_catalog", "int8", nil))
@@ -88,7 +90,8 @@ func TestRegisteredRowPlans(t *testing.T) {
 			minRank, newRank := tabula.Input("min_rank", tabula.Int4()), tabula.Input("new_rank", tabula.Int4())
 			expected, remove := tabula.Input("previous", tabula.Int4()), tabula.Input("remove", tabula.Bool())
 			out := tabula.DefineView(reg, tabula.ViewSpec[planResult]{Name: "entries"})
-			filter := tabula.RowFilter{Optional: []tabula.RowPredicate{{Name: "minimum", When: tabula.Ge(id.Expr(), minimum.Expr())}}}
+			quiet := []tabula.StatementOption{tabula.Quiet()}
+			filter := tabula.RowFilter{Observe: quiet, Optional: []tabula.RowPredicate{{Name: "minimum", When: tabula.Ge(id.Expr(), minimum.Expr())}}}
 			search := tabula.DefineRows(out, "search", src, tabula.RowsSpec{RowFilter: filter,
 				Orders: []tabula.RowOrder{{Name: "forward", Terms: []tabula.RowTerm{tabula.Asc(label), tabula.Desc(id)}}, {Name: "reverse", Terms: []tabula.RowTerm{tabula.Desc(label), tabula.Asc(id)}}},
 				Pages:  tabula.RowPages{Unpaged: true, Offset: true, Keyset: true, MaxLimit: 10, MaxOffset: 12}},
@@ -105,7 +108,7 @@ func TestRegisteredRowPlans(t *testing.T) {
 			grouped := tabula.DefineRows(groups, "counts", src, tabula.RowsSpec{RowFilter: filter, GroupBy: []tabula.RowColumn{label.Column()},
 				Orders: []tabula.RowOrder{{Name: "label", Terms: []tabula.RowTerm{tabula.Asc(label)}}}, Pages: tabula.RowPages{Offset: true, MaxLimit: 3, MaxOffset: 10}},
 				tabula.Project(tabula.Output(groups, "label", tabula.Text()), label.Expr()), tabula.Project(tabula.Output(groups, "n", tabula.Int8()), tabula.CountOf(id.Expr())))
-			base := tabula.MutationSpec{RowFilter: tabula.RowFilter{Where: tabula.Ge(id.Expr(), minimum.Expr())}, Version: tabula.ExpectVersion(revision, expected)}
+			base := tabula.MutationSpec{RowFilter: tabula.RowFilter{Observe: quiet, Where: tabula.Ge(id.Expr(), minimum.Expr())}, Version: tabula.ExpectVersion(revision, expected)}
 			del := tabula.DefineDeleteMany(src, "remove_live", base)
 			base.Optional = []tabula.RowPredicate{{Name: "rank", When: tabula.Ge(rank.Expr(), minRank.Expr())}}
 			mod := tabula.DefineUpdateMany(src, "change", base,
@@ -156,9 +159,11 @@ func TestRegisteredRowPlans(t *testing.T) {
 				require.Contains(t, failure, "set.priority")
 			}
 			exec("GRANT UPDATE(rank) ON " + table + " TO " + editor)
+			var logBytes bytes.Buffer
+			log := tabula.LogConfig{Level: tabula.LogAll, Logger: slog.New(slog.NewJSONHandler(&logBytes, nil))}
 			run := func(role string, scope itemScope, body rowCallback) {
 				t.Helper()
-				require.NoError(t, runRowPlan(t, db, pool, driver, reg.SQLAuthority(), role, scope, body))
+				require.NoError(t, runRowPlan(t, db, pool, driver, reg.SQLAuthority(), role, scope, log, body))
 			}
 			run(reader, 1, func(ctx context.Context, s tabula.Session[itemScope]) error {
 				bound := search.Bind(s)
@@ -237,6 +242,14 @@ func TestRegisteredRowPlans(t *testing.T) {
 				require.EqualValues(t, 4, rows[0].ID)
 				return nil
 			})
+			require.Empty(t, logBytes.String())
+			err = runRowPlan(t, db, pool, driver, reg.SQLAuthority(), reader, 1, log, func(ctx context.Context, s tabula.Session[itemScope]) error {
+				_, err := mod.Bind(s).UpdateMany(ctx, "priority", nil, tabula.BindValue(expected, 0), tabula.BindValue(minimum, 1), tabula.BindValue(newRank, 4))
+				return err
+			})
+			require.Error(t, err)
+			require.Contains(t, logBytes.String(), "tabula.statement_failed")
+			require.Contains(t, logBytes.String(), table+".change.scoped.set.priority")
 			var remaining int
 			require.NoError(t, db.QueryRowContext(ctx, "SELECT count(*) FROM "+table).Scan(&remaining))
 			require.Equal(t, 3, remaining)

@@ -127,7 +127,7 @@ func NewRegistry[S any](cfg RegistryConfig[S]) *Registry[S] {
 		prefix = "tabula"
 	}
 	r := &Registry[S]{
-		statementIssuer:     new(statementIssuer),
+		statementIssuer:     &statementIssuer{strict: cfg.Deny&DenyLegacySQL != 0},
 		prefix:              prefix,
 		scopeType:           reflect.TypeFor[S](),
 		scopeID:             cfg.ScopeID,

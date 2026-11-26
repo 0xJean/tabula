@@ -19,9 +19,13 @@ type PGType[V any] struct {
 	nullable bool
 }
 
+// cast binds even a standalone input to its declared PostgreSQL type.
+func (t catalogType) cast(value string) string { return "CAST(" + value + " AS " + t.qualified() + ")" }
+
 type catalogType struct {
-	schema, name string
-	goType       reflect.Type
+	schema, name  string
+	goType        reflect.Type
+	varcharLength int32
 }
 
 // PostgreSQL identifiers are quoted one component at a time. Reject names
@@ -51,7 +55,7 @@ func CatalogType[V any](schema, name string, encode func(V) any) PGType[V] {
 	default:
 		nullable = nullable || typ != reflect.TypeFor[time.Time]()
 	}
-	return PGType[V]{id: catalogType{schema, name, typ}, encode: encode, nullable: nullable}
+	return PGType[V]{id: catalogType{schema: schema, name: name, goType: typ}, encode: encode, nullable: nullable}
 }
 
 // Bool declares PostgreSQL boolean.
@@ -65,6 +69,19 @@ func Int8() PGType[int64] { return CatalogType[int64]("pg_catalog", "int8", nil)
 
 // Text declares PostgreSQL text.
 func Text() PGType[string] { return CatalogType[string]("pg_catalog", "text", nil) }
+
+// Varchar declares PostgreSQL character varying with a column length in
+// characters. Verification checks the column modifier. The parameter uses
+// unbounded varchar so comparisons preserve the entire value and PostgreSQL
+// applies its native length rules on assignment.
+func Varchar(n int) PGType[string] {
+	if n < 1 || n > 10_485_760 {
+		panic("tabula.Varchar: length must be between 1 and 10485760 characters")
+	}
+	t := CatalogType[string]("pg_catalog", "varchar", nil)
+	t.id.varcharLength = int32(n)
+	return t
+}
 
 // Timestamptz declares PostgreSQL timestamp with time zone.
 func Timestamptz() PGType[time.Time] { return CatalogType[time.Time]("pg_catalog", "timestamptz", nil) }

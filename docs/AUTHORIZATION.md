@@ -29,6 +29,24 @@ One read-only query checks effective grants for the named role, including inheri
 
 An absent role returns one role finding. Absent objects and missing grants appear in the sorted results. A canceled query or database error fails the check. The application owns its startup deadline, role selection and response to findings. RLS policy behavior and excess grants have separate audits.
 
+## Registered execution
+
+Enable `DenyLegacySQL` on a registry and pass its verification credential to each runner serving the corresponding role.
+
+```go
+reg := tabula.NewRegistry(tabula.RegistryConfig[int64]{Deny: tabula.DenyLegacySQL})
+authority := reg.SQLAuthority()
+runner, err := stdsql.NewRunner(db, scope, stdsql.RunnerOptions{SQLAuthority: authority})
+```
+
+Use the same field on `pgxdriver.RunnerOptions`. For a read-only pool, use `stdsql.DirectSQLAuthority(authority)` or `pgxdriver.DirectWithConfig` with `DirectConfig{SQLAuthority: authority}`. The zero credential permits the existing text methods. A registry with a different credential cannot execute its descriptors on a strict session. A session key can additionally restrict which concrete session instances the registry trusts.
+
+The registry signs each call for the receiving session, method, statement and ordered parameters. Registered executions still pass through the session guard, method policy, role and observability hooks. Streams returning rows from a write use the Returning policy. Direct rejects writes, row locks and transaction-level advisory locks before acquiring a connection.
+
+Fixed generated operations include primary-key reads and locks, insert, save, soft delete, physical delete, declared single-row upserts, and declared scalar and grouped aggregates. A baseline list or find uses the default ordering and the session's live-row predicate. Strict declarations accept table and column identifiers and default ordering over declared columns with optional direction and null placement. Filter callbacks, run-time string order, dynamic column lists and batch sizes require an explicitly compiled alternative. A fragment-based upsert, `QuerySpec`, hand-written `Statement`, and raw transaction entry are rejected. `ErrLegacySQL` matches `ErrCapabilityDenied`.
+
+PostgreSQL grants and RLS still apply. A separately acquired database connection has its own privileges. The binary COPY protocol retains its descriptor and session checks, including the independent `DenyCopy` capability.
+
 ## Table write modes
 
 Choose a descriptor for each execution role and pass that role's definitions to `CollectPrivilegeNeeds` and `VerifyStatements`. Every role also needs schema `USAGE`. PostgreSQL evaluates grants, row policies, defaults and triggers when the statement runs.

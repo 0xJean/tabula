@@ -97,7 +97,7 @@ func TestRowsPlanBindingAndObservation(t *testing.T) {
 	require.NotContains(t, def.Statements[count], "$3")
 	require.Equal(t, []string{"id", "label", "removed", "scope_id"}, def.StatementShapes[key].Privileges[0].Columns)
 	require.NotContains(t, def.Statements[key], `"rank" >`)
-	require.Contains(t, def.Statements[key], `$2::"pg_catalog"."int4" AS "rank"`)
+	require.Contains(t, def.Statements[key], `CAST($2 AS "pg_catalog"."int4") AS "rank"`)
 
 	s := &rowPlanSession{fakeSession: fakeSession{tenant: "first"}, authority: reg.SQLAuthority()}
 	b := p.Bind(s)
@@ -314,10 +314,10 @@ func TestRowsSourceStatusAndTypes(t *testing.T) {
 		require.NotContains(t, q.Query, "closed")
 		require.NotContains(t, q.Query, "active")
 		if alive == nil {
-			require.Contains(t, q.Query, " <> $1")
+			require.Contains(t, q.Query, " <> CAST($1 AS ")
 			require.Equal(t, []any{"closed"}, q.Args)
 		} else {
-			require.Contains(t, q.Query, " = $1")
+			require.Contains(t, q.Query, " = CAST($1 AS ")
 			require.Equal(t, []any{"active"}, q.Args)
 		}
 	}
@@ -344,4 +344,28 @@ func TestRowsPlanRegistrationOrder(t *testing.T) {
 		return out.Definition()
 	}
 	require.Equal(t, build(false), build(true))
+}
+
+func TestRowsMutationTargetModifier(t *testing.T) {
+	type entry struct {
+		ID    int64  `db:"id,key"`
+		Label string `db:"label"`
+	}
+	reg := NewRegistry(RegistryConfig[customTenant]{})
+	tab := Define(reg, TableSpec[entry, int64]{Name: "public.items", RelationScope: Global()})
+	rel := FromTable(tab, "i", Global())
+	src := RowsFrom(tab, rel)
+	label := FieldOf(rel, "label", Varchar(4))
+	other := FieldOf(rel, "label", Varchar(5))
+	id := FieldOf(rel, "id", Int8())
+	spec := MutationSpec{RowFilter: RowFilter{Where: Eq(id.Expr(), Input("id", Int8()).Expr())}}
+	set := func(value Expr[string]) RowSet {
+		return RowSet{Name: "label", Assignments: []RowAssignment{Assign(label, value)}}
+	}
+	_, err := TryDefineUpdateMany(src, "conflict", spec, set(other.Expr()))
+	require.Error(t, err)
+	DefineUpdateMany(src, "change", spec, set(Input("next", Varchar(4)).Expr()))
+	shape := tab.Definition().StatementShapes["change.global.set.label"]
+	require.Contains(t, shape.PhysicalColumns, ShapeColumn{Relation: src.rel.table.sql(), Name: "label", Type: Varchar(4).id.qualified(), TypeMod: new(int32(8))})
+	require.Contains(t, shape.Privileges, DefinedPrivilege{Table: src.rel.table.sql(), Privilege: "SELECT", Columns: []string{"id"}})
 }

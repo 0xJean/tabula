@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-
-	"github.com/0xJean/tabula/internal/pgstmt"
 )
 
 // Ne compares two expressions for inequality.
@@ -203,32 +201,4 @@ func checkRowTerms(terms []Pred, visit func(expressionPart) error) error {
 		}
 	}
 	return nil
-}
-
-// Freeze exact parameter types even for standalone projection slots and
-// pairs of inputs with no column from which PostgreSQL can infer a type.
-func castRowInputs(query string, inputs []ShapeInput) (string, error) {
-	if len(inputs) == 0 {
-		return query, nil
-	}
-	tokens, err := pgstmt.ScanFragment(query)
-	if err != nil {
-		return "", err
-	}
-	var out strings.Builder
-	last := 0
-	for _, tok := range tokens {
-		if tok.Kind != pgstmt.Param {
-			continue
-		}
-		if tok.ParamNum < 1 || tok.ParamNum > len(inputs) {
-			return "", fmt.Errorf("tabula: unknown parameter position %d", tok.ParamNum)
-		}
-		out.WriteString(query[last:tok.End])
-		out.WriteString("::")
-		out.WriteString(inputs[tok.ParamNum-1].Type)
-		last = tok.End
-	}
-	out.WriteString(query[last:])
-	return out.String(), nil
 }

@@ -131,7 +131,7 @@ func (src rowSource) fromSQL() string {
 }
 
 func (src rowSource) where(c *typedCompiler, predicates []Pred) ([]string, error) {
-	scope, err := c.scopePredicate(src.rel)
+	scope, err := c.scopePredicate(src.rel, src.scopeType)
 	if err != nil {
 		return nil, err
 	}
@@ -271,17 +271,7 @@ func compileRowFamily[T, S any](d *descriptor[T, S], name string, src rowSource,
 			return nil, fmt.Errorf("%s: %w", key, err)
 		}
 		c.hasSecret = c.hasSecret || family.meta.secret
-		if c.params.scoped {
-			meta.SchemaUsage = append(meta.SchemaUsage, src.scopeType.schema)
-		}
-		for _, input := range c.params.order {
-			meta.SchemaUsage = append(meta.SchemaUsage, input.kind.schema)
-		}
 		shape, err := c.finishShape(key, query, src.scopeType, meta)
-		if err != nil {
-			return nil, err
-		}
-		shape.sql, err = castRowInputs(shape.sql, shape.shape.Inputs)
 		if err != nil {
 			return nil, err
 		}

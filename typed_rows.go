@@ -114,9 +114,6 @@ func (p *RowsPlan[T, S]) render(c *typedCompiler, src rowSource, project []Proje
 			return "", StatementShape{}, err
 		}
 		selectSQL, fields = strings.Join(columns, ", "), result
-		for _, col := range p.view.cols {
-			c.hasSecret = c.hasSecret || col.secret
-		}
 	}
 	terms, err := src.where(c, predicates)
 	if err != nil {

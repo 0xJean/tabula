@@ -21,7 +21,7 @@ func TestPrepareTypedReadDescription(t *testing.T) {
 	tx, err := db.BeginTx(ctx, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = tx.Rollback() })
-	_, err = tx.ExecContext(ctx, "CREATE TEMP TABLE items (id bigint, label text)")
+	_, err = tx.ExecContext(ctx, "CREATE TEMP TABLE items (id bigint, label text, short varchar(4))")
 	require.NoError(t, err)
 	_, err = tx.ExecContext(ctx, "CREATE TEMP SEQUENCE calls")
 	require.NoError(t, err)
@@ -34,6 +34,8 @@ func TestPrepareTypedReadDescription(t *testing.T) {
 		{"SELECT $1::bigint AS id", tabula.StatementShape{}, "inputs"},
 		{"SELECT id FROM pg_temp.items", tabula.StatementShape{PhysicalColumns: []tabula.ShapeColumn{{Relation: "pg_temp.items", Name: "id", Type: "text"}}}, "physical column"},
 		{"SELECT id FROM pg_temp.items", tabula.StatementShape{Result: []tabula.ShapeField{{Name: "id", Type: "text"}}}, "result types"},
+		{"SELECT short FROM pg_temp.items", tabula.StatementShape{PhysicalColumns: []tabula.ShapeColumn{{Relation: "pg_temp.items", Name: "short", Type: "pg_catalog.varchar", TypeMod: new(int32(8))}}}, ""},
+		{"SELECT short FROM pg_temp.items", tabula.StatementShape{PhysicalColumns: []tabula.ShapeColumn{{Relation: "pg_temp.items", Name: "short", Type: "pg_catalog.varchar", TypeMod: new(int32(6))}}}, "type modifier"},
 		{"SELECT id,label FROM pg_temp.items", tabula.StatementShape{Result: []tabula.ShapeField{{Name: "id", Type: "bigint"}}}, "result fields"},
 		{"SELECT id,label FROM pg_temp.items", tabula.StatementShape{Result: []tabula.ShapeField{{Name: "label", Type: "text"}, {Name: "id", Type: "bigint"}}}, "result fields"},
 		{"SELECT nextval('pg_temp.calls') AS id", tabula.StatementShape{Result: []tabula.ShapeField{{Name: "id", Type: "bigint"}}}, ""},

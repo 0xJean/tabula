@@ -29,6 +29,9 @@ func SetNow(column string) Assignment { return Assignment{column: column} }
 // Like Set, it checks the affected row count and does not perform version CAS.
 // Key, scope, deleted, version and once columns cannot be expression targets.
 func (r *Rows[T, K, S]) SetExpr(ctx context.Context, key K, assignments ...Assignment) error {
+	if err := r.rejectDynamic(); err != nil {
+		return err
+	}
 	if err := r.checkWriteAccess(updateOp); err != nil {
 		return err
 	}

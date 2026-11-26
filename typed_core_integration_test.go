@@ -3,6 +3,7 @@
 package tabula_test
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/0xJean/tabula"
 	"github.com/0xJean/tabula/sqlcheck"
+	"github.com/0xJean/tabula/stdsql"
 	"github.com/stretchr/testify/require"
 )
 
@@ -72,18 +74,25 @@ FROM pg_catalog.pg_attribute
 WHERE attrelid = pg_catalog.to_regclass($1) AND attname = $2 AND NOT attisdropped`, col.Relation, col.Name, col.Type).Scan(&sameType)
 	require.NoError(t, err)
 	require.True(t, sameType)
-	sess := &pgTxSession[struct{}]{tx: tx}
+	require.NoError(t, tx.Rollback())
 	find := func(scope string, request int64) (int64, error) {
 		t.Helper()
-		_, err := tx.ExecContext(ctx, "SELECT pg_catalog.set_config('demo.scope', $1, true)", scope)
+		runner, err := stdsql.NewRunner(db, stdsql.ScopePolicy[struct{}]{
+			ManagedVars: []string{"demo.scope"},
+			ScopeVars:   func(struct{}) map[string]string { return map[string]string{"demo.scope": scope} },
+		}, stdsql.RunnerOptions{SQLAuthority: authority, Role: role})
 		require.NoError(t, err)
-		call, err := bind(sess, request)
-		require.NoError(t, err)
-		query, err := authority.Open(sess, tabula.CallScan, call)
-		require.NoError(t, err)
-		require.Equal(t, []any{request}, query.Args)
 		var id int64
-		err = sess.Scan(ctx, query.Query, query.Args, &id)
+		err = runner.WithinReadOnly(ctx, struct{}{}, func(c context.Context, s *stdsql.Session[struct{}]) error {
+			call, err := bind(s, request)
+			require.NoError(t, err)
+			view, err := authority.Open(s, tabula.CallScan, call)
+			require.NoError(t, err)
+			require.Equal(t, []any{request}, view.Args)
+			require.ErrorIs(t, s.Scan(c, view.Query, view.Args, &id), tabula.ErrLegacySQL)
+			require.ErrorIs(t, s.EachAuthorized(c, call, nil), tabula.ErrStatementAuthority)
+			return s.ScanAuthorized(c, call, &id)
+		})
 		return id, err
 	}
 	id, err := find("10", 1)
@@ -94,11 +103,63 @@ WHERE attrelid = pg_catalog.to_regclass($1) AND attname = $2 AND NOT attisdroppe
 	id, err = find("20", 2)
 	require.NoError(t, err)
 	require.EqualValues(t, 2, id)
-	require.NoError(t, tx.Rollback())
 
 	exec("ALTER TABLE " + table + " NO FORCE ROW LEVEL SECURITY")
 	missing, err = sqlcheck.CheckReadiness(ctx, db, role, check)
 	require.NoError(t, err)
 	require.Len(t, missing, 1)
 	require.Equal(t, "FORCE RLS", missing[0].Privilege)
+}
+
+func TestTypedReturningStreamUsesWritePolicy(t *testing.T) {
+	dsn := os.Getenv("TABULA_TEST_DSN")
+	require.NotEmpty(t, dsn)
+	db, err := sql.Open("postgres", dsn)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	ctx := t.Context()
+	table := fmt.Sprintf("public.tabula_entries_%d", time.Now().UnixNano())
+	_, err = db.ExecContext(ctx, "CREATE TABLE "+table+" (id bigint primary key, label text)")
+	require.NoError(t, err)
+	t.Cleanup(func() { _, err := db.Exec("DROP TABLE " + table); require.NoError(t, err) })
+	_, err = db.ExecContext(ctx, "INSERT INTO "+table+" VALUES (1,'first'),(2,'second')")
+	require.NoError(t, err)
+	authority, bind, err := tabula.ReturningRowsFixture(table)
+	require.NoError(t, err)
+	runner := func(policy tabula.StatementPolicy) *stdsql.Runner[struct{}] {
+		r, err := stdsql.NewRunner(db, stdsql.NoScopePolicy(), stdsql.RunnerOptions{SQLAuthority: authority, Statements: policy})
+		require.NoError(t, err)
+		return r
+	}
+	scope := struct{}{}
+	read := runner(tabula.StatementPolicy{Read: []string{"select"}})
+	require.NoError(t, read.Within(ctx, scope, func(c context.Context, s *stdsql.Session[struct{}]) error {
+		call, err := bind(s)
+		require.NoError(t, err)
+		require.ErrorIs(t, s.EachAuthorized(c, call, nil), tabula.ErrForbiddenStatement)
+		return nil
+	}))
+	write := runner(tabula.StatementPolicy{Write: []string{"update"}, RequireReturning: true})
+	require.NoError(t, write.WithinReadOnly(ctx, scope, func(_ context.Context, s *stdsql.Session[struct{}]) error {
+		_, err := bind(s)
+		require.ErrorIs(t, err, tabula.ErrReadOnly)
+		return nil
+	}))
+	require.NoError(t, write.Within(ctx, scope, func(c context.Context, s *stdsql.Session[struct{}]) error {
+		call, err := bind(s)
+		require.NoError(t, err)
+		require.ErrorIs(t, s.ScanAuthorized(c, call), tabula.ErrStatementAuthority)
+		var ids []int64
+		err = s.EachAuthorized(c, call, func(scan func(...any) error) error {
+			var id int64
+			if err := scan(&id); err != nil {
+				return err
+			}
+			ids = append(ids, id)
+			return nil
+		})
+		require.NoError(t, err)
+		require.ElementsMatch(t, []int64{1, 2}, ids)
+		return nil
+	}))
 }
