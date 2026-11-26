@@ -3,7 +3,7 @@
 All notable changes are listed here. The project follows semantic versioning; before
 v1.0 a minor version may contain breaking changes.
 
-## v0.4.1 — unreleased
+## v0.4.1 — 2026-11-26
 
 - `DefineRead` registers explicit inner, left and cross joins, including self-joins. A left join keeps right-side scope and live-row filters in its match condition. Each occurrence contributes its column grants and row-security requirements. [Explicit joins](docs/COOKBOOK.md#explicit-joins)
 - `In`, `Any`, `Like` and `ILike` compose with typed predicates. An `ArrayOf` input binds a variable-size list to one PostgreSQL parameter. [Migration guide](docs/MIGRATION.md#from-v040-to-v041)
