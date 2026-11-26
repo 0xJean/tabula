@@ -239,3 +239,24 @@ Call `Fixture.Prune(ctx, maxIdle, keep...)` to remove idle templates and abandon
 Application login roles that use `SET LOCAL ROLE` through `stdsql.Runner` or `pgxdriver.Runner` should hold no direct object access of their own. Run `sqlcheck.CheckLoginRole` or `tabula check-login-role --role app_login --member-of app_reader,app_writer --schemas public` to verify `LOGIN NOINHERIT`, absence of `SUPERUSER`/`BYPASSRLS`/`CREATEROLE`/`CREATEDB`/`REPLICATION`, exact role memberships (including PostgreSQL 16+ per-membership `WITH INHERIT TRUE` grants), zero direct table or column grants, zero owned objects and no `CREATE` privilege on selected schemas.
 
 Set `"AuditSecurityCalls": true` in `inventory.json` (or `InventoryConfig.AuditSecurityCalls = true`) to collect typed call sites for `NewSessionKey`, `Registry.Seal`, `SessionKey.Sign`, keyed runner/Direct factories, `WithoutTransaction` / `MarkTransaction` / `InTransaction`, and both drivers' raw transaction access (`WithinRaw`, `RawSession.Tx`, `ExposeTx`) across import aliases and escaped function or method values. Field targets include direct selections, fields promoted by embedding, and keyed struct literals.
+
+## Process login roles
+
+Give each process its own login when independent test suites share a disposable cluster. Acquire the login after its membership roles exist, then pass its name to the test database's CONNECT grant and its credentials directly to the client configuration.
+
+```go
+login, err := fixture.AcquireLoginRole(ctx, postgresfixture.LoginRoleOptions{
+    MemberOf: []string{"fixture_reader", "fixture_writer"},
+})
+if err != nil {
+    return err
+}
+defer func() { err = errors.Join(err, login.Release(cleanupCtx)) }()
+
+// The host grants CONNECT only on the test database it just created.
+return runSuite(ctx, login.Name(), login.Password())
+```
+
+In this example the suite function has a named error result. Supply a live cleanup context at shutdown, and close business pools before releasing the handle. An interrupted worker leaves a versioned role mark. On its first observation of an unlocked login with no client sessions, Prune records the server time. A later sweep can remove that login and its database CONNECT grants after maxIdle. An observed client connection clears the idle mark. Call `PruneLoginRoles(ctx, 0)` for immediate orphan cleanup. Unexpected dependencies are reported and the transaction rolls back. The host owns migration objects, template roles and PUBLIC privileges.
+
+Each live login uses one checked-out maintenance connection even between test cases. Supply a direct or session-pooled connection and leave pool capacity for cloning and pruning. A lost maintenance session ends the lease. Acquire a new login before continuing after a server restart or permanent connection failure. [Lifecycle design](DESIGN-v0.3.8.md)

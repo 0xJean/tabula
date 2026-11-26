@@ -3,6 +3,10 @@
 All notable changes are listed here. The project follows semantic versioning; before
 v1.0 a minor version may contain breaking changes.
 
+## v0.3.8 — 2026-11-26
+
+- A disposable `postgresfixture.Fixture` can acquire a distinct login per test process. A dedicated maintenance session protects it while business connections are idle. `Release` removes the login and its database CONNECT grants at shutdown. `Prune` reclaims abandoned logins after the configured idle interval. [Fixture login lifecycle](docs/DESIGN-v0.3.8.md)
+
 ## v0.3.7 — 2026-11-25
 
 - By default, statement failures sent to tracers and logs carry the error class and optional SQLSTATE. The opt-in `RawErrorDiagnostics` exposes original errors to custom tracers and driver messages in OpenTelemetry exception events and span status descriptions. Metrics keep bounded labels in either mode. Database calls still return the original error chain. A configured `Sanitize` supplies application-reviewed log text. [Telemetry migration](docs/MIGRATION.md#from-v036-to-v037)

@@ -2,6 +2,10 @@
 
 Follow this guide when upgrading an application to v0.3. For the full surface after the upgrade, see the [integration guide](INTEGRATION.md).
 
+## Process fixture logins in v0.3.8
+
+A test suite that shares a disposable PostgreSQL cluster can acquire a login per process. Use `Fixture.AcquireLoginRole` with the exact member roles, retain the handle for the suite lifetime, and grant CONNECT to its generated name on each clone. Close the client pools, then call `Release` at suite shutdown. An explicit `Prune` on the same maintenance database also reaps roles left by interrupted workers once they have been observed idle for maxIdle. Its return value still lists database names. Use `PruneLoginRoles` to collect role names from a standalone login cleanup. [Example and connection requirements](AUTHORIZATION.md#process-login-roles)
+
 ## From v0.3.6 to v0.3.7
 
 Custom tracers keep their existing `Tracer.Start` signature. By default, the error passed to their finish function carries the class and SQLSTATE. Retrieve them with `tabula.ClassifyError` and `tabula.SQLState`. Inspect driver types on the error returned by the database operation. Update log queries that relied on driver wording to use `tabula.error_class` or `tabula.sqlstate`. Applications supplying `Sanitize` continue to control the `tabula.error` log field. Set `RawErrorDiagnostics: true` on `stdsql.RunnerOptions`, `pgxdriver.RunnerOptions` or `RegistryConfig` to deliver the original error to its tracer. With this option the OpenTelemetry event and status description contain its text, which can include bound values for 22P02 or 22003. Metrics continue to use the class in either mode. Use keyed literals when constructing `TraceInfo` directly. [Telemetry fields](LOGGING.md)

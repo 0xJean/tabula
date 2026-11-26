@@ -3,7 +3,7 @@ module github.com/0xJean/tabula/pgxdriver
 go 1.26.0
 
 require (
-	github.com/0xJean/tabula v0.3.7
+	github.com/0xJean/tabula v0.3.8
 	github.com/jackc/pgx/v5 v5.13.0
 	github.com/stretchr/testify v1.12.1
 )
