@@ -389,3 +389,46 @@ scopes and independent predicate choices, each order and allowed page form,
 and one count per scope and predicate combination. Each update assignment set
 contributes its own shape. `TryDefineRows`, `TryDefineUpdateMany` and
 `TryDefineDeleteMany` return declaration errors before publishing the family.
+
+## Registered locks and functions
+
+These examples use `q` for the root package, a global `public.items` table and a one-column view named `entries` with an `int64` field tagged `db:"id"`. Configure the session adapter with the registry's `SQLAuthority()`. Execute locking reads inside a writable transaction.
+
+```go
+i := q.FromTable(items, "i", q.Global())
+id := q.FieldOf(i, "id", q.Int8())
+key := q.Input("key", q.Int8())
+locked := q.DefineLockedRows(entries, "lock_item", items, q.LockedRowsSpec[struct{}]{
+    Lock:   q.ForRows(q.ForNoKeyUpdate, i, q.SkipLocked),
+    Where:  q.Eq(id.Expr(), key.Expr()),
+    Select: []q.Projection{q.Project(q.Output(entries, "id", q.Int8()), id.Expr())},
+})
+rows, err := locked.All(ctx, session, q.BindValue(key, int64(7)))
+```
+
+`SkipLocked` omits rows held under conflicting locks. `NoWait` returns SQLSTATE `55P03` on conflict. `Wait` waits for acquisition. For a column-scoped table, use its declared `ByScopeColumn()` occurrence and provide the tagged scope column's PostgreSQL type in `ScopeType`. The plan binds configured soft-delete status values internally and redacts them in SQL observations. Boolean and timestamp soft-delete markers use `= FALSE` and `IS NULL`. For a custom status type, set `DeletedField` to the occurrence's `FieldOf` with its catalog type and encoder.
+
+For a transaction advisory lock, declare a one-boolean view. Each key binds separately. The two-integer key space is independent of the bigint key space.
+
+```go
+first, second := q.Input("first", q.Int4()), q.Input("second", q.Int4())
+pair := q.AdvisoryXactLockPair(q.Shared, q.Try, first.Expr(), second.Expr())
+lock := q.DefineAdvisoryLock(flags, "group_lock", pair)
+held, err := lock.Acquire(ctx, session, q.BindValue(first, int32(1)), q.BindValue(second, int32(7)))
+```
+
+`Try` reports contention as `false, nil`. `Wait` reports successful acquisition as `true, nil`. Both commit and rollback release the lock. An explicit read-only transaction can acquire a transaction advisory lock. Direct accepts only reads without lock effects.
+
+To call a scalar function, declare its signature and assign a typed expression to each formal. Reusing an input slot reuses its bind position. The function's declaration order determines the SQL argument order.
+
+```go
+find := q.DeclareRoutine(q.RoutineSpec[int64]{
+    Schema: "public", Name: "lookup", Result: q.Int8(),
+    Cardinality: q.RoutineOne, ReadOnly: true,
+}, q.Parameter("id", q.Int8()))
+lookup := q.DefineRoutine(entries, "lookup_item", find,
+    q.Arg(q.FormalOf(find, "id", q.Int8()), key.Expr()))
+row, err := lookup.One(ctx, session, q.BindValue(key, int64(7)))
+```
+
+Use `RoutineSet` and `All` for a set of values. Declare `Nullable` and a nullable view column for results that can be SQL NULL. The default function effect requires write authorization. A write call returning one or many results runs under the session's `Returning` policy. A command allowlist for writes rejects its outer `SELECT`. Verify each overload under its executing role. [Role readiness](AUTHORIZATION.md#check-a-role-at-startup)

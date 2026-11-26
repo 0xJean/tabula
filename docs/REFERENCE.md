@@ -260,6 +260,45 @@ func Zero[V any](p *V) any
 
 TYPES
 
+type AdvisoryLock struct {
+	// Has unexported fields.
+}
+    AdvisoryLock declares a transaction-level PostgreSQL advisory operation.
+    The bigint and two-integer key spaces are independent in PostgreSQL.
+
+func AdvisoryXactLock(mode AdvisoryMode, wait LockWait, key Expr[int64]) AdvisoryLock
+    AdvisoryXactLock uses a single bigint key. Wait blocks, Try returns false on
+    contention. Both modes hold an acquired lock until transaction end.
+
+func AdvisoryXactLockPair(mode AdvisoryMode, wait LockWait, first, second Expr[int32]) AdvisoryLock
+    AdvisoryXactLockPair uses the separate PostgreSQL (integer, integer)
+    overload.
+
+type AdvisoryLockPlan[T, S any] struct {
+	// Has unexported fields.
+}
+    AdvisoryLockPlan acquires a registered advisory lock through an authorized
+    transaction session. Its View owns the statement in the registry.
+
+func DefineAdvisoryLock[T, S any](view *View[T, S], key string, lock AdvisoryLock) *AdvisoryLockPlan[T, S]
+    DefineAdvisoryLock registers a transaction lock independently of any table
+    access. The output view has one boolean column indicating acquisition.
+
+func TryDefineAdvisoryLock[T, S any](view *View[T, S], key string, lock AdvisoryLock) (*AdvisoryLockPlan[T, S], error)
+    TryDefineAdvisoryLock registers the complete operation or returns an error.
+
+func (p *AdvisoryLockPlan[T, S]) Acquire(ctx context.Context, s Session[S], args ...Binding) (bool, error)
+    Acquire reports whether this transaction holds the requested lock. Wait
+    returns true on success. Try returns false while another transaction holds a
+    conflicting lock. Direct rejects both modes.
+
+type AdvisoryMode uint8
+    AdvisoryMode selects an exclusive or shared transaction-level advisory lock.
+
+const (
+	Exclusive AdvisoryMode = iota + 1
+	Shared
+)
 type Assignment struct {
 	// Has unexported fields.
 }
@@ -586,6 +625,14 @@ func (f *Filter) Range(column string, from, to any)
 func (f *Filter) Where() string
     Where returns the predicates as " AND (p1) AND (p2)", or "" when none.
 
+type Formal[V any] struct {
+	// Has unexported fields.
+}
+    Formal is a typed argument position owned by one declared routine.
+
+func FormalOf[R, V any](r *Routine[R], name string, kind PGType[V]) Formal[V]
+    FormalOf resolves a named parameter on this exact signature.
+
 type JSONValue struct {
 	// Has unexported fields.
 }
@@ -643,6 +690,48 @@ const (
 	LockNoWait              // FOR UPDATE NOWAIT
 	LockShare               // FOR SHARE
 )
+type LockWait uint8
+    LockWait selects how an operation handles contention.
+
+const (
+	// Wait blocks until PostgreSQL grants the lock or the operation ends.
+	Wait LockWait = iota + 1
+	// SkipLocked excludes conflicting rows from a locking read.
+	SkipLocked
+	// NoWait raises PostgreSQL lock_not_available on a conflicting row.
+	NoWait
+	// Try returns false immediately on an advisory lock conflict.
+	Try
+)
+type LockedRows[T, S any] struct {
+	// Has unexported fields.
+}
+    LockedRows is one registered, single-table locking read.
+
+func DefineLockedRows[T, K, S, R any](view *View[R, S], key string, table *Table[T, K, S], spec LockedRowsSpec[S]) *LockedRows[R, S]
+    DefineLockedRows registers a projected, physical row lock. The table must
+    own the lock's occurrence. Its scope and soft-deletion rules apply.
+
+func TryDefineLockedRows[T, K, S, R any](view *View[R, S], key string, table *Table[T, K, S], spec LockedRowsSpec[S]) (*LockedRows[R, S], error)
+    TryDefineLockedRows registers the complete lock or returns a declaration
+    error.
+
+func (p *LockedRows[T, S]) All(ctx context.Context, s Session[S], args ...Binding) ([]T, error)
+    All locks and decodes every selected row in a writable transaction.
+
+type LockedRowsSpec[S any] struct {
+	Lock      RowLock
+	Where     Pred
+	ScopeType PGType[S]
+	Select    []Projection
+	// DeletedField declares an explicit catalog type and optional encoder for
+	// the table's soft-delete column. Supply the FieldOf this occurrence.
+	DeletedField SoftDeleteColumn
+}
+    LockedRowsSpec selects rows of the lock's occurrence and projects them into
+    a view. Omit Where to select all visible rows. A column-scoped table needs
+    ScopeType and can execute only on a scoped session.
+
 type LogConfig struct {
 	Logger        *slog.Logger
 	Level         LogLevel
@@ -1206,6 +1295,80 @@ type RetryConfig struct {
     RetryConfig controls explicit retries for transient PostgreSQL transaction
     conflicts (serialization failure 40001 and deadlock 40P01).
 
+type Routine[V any] struct {
+	// Has unexported fields.
+}
+    Routine is an immutable, schema-qualified function signature.
+
+func DeclareRoutine[V any](spec RoutineSpec[V], params ...RoutineParameter) *Routine[V]
+    DeclareRoutine freezes a function signature at startup. Supply the
+    parameters in catalog order. Use AdvisoryXactLock for built-in advisory
+    operations.
+
+type RoutineArgument struct {
+	// Has unexported fields.
+}
+    RoutineArgument assigns a typed expression to a signature's formal.
+
+func Arg[V any](formal Formal[V], value Expr[V]) RoutineArgument
+    Arg pairs a formal with an expression of the same Go type. Registration
+    checks its PostgreSQL type and emits an explicit cast at the call site.
+
+type RoutineCardinality uint8
+    RoutineCardinality is the number of results a function can return.
+
+const (
+	// RoutineOne declares an ordinary function returning one value, possibly NULL.
+	RoutineOne RoutineCardinality = iota + 1
+	// RoutineSet declares a function returning SETOF its result type.
+	RoutineSet
+)
+type RoutineParameter struct {
+	// Has unexported fields.
+}
+    RoutineParameter declares one input in PostgreSQL signature order.
+
+func Parameter[V any](name string, kind PGType[V]) RoutineParameter
+    Parameter names a formal parameter and its exact PostgreSQL type.
+
+type RoutinePlan[T, S any] struct {
+	// Has unexported fields.
+}
+    RoutinePlan executes one registered function call using its declared result
+    cardinality and a one-column View's decoder.
+
+func DefineRoutine[T, S, V any](view *View[T, S], key string, r *Routine[V], args ...RoutineArgument) *RoutinePlan[T, S]
+    DefineRoutine registers a standalone call to a declared function. Each input
+    needs exactly one Arg. Values bind in signature order. The output view must
+    have one column compatible with the declared result.
+
+func TryDefineRoutine[T, S, V any](view *View[T, S], key string, r *Routine[V], args ...RoutineArgument) (*RoutinePlan[T, S], error)
+    TryDefineRoutine registers the complete call or returns a declaration error.
+
+func (p *RoutinePlan[T, S]) All(ctx context.Context, s Session[S], args ...Binding) ([]T, error)
+    All decodes every value of a RoutineSet call, including an empty result.
+
+func (p *RoutinePlan[T, S]) One(ctx context.Context, s Session[S], args ...Binding) (T, error)
+    One decodes the single value of a RoutineOne call into the registered view.
+
+type RoutineRequirement struct {
+	Signature, ResultType                 string
+	ReturnsSet, ReadOnly, SecurityDefiner bool
+}
+    RoutineRequirement describes one exact, non-variadic pg_proc entry.
+    Signature and ResultType use schema-qualified catalog names. ReadOnly
+    requires STABLE or IMMUTABLE. SecurityDefiner must match the function.
+
+type RoutineSpec[V any] struct {
+	Schema, Name                        string
+	Result                              PGType[V]
+	Cardinality                         RoutineCardinality
+	Nullable, ReadOnly, SecurityDefiner bool
+}
+    RoutineSpec declares a scalar or set-returning PostgreSQL function. ReadOnly
+    is an explicit assertion about the reviewed body. The default requires write
+    authorization. Nullable describes individual result values.
+
 type RowAssignment struct {
 	// Has unexported fields.
 }
@@ -1248,6 +1411,25 @@ type RowFilter struct {
     is required for mutations. Column-scoped plans register scoped statements by
     default. AllowUnscoped adds a separate unscoped family.
 
+type RowLock struct {
+	// Has unexported fields.
+}
+    RowLock identifies a locking strength, a specific occurrence and a wait
+    mode.
+
+func ForRows[T any](strength RowLockStrength, target Rel[T], wait LockWait) RowLock
+    ForRows declares a lock on target. Wait, SkipLocked and NoWait are valid.
+
+type RowLockStrength uint8
+    RowLockStrength selects the PostgreSQL locking clause on a physical
+    relation.
+
+const (
+	ForUpdate RowLockStrength = iota + 1
+	ForNoKeyUpdate
+	ForShare
+	ForKeyShare
+)
 type RowOrder struct {
 	Name  string
 	Terms []RowTerm
@@ -1681,6 +1863,13 @@ type SoftDelete struct {
     Leave TableSpec.SoftDelete nil for *time.Time (deleted_at IS NULL) or bool
     (is_deleted = FALSE).
 
+type SoftDeleteColumn interface {
+	// Has unexported methods.
+}
+    SoftDeleteColumn supplies the catalog type and encoder of a soft-delete
+    field to LockedRowsSpec. Use a Field returned by FieldOf for the same
+    relation occurrence as the row lock.
+
 type SortDirection uint8
     SortDirection selects the order of a composed query. SortDefault uses the
     primary term's fixed direction when set, then the QueryOrderSpec's default.
@@ -1765,6 +1954,8 @@ type StatementShape struct {
 	SchemaUsage     []string
 	AnyColumnSelect []string
 	AnyColumnUpdate []string
+	// Routines records the catalog contracts of called PostgreSQL functions.
+	Routines []RoutineRequirement
 	// UnscopedOnly marks a shape that omits a declared column-scope predicate.
 	// It can be bound only to an unscoped session.
 	UnscopedOnly bool
@@ -2968,9 +3159,11 @@ type RLSMatrix struct {
 type ReadinessNeeds struct {
 	Privileges      PrivilegeNeeds
 	SchemaUsage     []string
-	AnyColumnSelect []string // SELECT on at least one column of each relation
-	ForceRLS        []string // both ENABLE and FORCE ROW LEVEL SECURITY
-	SequenceUsage   []string // named sequences in addition to column-owned sequences
+	AnyColumnSelect []string                    // SELECT on at least one column of each relation
+	AnyColumnUpdate []string                    // UPDATE on at least one column of each locked relation
+	Routines        []tabula.RoutineRequirement // exact function catalog contracts
+	ForceRLS        []string                    // both ENABLE and FORCE ROW LEVEL SECURITY
+	SequenceUsage   []string                    // named sequences in addition to column-owned sequences
 }
     ReadinessNeeds describes minimum capabilities for one role. Privileges
     accepts the result of CollectPrivilegeNeeds. Relations and function

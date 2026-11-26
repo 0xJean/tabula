@@ -6,6 +6,8 @@ no hidden behaviour.
 
 ## 1. Where the logger comes from
 
+Registered lock and routine calls use the owning view and statement key, such as `entries.lock_item.lock` or `entries.lookup_item.call`. Advisory keys and function arguments follow the same bound-value logging policy as other inputs. [Registered operations](COOKBOOK.md#registered-locks-and-functions)
+
 - The library uses the standard library `log/slog`. The core takes no third-party logging
   dependency.
 - A logger is passed explicitly in `RegistryConfig.Log` (applies to every table and view of
