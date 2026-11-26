@@ -380,6 +380,13 @@ func (b *BoundMutationPlan[T, S]) UpdateMany(ctx context.Context, set string, fi
     affected row count, including zero. The filter list selects optional
     predicates.
 
+type BoundReadPlan[T, S any] struct{ rowExecution[T, S] }
+    BoundReadPlan runs an explicit SELECT through the registry-authorized
+    session.
+
+func (b *BoundReadPlan[T, S]) Find(ctx context.Context, values ...Binding) ([]T, error)
+    Find decodes all matching result rows. Each caller input must be bound once.
+
 type BoundRoutinePlan[T, S any] struct {
 	// Has unexported fields.
 }
@@ -410,9 +417,10 @@ func (b *BoundRowsPlan[T, S]) Find(ctx context.Context, choice RowChoice, values
     Find returns the selected data page. It executes one registered statement.
 
 func (b *BoundRowsPlan[T, S]) List(ctx context.Context, choice RowChoice, values ...Binding) ([]T, int64, error)
-    List returns a data page and the exact count before pagination. Both
-    registered calls and all bindings are validated before the first execution.
-    A locking plan returns ErrOperationDenied.
+    List returns a data page and the exact count before pagination.
+    The two statements bind the inputs they need from the supplied values.
+    Both are validated before the first execution. A locking plan returns
+    ErrOperationDenied.
 
 type CallMethod uint8
     CallMethod is the driver operation authorized for one execution.
@@ -659,6 +667,13 @@ type Formal[V any] struct {
 func FormalOf[R, V any](r *Routine[R], name string, kind PGType[V]) Formal[V]
     FormalOf resolves a named parameter on this exact signature.
 
+type GroupField interface {
+	// Has unexported methods.
+}
+    GroupField is a physical field used in a SELECT grouping. Pass field.Expr()
+    or field.Column(). Definitions check that every grouping belongs to the
+    query.
+
 type JSONValue struct {
 	// Has unexported fields.
 }
@@ -904,6 +919,11 @@ type PGType[V any] struct {
     PGType pairs a Go value type with an exact PostgreSQL catalog type. Its zero
     value cannot be used to declare a column or parameter.
 
+func ArrayOf[V any](element PGType[V]) PGType[[]V]
+    ArrayOf declares a PostgreSQL array of the given element type. Inputs use
+    RegistryConfig.ArrayArg, or the driver's native slice binding when it is
+    nil. The array codec is responsible for encoding its elements.
+
 func Bool() PGType[bool]
     Bool declares PostgreSQL boolean.
 
@@ -937,6 +957,10 @@ type Pred = Expr[bool]
 func And(first, second Pred, rest ...Pred) Pred
     And combines two or more typed predicates in declaration order.
 
+func Any[V any](value Expr[V], array Expr[[]V]) Pred
+    Any tests equality with any element of a PostgreSQL array declared with
+    ArrayOf. An empty array yields false and a NULL array yields NULL.
+
 func Eq[V any](left, right Expr[V]) Pred
     Eq compares two expressions of the same PostgreSQL type.
 
@@ -946,6 +970,13 @@ func Ge[V any](a, b Expr[V]) Pred
 
 func Gt[V any](a, b Expr[V]) Pred
     Gt compares two expressions using PostgreSQL greater-than semantics.
+
+func ILike[V, P ~string](value Expr[V], pattern Expr[P]) Pred
+    ILike matches a string pattern case-insensitively using PostgreSQL's locale.
+
+func In[V any](value, first Expr[V], rest ...Expr[V]) Pred
+    In tests membership in a nonempty, fixed list of typed expressions. Use Any
+    with an array input when the list length varies between calls.
 
 func IsDistinct[V any](left, right Expr[V]) Pred
     IsDistinct compares values using PostgreSQL's null-safe inequality.
@@ -958,6 +989,10 @@ func IsNull[V any](v Expr[V]) Pred
 
 func Le[V any](a, b Expr[V]) Pred
     Le compares two expressions using PostgreSQL less-than-or-equal semantics.
+
+func Like[V, P ~string](value Expr[V], pattern Expr[P]) Pred
+    Like matches a PostgreSQL string pattern. The pattern retains the database's
+    wildcard and escape semantics. Bind a pattern input with BindValue.
 
 func Lt[V any](a, b Expr[V]) Pred
     Lt compares two expressions using PostgreSQL less-than semantics.
@@ -1165,6 +1200,71 @@ type QuerySpec struct {
     Base parameters ($1..$k) share one namespace across Select, Where, Tail and
     CountBase. Filter fragments use fragment-local $1..$m numbering rebased at
     compile time.
+
+type ReadPlan[T, S any] struct {
+	// Has unexported fields.
+}
+    ReadPlan owns the compiled scoped forms of an explicit SELECT.
+
+func DefineRead[T, S any](out *View[T, S], name string, query ReadSelect, observe ...StatementOption) *ReadPlan[T, S]
+    DefineRead registers an explicit typed SELECT. It panics on a declaration
+    error.
+
+func TryDefineRead[T, S any](out *View[T, S], name string, query ReadSelect, observe ...StatementOption) (*ReadPlan[T, S], error)
+    TryDefineRead registers every permitted scope variant together. No shape is
+    published when a declaration fails.
+
+func (p *ReadPlan[T, S]) Bind(s Session[S]) *BoundReadPlan[T, S]
+    Bind attaches the plan to a session from its registry.
+
+type ReadSelect struct {
+	// Has unexported fields.
+}
+    ReadSelect is an immutable declaration of one explicit SELECT. Each method
+    returns a new value. DefineRead freezes its SQL and verification metadata.
+
+func Select(fields ...Projection) ReadSelect
+    Select projects expressions into the declared output view in field order.
+
+func (q ReadSelect) AllowUnscoped() ReadSelect
+    AllowUnscoped also registers the form that omits column-scope predicates.
+    It requires an unscoped session. PostgreSQL RLS applies in both forms.
+
+func (q ReadSelect) CrossJoin(right ReadSource) ReadSelect
+    CrossJoin returns the product of the visible rows of both sides.
+
+func (q ReadSelect) From(source ReadSource) ReadSelect
+    From names the first physical occurrence.
+
+func (q ReadSelect) GroupBy(fields ...GroupField) ReadSelect
+    GroupBy groups rows by the declared fields of their respective occurrences.
+
+func (q ReadSelect) Having(terms ...Pred) ReadSelect
+    Having filters aggregate groups after grouping.
+
+func (q ReadSelect) InnerJoin(right ReadSource, on Pred) ReadSelect
+    InnerJoin adds matching rows from an explicitly named right occurrence.
+    The predicate can reference the right occurrence and preceding sources.
+
+func (q ReadSelect) LeftJoin(right ReadSource, on Pred) ReadSelect
+    LeftJoin preserves left rows when the right occurrence has no visible match.
+    Its scope and live-row conditions are part of ON.
+
+func (q ReadSelect) Lock(lock RowLock) ReadSelect
+    Lock applies a row lock to one eligible occurrence of an ungrouped read.
+
+func (q ReadSelect) OrderBy(terms ...RowTerm) ReadSelect
+    OrderBy declares the ordered physical fields of this result.
+
+func (q ReadSelect) Where(terms ...Pred) ReadSelect
+    Where restricts rows before grouping. Multiple terms are combined with AND.
+
+type ReadSource interface {
+	// Has unexported methods.
+}
+    ReadSource identifies a physical occurrence in an explicit SELECT. FromTable
+    and RowsFrom provide sources. Use RowsFrom to specify a scope or soft-delete
+    column with a custom PostgreSQL type.
 
 type Registry[S any] struct {
 	// Has unexported fields.

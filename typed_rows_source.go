@@ -44,10 +44,18 @@ type rowSource struct {
 // scope or deleted field with field.Column() when its Go type needs an explicit
 // mapping. ByRLS and Global need no scope field.
 func RowsFrom[T, K, S any](table *Table[T, K, S], rel Rel[T], columns ...RowColumn) RowSource[T, S] {
-	if table == nil || rel.source == nil || table.entry != rel.source.entry {
-		panic("tabula.RowsFrom: the occurrence must belong to the table")
+	src, err := tableRowSource(table, rel.source, columns)
+	if err != nil {
+		panic(err)
 	}
-	src := rowSource{rel: rel.source, protected: make(map[string]bool)}
+	return RowSource[T, S]{&table.descriptor, src}
+}
+
+func tableRowSource[T, K, S any](table *Table[T, K, S], rel *occurrence, columns []RowColumn) (rowSource, error) {
+	if table == nil || rel == nil || table.entry != rel.entry {
+		return rowSource{}, fmt.Errorf("tabula.RowsFrom: the occurrence must belong to the table")
+	}
+	src := rowSource{rel: rel, protected: make(map[string]bool)}
 	declared := make(map[string]RowColumn)
 	var deletedName string
 	if table.deleted >= 0 {
@@ -55,9 +63,9 @@ func RowsFrom[T, K, S any](table *Table[T, K, S], rel Rel[T], columns ...RowColu
 	}
 	for _, col := range columns {
 		f := col.ref
-		if f == nil || f.source != rel.source || declared[f.name].ref != nil ||
-			f.name != deletedName && (rel.source.scope != ByScopeColumn() || f.name != rel.source.scopeColumn) {
-			panic("tabula.RowsFrom: expected a distinct scope or deleted field of this occurrence")
+		if f == nil || f.source != rel || declared[f.name].ref != nil ||
+			f.name != deletedName && (rel.scope != ByScopeColumn() || f.name != rel.scopeColumn) {
+			return rowSource{}, fmt.Errorf("tabula.RowsFrom: expected a distinct scope or deleted field of this occurrence")
 		}
 		declared[f.name] = col
 	}
@@ -70,13 +78,13 @@ func RowsFrom[T, K, S any](table *Table[T, K, S], rel Rel[T], columns ...RowColu
 			src.version = col.name
 		}
 	}
-	special := func(i int) *fieldRef {
+	special := func(i int) (*fieldRef, error) {
 		col := table.cols[i]
 		if !typedIdent(col.name) {
-			panic(fmt.Sprintf("tabula.RowsFrom: invalid scope or soft-delete column %q", col.name))
+			return nil, fmt.Errorf("tabula.RowsFrom: invalid scope or soft-delete column %q", col.name)
 		}
 		if f := declared[col.name].ref; f != nil {
-			return f
+			return f, nil
 		}
 		t := col.goType
 		if t.Kind() == reflect.Pointer {
@@ -96,21 +104,29 @@ func RowsFrom[T, K, S any](table *Table[T, K, S], rel Rel[T], columns ...RowColu
 		case reflect.TypeFor[time.Time]():
 			kind = Timestamptz().id
 		default:
-			panic(fmt.Sprintf("tabula.RowsFrom: supply the catalog type of %q with FieldOf(...).Column()", col.name))
+			return nil, fmt.Errorf("tabula.RowsFrom: supply the catalog type of %q with FieldOf(...).Column()", col.name)
 		}
-		return &fieldRef{source: rel.source, name: col.name, kind: kind, nullable: col.nullable, secret: col.secret}
+		return &fieldRef{source: rel, name: col.name, kind: kind, nullable: col.nullable, secret: col.secret}, nil
 	}
-	if rel.source.scope == ByScopeColumn() {
-		src.scopeType = special(table.scope).kind
+	if rel.scope == ByScopeColumn() {
+		scope, err := special(table.scope)
+		if err != nil {
+			return rowSource{}, err
+		}
+		src.scopeType = scope.kind
 	}
 	if table.deleted >= 0 {
-		src.deleted = special(table.deleted)
+		deleted, err := special(table.deleted)
+		if err != nil {
+			return rowSource{}, err
+		}
+		src.deleted = deleted
 		switch table.del.kind {
 		case deleteTimestamp:
 			src.liveOp = "IS NULL"
 		case deleteBool:
 			if !sameSQLType(src.deleted.kind, Bool().id) {
-				panic("tabula.RowsFrom: boolean soft deletion requires a pg_catalog.bool column")
+				return rowSource{}, fmt.Errorf("tabula.RowsFrom: boolean soft deletion requires a pg_catalog.bool column")
 			}
 			src.liveOp = "= FALSE"
 		case deleteStatus:
@@ -126,7 +142,7 @@ func RowsFrom[T, K, S any](table *Table[T, K, S], rel Rel[T], columns ...RowColu
 			src.liveValue = Binding{&typedInput{"@live", src.deleted.kind}, bound}
 		}
 	}
-	return RowSource[T, S]{&table.descriptor, src}
+	return src, nil
 }
 
 func (src rowSource) fromSQL() string {
@@ -210,20 +226,41 @@ func rowLabel(s string) bool {
 type rowVariant struct{ scope, filters, form string }
 
 type rowFamily struct {
-	source  rowSource
+	scope   RelationScope
+	live    []Binding
 	filters []string
 	shapes  map[rowVariant]*compiledShape
 	meta    stmtMeta
 }
 
-func compileRowFamily[T, S any](d *descriptor[T, S], name string, src rowSource, spec RowFilter, forms []string,
+func compileRowFamily[T, S any](d *descriptor[T, S], name string, sources []rowSource, spec RowFilter, forms []string,
 	render func(*typedCompiler, string, []Pred) (string, StatementShape, error),
 ) (*rowFamily, error) {
-	if d == nil || d.entry == nil || src.rel == nil || src.rel.issuer != d.reg.statementIssuer || !rowLabel(name) {
+	if d == nil || d.entry == nil || len(sources) == 0 || !rowLabel(name) {
 		return nil, fmt.Errorf("tabula: a registered owner, matching source and named row plan are required")
 	}
+	family := &rowFamily{scope: Global(), shapes: make(map[rowVariant]*compiledShape), meta: statementMeta("", spec.Observe)}
+	occurrences := make([]*occurrence, len(sources))
+	var scopeType catalogType
+	for i, src := range sources {
+		if src.rel == nil || src.rel.issuer != d.reg.statementIssuer {
+			return nil, fmt.Errorf("tabula: row plan source must belong to the owner's registry")
+		}
+		occurrences[i] = src.rel
+		if src.rel.scope == ByScopeColumn() {
+			if scopeType.goType != nil && !sameSQLType(scopeType, src.scopeType) {
+				return nil, fmt.Errorf("tabula: incompatible scope column types in plan %q", name)
+			}
+			scopeType, family.scope = src.scopeType, ByScopeColumn()
+		} else if src.rel.scope == ByRLS() && family.scope != ByScopeColumn() {
+			family.scope = ByRLS()
+		}
+		if src.liveValue.input != nil {
+			family.live = append(family.live, src.liveValue)
+		}
+	}
 	scopes := []string{"global"}
-	switch src.rel.scope {
+	switch family.scope {
 	case ByScopeColumn():
 		scopes = []string{"scoped"}
 		if spec.AllowUnscoped {
@@ -233,7 +270,6 @@ func compileRowFamily[T, S any](d *descriptor[T, S], name string, src rowSource,
 		scopes = []string{"rls"}
 	}
 	choices := []shapeChoice{{"scope", scopes}}
-	family := &rowFamily{source: src, shapes: make(map[rowVariant]*compiledShape), meta: statementMeta("", spec.Observe)}
 	for _, p := range spec.Optional {
 		if !rowLabel(p.Name) || p.When.part == nil {
 			return nil, fmt.Errorf("tabula: invalid optional predicate %q in plan %q", p.Name, name)
@@ -265,7 +301,7 @@ func compileRowFamily[T, S any](d *descriptor[T, S], name string, src rowSource,
 		if filters != "" {
 			key += ".where." + filters
 		}
-		c, err := newTypedCompiler(scope == "scoped", src.rel)
+		c, err := newTypedCompiler(scope == "scoped", occurrences...)
 		if err != nil {
 			return nil, err
 		}
@@ -274,12 +310,14 @@ func compileRowFamily[T, S any](d *descriptor[T, S], name string, src rowSource,
 			return nil, fmt.Errorf("%s: %w", key, err)
 		}
 		c.hasSecret = c.hasSecret || family.meta.secret
-		shape, err := c.finishShape(key, query, src.scopeType, meta)
+		shape, err := c.finishShape(key, query, scopeType, meta)
 		if err != nil {
 			return nil, err
 		}
-		if pos, ok := shape.layout.positions[src.liveValue.input]; ok {
-			shape.shape.Inputs[pos].Secret = true
+		for _, live := range family.live {
+			if pos, ok := shape.layout.positions[live.input]; ok {
+				shape.shape.Inputs[pos].Secret = true
+			}
 		}
 		shapes = append(shapes, shape)
 		family.shapes[rowVariant{scope, filters, form}] = shape
@@ -298,7 +336,7 @@ func (f *rowFamily) variant(unscoped bool, filters []string, form string) (*comp
 		}
 	}
 	scope := "global"
-	switch f.source.rel.scope {
+	switch f.scope {
 	case ByScopeColumn():
 		scope = "scoped"
 		if unscoped {

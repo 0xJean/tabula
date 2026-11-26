@@ -9,9 +9,9 @@ and keeps the SQL for joins, locks and conditional writes available for review.
 1. **Declarative descriptors.** A Go struct with `db` tags describes one table or one row
    shape. Descriptors are defined once at package init and validated strictly: an invalid
    tag panics at start-up, not at the first query.
-2. **Explicit SQL.** Single-table plans declare their projections, predicates, locks and
-   permitted writes. Each shape has a stable key and reviewable SQL. For a joined query
-   in v0.4.0, the caller supplies the SQL and a view decodes its result.
+2. **Explicit SQL.** Plans declare their sources, projections, predicates, locks and
+   permitted writes. Each shape has a stable key and reviewable SQL. A joined read names
+   its relation occurrences and join conditions. A view describes the output columns.
 3. **Verified against a real database.** Every derived or registered statement can be
    prepared and explained against the target schema, and the full SQL is kept in a
    reviewable snapshot.
@@ -23,8 +23,9 @@ The authorization tooling accepts application-owned role assignments, policy cat
 These hold for every version. A proposal that crosses one needs a design discussion, not a
 pull request.
 
-1. **No generated joins.** No relations in struct tags, no preloading, no lazy loading.
-   The number of queries and their SQL are always visible in the caller.
+1. **Explicit join paths.** The caller supplies the join kind and each occurrence in order.
+   Inner and left joins declare their match. A cross join requests a product. Struct tags
+   describe fields only. Relation discovery, preloading and lazy loading are outside this design.
 2. **No DDL.** No AutoMigrate, no schema generation. The library may only check that code
    and schema agree.
 3. **No hidden state or hooks.** The application supplies the registry, scope and error

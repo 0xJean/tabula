@@ -9,7 +9,7 @@ The code of conduct applies to contributors and maintainers in issues, pull requ
 Before opening a pull request, please read [docs/DESIGN.md](docs/DESIGN.md). Every change
 must preserve Tabula's core boundaries:
 
-1. **No generated joins or preloading** — joins stay explicit SQL decoded through `View`.
+1. **Explicit joins** — each join names its kind and right occurrence in declaration order. Inner and left joins supply a typed predicate. Relations in struct tags, automatic join discovery and preloading are prohibited.
 2. **No AutoMigrate or DDL generation** — migrations remain the source of truth.
 3. **No hidden global state or implicit hooks** — registries, scopes, loggers, tracers,
    and error policies are passed explicitly.

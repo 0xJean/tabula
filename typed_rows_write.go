@@ -111,7 +111,7 @@ func defineRowMutation[T, S any](src RowSource[T, S], name string, spec Mutation
 			forms["set."+set.Name] = set.Assignments
 		}
 	}
-	fam, err := compileRowFamily(src.owner, name, src.rowSource, spec.RowFilter, slices.Sorted(maps.Keys(forms)),
+	fam, err := compileRowFamily(src.owner, name, []rowSource{src.rowSource}, spec.RowFilter, slices.Sorted(maps.Keys(forms)),
 		func(c *typedCompiler, form string, predicates []Pred) (string, StatementShape, error) {
 			return src.renderMutation(c, command, forms[form], v, predicates)
 		})

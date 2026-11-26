@@ -47,7 +47,12 @@ func Project[V any](target OutputField[V], value Expr[V]) Projection {
 	return Projection{target.target, target.index, field, value.part, compatible}
 }
 
-func (t catalogType) qualified() string { return typedQuote(t.schema) + "." + typedQuote(t.name) }
+func (t catalogType) qualified() string {
+	if t.element != nil {
+		return t.element.qualified() + "[]"
+	}
+	return typedQuote(t.schema) + "." + typedQuote(t.name)
+}
 
 func (c *typedCompiler) project(owner *registration, projections []Projection) ([]string, []ShapeField, error) {
 	if owner == nil || len(projections) == 0 || len(projections) != len(owner.def.Columns) {

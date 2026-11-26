@@ -97,6 +97,7 @@ type occurrence struct {
 type Rel[T any] struct {
 	source *occurrence
 	column func(string) (column[T], bool)
+	rows   func() (rowSource, error)
 }
 
 // FromTable declares an occurrence of a registered, schema-qualified Table.
@@ -121,7 +122,7 @@ func FromTable[T, K, S any](t *Table[T, K, S], alias string, scope RelationScope
 		src.scopeSecret = t.cols[t.scope].secret
 		src.scopeGoType = t.cols[t.scope].goType
 	}
-	return Rel[T]{source: src, column: func(name string) (column[T], bool) {
+	return Rel[T]{source: src, rows: func() (rowSource, error) { return tableRowSource(t, src, nil) }, column: func(name string) (column[T], bool) {
 		i, ok := t.byName[name]
 		if !ok {
 			return column[T]{}, false

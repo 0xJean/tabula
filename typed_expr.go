@@ -153,6 +153,9 @@ func (i *typedInput) render(c *typedCompiler) (string, error) {
 }
 
 func sameSQLType(a, b catalogType) bool {
+	if a.element != nil || b.element != nil {
+		return a.element != nil && b.element != nil && sameSQLType(*a.element, *b.element)
+	}
 	return a.goType != nil && b.goType != nil && a.schema == b.schema && a.name == b.name
 }
 
@@ -164,6 +167,9 @@ type comparison struct {
 
 func (v comparison) render(c *typedCompiler) (string, error) {
 	if !v.matchingType || v.left == nil || v.right == nil {
+		if v.op == "LIKE" || v.op == "ILIKE" {
+			return "", fmt.Errorf("tabula: %s requires declared PostgreSQL string operands", v.op)
+		}
 		return "", fmt.Errorf("tabula: %s requires operands of the same declared PostgreSQL type", v.op)
 	}
 	left, err := v.left.render(c)

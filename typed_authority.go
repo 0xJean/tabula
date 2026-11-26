@@ -156,6 +156,14 @@ func (r *Registry[S]) bindCall(shape *compiledShape, s Session[S], method CallMe
 	if err != nil {
 		return AuthorizedStatement{}, err
 	}
+	if r.arrayArgFn != nil {
+		for _, slot := range shape.layout.order {
+			if slot.kind.element != nil {
+				i := shape.layout.positions[slot]
+				args[i] = r.arrayArgFn(args[i])
+			}
+		}
+	}
 	secret := make([]bool, len(shape.shape.Inputs))
 	for i, input := range shape.shape.Inputs {
 		secret[i] = input.Secret

@@ -13,8 +13,8 @@ Declarative descriptors, explicit SQL, verified against a real PostgreSQL.
 
 Tabula describes PostgreSQL tables and result rows with Go struct tags, derives the
 plain single-table statements from them and decodes the rows of hand-written SQL.
-Typed plans register each permitted statement for verification against PostgreSQL. It is not an ORM: it never
-builds joins, never generates DDL, and never runs hidden callbacks.
+Typed plans register each permitted statement for verification against PostgreSQL.
+An explicit join names both relations and describes their match. A view decodes the result.
 
 The integration guide maps each task to its package or command. The API and CLI reference is generated from this checkout. [Integration guide](docs/INTEGRATION.md) · [Go API and CLI reference](docs/REFERENCE.md)
 
@@ -28,9 +28,11 @@ The [v0.4 design](docs/DESIGN-v0.4.md) describes typed predicates, per-shape ver
 
 Set `RowsSpec.Lock` on a filtered or ordered page, or enable `WithExists` on an unlocked plan for a boolean result. Registered transaction advisory locks and PostgreSQL functions also use `plan.Bind(session)`. Each statement identifies its result, session requirements and minimum grants. [Lock and routine examples](docs/COOKBOOK.md#registered-locks-and-functions)
 
-## Install v0.4.0
+Use `DefineRead` for inner, left and cross joins. Give each side of a self-join its own occurrence. Use `In` for a fixed list, `Any` for an array parameter and `Like` or `ILike` for patterns. [Explicit join example](docs/COOKBOOK.md#explicit-joins)
 
-Run `go get github.com/0xJean/tabula@v0.4.0` in your application module with Go 1.26 or later. For the native driver and telemetry modules, use the matching version with `go get github.com/0xJean/tabula/pgxdriver@v0.4.0` and/or `go get github.com/0xJean/tabula/oteltabula@v0.4.0`.
+## Install v0.4.1
+
+Run `go get github.com/0xJean/tabula@v0.4.1` in your application module with Go 1.26 or later. For the native driver and telemetry modules, use the matching version with `go get github.com/0xJean/tabula/pgxdriver@v0.4.1` and/or `go get github.com/0xJean/tabula/oteltabula@v0.4.1`.
 
 ## Read a row by primary key
 

@@ -35,6 +35,8 @@ reg := tabula.NewRegistry(tabula.RegistryConfig[Scope]{
 
 A typed row plan reports the registered definition and shape key for each execution. A page, its exact count and an optional existence check have separate keys. Internal soft-delete status parameters are always redacted. `RowFilter.Observe` accepts `Quiet()` and `Secret()`. A shape that reads or assigns a secret field redacts its bind values, including the scope and cursor parameters.
 
+An explicit joined read reports one registered key for the entire query. Reading a secret column from any occurrence, including in a join predicate, marks the shape's arguments for redaction. Each occurrence's private soft-delete value has its own redacted bind slot.
+
 ## 2. Switches
 
 | `Level` | What is written |

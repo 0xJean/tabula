@@ -401,6 +401,33 @@ and one count per scope and predicate combination on ordinary reads. Enabling
 contributes its own shape. `TryDefineRows`, `TryDefineUpdateMany` and
 `TryDefineDeleteMany` return declaration errors before publishing the family.
 
+## Explicit joins
+
+Suppose `groups` and `jobs` are scoped table descriptors with bigint keys, and `out` is a view with `GroupID int64` and `JobID *int64`. Each call to `FromTable` creates a distinct occurrence. A self-join uses two occurrences of the same descriptor. Here the scope uses the named Go type `ScopeID` and the PostgreSQL type `bigint`.
+
+```go
+g := q.FromTable(groups, "g", q.ByScopeColumn())
+j := q.FromTable(jobs, "j", q.ByScopeColumn())
+groupID := q.FieldOf(g, "id", q.Int8())
+jobID := q.FieldOf(j, "id", q.Int8())
+jobGroup := q.FieldOf(j, "group_id", q.Int8())
+keys := q.Input("keys", q.ArrayOf(q.Int8()))
+scope := q.CatalogType[ScopeID]("pg_catalog", "int8", nil)
+left := q.RowsFrom(groups, g, q.FieldOf(g, "scope_id", scope).Column())
+right := q.RowsFrom(jobs, j, q.FieldOf(j, "scope_id", scope).Column())
+
+plan := q.DefineRead(out, "group_jobs", q.Select(
+    q.Project(q.Output(out, "group_id", q.Int8()), groupID.Expr()),
+    q.Project(q.Output(out, "job_id", q.Int8()), jobID.Expr()),
+).From(left).LeftJoin(right, q.Eq(groupID.Expr(), jobGroup.Expr())).
+    Where(q.Any(groupID.Expr(), keys.Expr())).
+    OrderBy(q.Asc(groupID), q.Asc(jobID)))
+
+rows, err := plan.Bind(session).Find(ctx, q.BindValue(keys, []int64{1, 2}))
+```
+
+The right occurrence's scope and soft-delete conditions belong in `ON`. A group with only hidden jobs still produces one row with a nil job ID. A `Where` condition on the right occurrence filters the joined result after matching. To count visible jobs, project `CountOf(jobID.Expr())` and group by `groupID.Expr()`. Configure `RegistryConfig.ArrayArg` with `pqdriver.Array` for lib/pq, or use native slice encoding with pgx. An empty array matches zero rows.
+
 ## Registered locks and functions
 
 These examples use `q` for the root package, a global `public.items` table and a one-column view named `entries` with an `int64` field tagged `db:"id"`. Configure the session adapter with the registry's `SQLAuthority()`. Execute locking reads inside a writable transaction.

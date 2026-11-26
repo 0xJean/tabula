@@ -26,6 +26,7 @@ type catalogType struct {
 	schema, name  string
 	goType        reflect.Type
 	varcharLength int32
+	element       *catalogType
 }
 
 // PostgreSQL identifiers are quoted one component at a time. Reject names
@@ -69,6 +70,20 @@ func Int8() PGType[int64] { return CatalogType[int64]("pg_catalog", "int8", nil)
 
 // Text declares PostgreSQL text.
 func Text() PGType[string] { return CatalogType[string]("pg_catalog", "text", nil) }
+
+// ArrayOf declares a PostgreSQL array of the given element type. Inputs use
+// RegistryConfig.ArrayArg, or the driver's native slice binding when it is nil.
+// The array codec is responsible for encoding its elements.
+func ArrayOf[V any](element PGType[V]) PGType[[]V] {
+	if element.id.goType == nil || element.id.element != nil {
+		panic("tabula.ArrayOf: a declared scalar element type is required")
+	}
+	kind := catalogType{
+		schema: element.id.schema, goType: reflect.TypeFor[[]V](),
+		varcharLength: element.id.varcharLength, element: &element.id,
+	}
+	return PGType[[]V]{id: kind, nullable: true}
+}
 
 // Varchar declares PostgreSQL character varying with a column length in
 // characters. Verification checks the column modifier. The parameter uses
