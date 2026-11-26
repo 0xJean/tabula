@@ -6,6 +6,10 @@ Start with the section for the version you are adopting. The integration guide l
 
 Use `DefineTableRead` to return a full or partial mapped record from an explicit single-source read. Reuse the same source occurrence in the selection and read clauses. Register and verify the resulting shape under the role that executes it.
 
+Existing field-only declarations keep their SQL and statement keys. Use `GroupExpr` in `RowsSpec.GroupBy` to group by a computed value, and `AscExpr`/`DescExpr` for computed orders. `NullsFirst` and `NullsLast` apply independently of direction. `RowsPlan.CursorFrom` obtains boundaries from projected values; manual expression cursors use `AtExpr` or `NullAtExpr`. New keyset terms must be projected and repeatable.
+
+Use `FilterWhere` on an aggregate root, `CountDistinct` for a distinct non-NULL count, and `AggregateOrder` for string, array or JSON input ordering. `DistinctInputs` takes distinct argument tuples and restricts inner order terms to those arguments. A nullable array element needs an explicit `ArrayAggAs` result codec that preserves the element's NULL. Refresh snapshots and role readiness for newly declared shapes and native function requirements. [Examples and NULL behavior](COOKBOOK.md#computed-groups-and-aggregate-inputs)
+
 ## From v0.4.1 to v0.4.2
 
 For tables used exclusively by typed plans, replace `Define(reg, spec)` with `DefinePlanSource(reg, spec)`. Use `TryDefinePlanSource` when startup should return a declaration error. Its successful result is already registered. Supply a schema-qualified physical name and declare the scope. A tagged scope field selects `ByScopeColumn` by default.

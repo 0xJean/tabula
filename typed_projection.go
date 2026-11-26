@@ -37,6 +37,7 @@ type Projection struct {
 	field      ShapeField
 	part       expressionPart
 	compatible bool
+	kind       catalogType
 }
 
 // Project pairs an output target with an expression of the same Go value type.
@@ -44,7 +45,7 @@ type Projection struct {
 func Project[V any](target OutputField[V], value Expr[V]) Projection {
 	field := ShapeField{Name: target.name, Type: target.kind.id.qualified(), Nullable: value.nullable}
 	compatible := sameSQLType(target.kind.id, value.kind.id) && (!value.nullable || target.null)
-	return Projection{target.target, target.index, field, value.part, compatible}
+	return Projection{target.target, target.index, field, value.part, compatible, value.kind.id}
 }
 
 func (t catalogType) qualified() string {

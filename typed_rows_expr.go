@@ -78,153 +78,45 @@ func (v rowNull) render(c *typedCompiler) (string, error) {
 	return "(" + part + " IS NULL)", err
 }
 
-type rowAggregate struct {
-	fn    string
-	arg   expressionPart
-	star  bool
-	valid bool
-}
-
-func (a rowAggregate) render(c *typedCompiler) (string, error) {
-	if !a.valid {
-		return "", fmt.Errorf("tabula: invalid field or PostgreSQL overload for %s", a.fn)
-	}
-	arg := "*"
-	if !a.star {
-		var err error
-		if err := checkRowExpr(a.arg, nil); err != nil {
-			return "", err
-		}
-		arg, err = a.arg.render(c)
-		if err != nil {
-			return "", err
-		}
-	}
-	return "pg_catalog." + a.fn + "(" + arg + ")", nil
-}
-
-// CountAll counts all rows, including those with NULL values.
-func CountAll() Expr[int64] {
-	return Expr[int64]{rowAggregate{fn: "count", star: true, valid: true}, Int8(), false}
-}
-
-// CountOf counts non-null values of the input expression.
-func CountOf[V any](f Expr[V]) Expr[int64] {
-	return Expr[int64]{rowAggregate{fn: "count", arg: f.part, valid: f.part != nil}, Int8(), false}
-}
-
-// MinOf computes the minimum of a field. An empty or all-NULL input yields NULL.
-// PostgreSQL must provide the corresponding same-result-type min overload.
-func MinOf[V any](f Expr[V]) Expr[V] {
-	return Expr[V]{rowAggregate{fn: "min", arg: f.part, valid: f.part != nil}, f.kind, true}
-}
-
-// MaxOf computes the maximum of a field, with the same NULL contract as MinOf.
-func MaxOf[V any](f Expr[V]) Expr[V] {
-	return Expr[V]{rowAggregate{fn: "max", arg: f.part, valid: f.part != nil}, f.kind, true}
-}
-
-// SumOf sums a numeric field. Supply the exact PostgreSQL result type and
-// its Go representation. For example, sum(int4) returns int8 and sum(int8)
-// returns numeric. An empty or all-NULL group yields NULL.
-func SumOf[V, R any](f Expr[V], result PGType[R]) Expr[R] {
-	return numericAggregate("sum", f, result)
-}
-
-// AvgOf averages a numeric field. PostgreSQL returns numeric for integer
-// and numeric inputs and float8 for floating-point inputs. The result is nullable.
-func AvgOf[V, R any](f Expr[V], result PGType[R]) Expr[R] {
-	return numericAggregate("avg", f, result)
-}
-
-func numericAggregate[V, R any](fn string, f Expr[V], result PGType[R]) Expr[R] {
-	name := f.kind.id.name
-	var want string
-	switch name {
-	case "int2", "int4":
-		want = "int8"
-		if fn == "avg" {
-			want = "numeric"
-		}
-	case "int8", "numeric":
-		want = "numeric"
-	case "float4", "float8":
-		want = name
-		if fn == "avg" {
-			want = "float8"
-		}
-	case "interval":
-		want = "interval"
-	}
-	valid := want != "" && f.kind.id.schema == "pg_catalog" && result.id.schema == "pg_catalog" && result.id.name == want
-	return Expr[R]{rowAggregate{fn: fn, arg: f.part, valid: valid}, result, true}
-}
-
-// Visit free fields and complete aggregate nodes separately so a grouped
-// projection cannot read an ungrouped field through a comparison.
+// checkRowExpr traverses non-aggregate children and treats an aggregate as a
+// result boundary. Its arguments are checked separately to forbid nesting.
 func checkRowExpr(p expressionPart, visit func(expressionPart) error) error {
-	switch v := p.(type) {
-	case describedExpression:
-		t := v.expressionTraits()
-		if t.aggregate && visit == nil {
-			return fmt.Errorf("tabula: aggregate outside result projection")
-		}
-		if visit != nil {
-			if err := visit(p); err != nil {
-				return err
-			}
-		}
-		if !t.aggregate {
-			for _, child := range t.children {
-				if err := checkRowExpr(child, visit); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
-	case membership:
-		if err := checkRowExpr(v.value, visit); err != nil {
-			return err
-		}
-		for _, member := range v.members {
-			if err := checkRowExpr(member, visit); err != nil {
-				return err
-			}
-		}
-		return nil
-	case comparison:
-		if err := checkRowExpr(v.left, visit); err != nil {
-			return err
-		}
-		return checkRowExpr(v.right, visit)
+	switch n := p.(type) {
 	case conjunction:
-		return checkRowTerms(v, visit)
-	case rowOr:
-		return checkRowTerms(v, visit)
-	case rowNot:
-		return checkRowTerms([]Pred{v.term}, visit)
-	case rowNull:
-		return checkRowExpr(v.value, visit)
-	case rowAggregate:
-		if visit == nil {
-			return fmt.Errorf("tabula: aggregate outside result projection")
+		for _, term := range n {
+			if err := checkRowBool(term); err != nil {
+				return err
+			}
 		}
-	case *fieldRef, *typedInput:
-	default:
+	case rowOr:
+		for _, term := range n {
+			if err := checkRowBool(term); err != nil {
+				return err
+			}
+		}
+	case rowNot:
+		if err := checkRowBool(n.term); err != nil {
+			return err
+		}
+	}
+	traits, ok := expressionStructure(p)
+	if !ok {
 		return fmt.Errorf("tabula: unsupported or undeclared row expression")
 	}
-	if visit != nil {
-		return visit(p)
+	if traits.aggregate && visit == nil {
+		return fmt.Errorf("tabula: aggregate outside result projection")
 	}
-	return nil
-}
-
-func checkRowTerms(terms []Pred, visit func(expressionPart) error) error {
-	for _, p := range terms {
-		if err := checkRowBool(p); err != nil {
+	if visit != nil {
+		if err := visit(p); err != nil {
 			return err
 		}
-		if err := checkRowExpr(p.part, visit); err != nil {
+	}
+	for _, child := range traits.children {
+		next := visit
+		if traits.aggregate {
+			next = nil
+		}
+		if err := checkRowExpr(child, next); err != nil {
 			return err
 		}
 	}

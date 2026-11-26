@@ -8,7 +8,8 @@ import (
 
 // RowColumn identifies a typed descriptor field in a GROUP BY or source declaration.
 type RowColumn struct {
-	ref *fieldRef
+	ref  *fieldRef
+	expr scalarOperand
 }
 
 // Column retains the field's occurrence and type in a heterogeneous column list.
