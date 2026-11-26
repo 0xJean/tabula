@@ -2,6 +2,15 @@
 
 Follow this guide when upgrading an application to v0.3. For the full surface after the upgrade, see the [integration guide](INTEGRATION.md).
 
+## From v0.3.10 to v0.3.11
+
+Existing keyed `TableSpec` declarations continue to use `WriteDefault`, including the `ReadOnly` and `AllowDelete` flags. The signatures of `Define`, `TryDefine` and bound methods are unchanged. Convert positional `TableSpec` literals to keyed fields before upgrading because the struct gains two fields.
+
+- For an update role, set `WriteMode: tabula.WriteUpdateOnly`. Supply `UpdateColumns` for a column-level grant. Include the version column for versioned rows and the deletion marker when using `SoftDelete`. Reads and locks require `SELECT` on all declared columns.
+- For an append role, set `WriteMode: tabula.WriteInsertOnly`. A serial key is generated in PostgreSQL. Remove any dependency on reading the new key, explicit `RETURNING`, or column-targeted conflict handling before adopting this mode.
+- Move hand-written `Rows.Exec`, `Scan`, `Select` and `SelectIter` calls off a restricted binding before switching modes. These methods return `ErrOperationDenied` before driver I/O. Review any separate session or view against its PostgreSQL role.
+- Regenerate the SQL snapshot and compare each role's grants. Run the registered statements through `VerifyStatements` and exercise serial inserts as the append role. [Table write modes](AUTHORIZATION.md#table-write-modes)
+
 ## From v0.3.9 to v0.3.10
 
 If a test login needs roles created by the template installer, call `fixture.Prepare(ctx, plan)` at process startup. Then pass those roles in `LoginRoleOptions.MemberOf` to `AcquireLoginRole` and use `CloneWithLease` for each test. Preparing an existing template refreshes its last-use mark for pruning. Suites whose roles already exist can continue acquiring the login directly. [Cold-start example](AUTHORIZATION.md#process-login-roles)

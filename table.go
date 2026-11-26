@@ -48,6 +48,12 @@ type TableSpec[T, K any] struct {
 	GroupBy []string
 	// Aggregates registers scalar function/column pairs for sqlcheck verification.
 	Aggregates ScalarAggregates
+	// WriteMode restricts derived SQL, privileges and bound operations. An explicit
+	// mode excludes ReadOnly and AllowDelete and rejects hand-written SQL on Rows.
+	WriteMode WriteMode
+	// UpdateColumns limits WriteUpdateOnly to these columns, in descriptor order.
+	// Nil selects every updatable column. A version column must be included.
+	UpdateColumns []string
 }
 
 // Table is the compiled handle for a TableSpec. Its column bindings, SQL and
@@ -56,6 +62,8 @@ type Table[T, K, S any] struct {
 	descriptor[T, S]
 	order                   string
 	readOnly, allowDelete   bool
+	mode                    WriteMode
+	updateColumns           map[string]bool
 	groupBy                 map[string]bool
 	groupByOrder            []string
 	keys                    []int
@@ -130,19 +138,21 @@ func Define[T, K, S any](r *Registry[S], spec TableSpec[T, K]) *Table[T, K, S] {
 		panic(err)
 	}
 	cols := d.definedColumns()
-	stmts := map[string]string{
-		"get": d.stmt.get, "count": d.stmt.count, "list": d.stmt.list,
+	stmts := make(map[string]string)
+	if d.mode.allows(selectOp) {
+		stmts["get"], stmts["count"], stmts["list"] = d.stmt.get, d.stmt.count, d.stmt.list
+		if d.stmt.unscopedGet != d.stmt.get {
+			stmts["unscoped_get"] = d.stmt.unscopedGet
+		}
 	}
-	if !d.readOnly {
-		stmts["lock"] = d.stmt.lock
-		stmts["insert"] = d.stmt.insert
-		stmts["update"] = d.stmt.update
-	}
-	if d.stmt.unscopedGet != d.stmt.get {
-		stmts["unscoped_get"] = d.stmt.unscopedGet
-		if !d.readOnly {
+	if !d.readOnly && d.mode.allows(updateOp) {
+		stmts["update"], stmts["lock"] = d.stmt.update, d.stmt.lock
+		if d.stmt.unscopedLock != d.stmt.lock {
 			stmts["unscoped_lock"] = d.stmt.unscopedLock
 		}
+	}
+	if !d.readOnly && d.mode.allows(insertOp) {
+		stmts["insert"] = d.stmt.insert
 	}
 	if d.allowDelete {
 		stmts["delete"] = d.stmt.deleteStmt
@@ -171,7 +181,7 @@ func Define[T, K, S any](r *Registry[S], spec TableSpec[T, K]) *Table[T, K, S] {
 	}
 	d.entry = r.record(Definition{
 		Name: d.name, Columns: cols, Statements: stmts, StatementQueries: owners,
-		Privileges: derivePrivileges(d.name, cols, d.stmt, d.readOnly, d.allowDelete),
+		Privileges: d.derivePrivileges(),
 	}, false)
 	return d
 }
@@ -187,8 +197,8 @@ func TryDefine[T, K, S any](r *Registry[S], spec TableSpec[T, K]) (*Table[T, K, 
 	fail := func(format string, args ...any) error {
 		return fmt.Errorf(r.prefix+".Define "+spec.Name+": "+format, args...)
 	}
-	if spec.ReadOnly && spec.AllowDelete {
-		return nil, fail("ReadOnly cannot combine with AllowDelete")
+	if err := spec.validateWriteMode(fail); err != nil {
+		return nil, err
 	}
 	if spec.AllowDelete && r.deny&DenyDelete != 0 {
 		return nil, fmt.Errorf("%w: %s.Define %s: AllowDelete is denied by registry policy", ErrCapabilityDenied, r.prefix, spec.Name)
@@ -199,7 +209,7 @@ func TryDefine[T, K, S any](r *Registry[S], spec TableSpec[T, K]) (*Table[T, K, 
 	}
 	t := &Table[T, K, S]{
 		descriptor: newDescriptor[T](r, spec.Name),
-		order:      spec.Order, readOnly: spec.ReadOnly, allowDelete: spec.AllowDelete,
+		order:      spec.Order, readOnly: spec.ReadOnly, allowDelete: spec.AllowDelete, mode: spec.WriteMode,
 		scope: -1, deleted: -1, version: -1,
 	}
 	if err := walkFields(rt, nil, "", nil, func(f reflect.StructField, idx []int, _, tag string) error { return t.tagged(f, idx, tag, fail) }, fail); err != nil {
@@ -209,6 +219,9 @@ func TryDefine[T, K, S any](r *Registry[S], spec TableSpec[T, K]) (*Table[T, K, 
 		if err := t.escape(c, fail); err != nil {
 			return nil, err
 		}
+	}
+	if err := t.bindUpdateColumns(spec.UpdateColumns, fail); err != nil {
+		return nil, err
 	}
 	if len(spec.GroupBy) > 0 {
 		t.groupBy = make(map[string]bool, len(spec.GroupBy))
@@ -241,6 +254,9 @@ func TryDefine[T, K, S any](r *Registry[S], spec TableSpec[T, K]) (*Table[T, K, 
 		return nil, err
 	}
 	t.derive()
+	if t.mode == WriteUpdateOnly && len(t.stmt.setColumns) == 0 {
+		return nil, fail("WriteUpdateOnly needs an updatable column")
+	}
 	return t, nil
 }
 
@@ -362,19 +378,25 @@ func (t *Table[T, K, S]) derive() {
 	names := make([]string, len(t.cols))
 	for i, c := range t.cols {
 		names[i] = c.name
-		if c.role != keyRole && c.role != scopeRole && !c.once {
+		if t.mode.allows(updateOp) && c.updatable() && t.permitsColumn(c.name) {
 			t.stmt.setColumns = append(t.stmt.setColumns, i)
 		}
-		if c.once {
+		if c.once && t.mode.allows(updateOp) {
 			t.stmt.onceColumns = append(t.stmt.onceColumns, i)
 		}
 		skipSerial := t.serial && len(t.keys) == 1 && i == t.keys[0]
 		skipDeleted := i == t.deleted && t.del.excludeIns
-		if !skipSerial && !skipDeleted {
+		if t.mode.allows(insertOp) && !skipSerial && !skipDeleted {
 			t.stmt.insertColumns = append(t.stmt.insertColumns, i)
 		}
 	}
 	t.stmt.columns = strings.Join(names, ", ")
+	if t.mode.allows(insertOp) {
+		t.deriveInsert()
+	}
+	if !t.mode.allows(selectOp) {
+		return
+	}
 
 	keyParts := make([]string, len(t.keys))
 	for pos, keyIdx := range t.keys {
@@ -397,21 +419,6 @@ func (t *Table[T, K, S]) derive() {
 	t.stmt.unscopedGet = "SELECT " + t.stmt.columns + " FROM " + t.name + byKey + alive
 	t.stmt.unscopedLock = t.stmt.unscopedGet + " FOR UPDATE"
 
-	insertNames, holders := make([]string, 0, len(names)), make([]string, 0, len(names))
-	for _, i := range t.stmt.insertColumns {
-		insertNames = append(insertNames, names[i])
-		holders = append(holders, "$"+strconv.Itoa(len(holders)+1))
-	}
-	t.stmt.insertPrefix = "INSERT INTO " + t.name + " (" + strings.Join(insertNames, ", ") + ") VALUES "
-	t.stmt.values = t.stmt.insertPrefix + "(" + strings.Join(holders, ", ") + ")"
-	if len(insertNames) == 0 {
-		t.stmt.values = "INSERT INTO " + t.name + " DEFAULT VALUES"
-	}
-	t.stmt.insert = t.stmt.values
-	if t.serial {
-		t.stmt.insert += " RETURNING " + names[t.keys[0]]
-	}
-
 	sets := make([]string, 0, len(t.stmt.setColumns))
 	cas := ""
 	for _, i := range t.stmt.setColumns {
@@ -429,13 +436,36 @@ func (t *Table[T, K, S]) derive() {
 	t.stmt.list = "SELECT " + t.stmt.columns + " FROM " + t.name + " WHERE true"
 }
 
+func (t *Table[T, K, S]) deriveInsert() {
+	names := t.InsertColumns()
+	switch {
+	case len(names) > 0:
+		holders := make([]string, len(names))
+		for i := range holders {
+			holders[i] = "$" + strconv.Itoa(i+1)
+		}
+		t.stmt.insertPrefix = "INSERT INTO " + t.name + " (" + strings.Join(names, ", ") + ") VALUES "
+		t.stmt.values = t.stmt.insertPrefix + "(" + strings.Join(holders, ", ") + ")"
+	case t.mode == WriteInsertOnly:
+		// Name the serial key so the required column grant is determinate.
+		t.stmt.values = "INSERT INTO " + t.name + " (" + t.cols[t.keys[0]].name + ") VALUES (DEFAULT)"
+	default:
+		t.stmt.values = "INSERT INTO " + t.name + " DEFAULT VALUES"
+	}
+	t.stmt.insert = t.stmt.values
+	if t.serial && t.mode.allows(selectOp) {
+		t.stmt.insert += " RETURNING " + t.cols[t.keys[0]].name
+	}
+}
+
 // Cols is the select list, for hand-written statements scanned with Rows.Select.
 func (t *Table[T, K, S]) Cols() string { return t.stmt.columns }
 
 // Insert is the INSERT base without RETURNING, for hand-written variants.
+// WriteUpdateOnly has no INSERT base and returns an empty string.
 func (t *Table[T, K, S]) Insert() string { return t.stmt.values }
 
-// InsertColumns returns the column names included in Table.Insert() in bind order.
+// InsertColumns returns the columns bound from each input row for INSERT and COPY, in bind order.
 func (t *Table[T, K, S]) InsertColumns() []string {
 	out := make([]string, len(t.stmt.insertColumns))
 	for i, colIdx := range t.stmt.insertColumns {

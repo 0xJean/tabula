@@ -44,7 +44,7 @@ scripts/check.sh --unit     # --static + unit tests (-race) + 1s fuzzing
 TABULA_TEST_DSN='postgres://...' scripts/check.sh --all  # full gate including PG integration & coverage
 ```
 
-The full gate also runs the workspace integration package in `testdata/integration`. It checks both drivers with the same callback ownership cases and exports real PostgreSQL statement failures through OpenTelemetry and structured logs.
+The full gate also runs the workspace integration package in `testdata/integration`. It checks both drivers with minimum append and update grants, verifies registered plans, exercises serial inserts, and revokes individual column and sequence grants to check denials. It also checks callback ownership and exports real PostgreSQL statement failures through OpenTelemetry and structured logs.
 
 CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) additionally runs:
 

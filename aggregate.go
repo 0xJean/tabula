@@ -67,8 +67,8 @@ func CountBy[V comparable, T, K, S any](ctx context.Context, rows *Rows[T, K, S]
 	if rows == nil || rows.t == nil {
 		return nil, fmt.Errorf("tabula.CountBy: rows binding is required")
 	}
-	if rows.bindErr != nil {
-		return nil, rows.bindErr
+	if err := rows.checkOperation(selectOp); err != nil {
+		return nil, err
 	}
 	if _, ok := rows.t.byName[col]; !ok {
 		return nil, fmt.Errorf("%s.CountBy %s: column not declared: %s", rows.t.prefix(), rows.t.name, col)
@@ -113,8 +113,8 @@ func scalarAggregate[V, T, K, S any](ctx context.Context, rows *Rows[T, K, S], a
 	if rows == nil || rows.t == nil {
 		return zero, false, fmt.Errorf("tabula.%s: rows binding is required", fnName)
 	}
-	if rows.bindErr != nil {
-		return zero, false, rows.bindErr
+	if err := rows.checkOperation(selectOp); err != nil {
+		return zero, false, err
 	}
 	if _, ok := rows.t.byName[col]; !ok {
 		return zero, false, fmt.Errorf("%s.%s %s: column not declared: %s", rows.t.prefix(), fnName, rows.t.name, col)

@@ -3,6 +3,11 @@
 All notable changes are listed here. The project follows semantic versioning; before
 v1.0 a minor version may contain breaking changes.
 
+## v0.3.11 — 2026-11-26
+
+- `TableSpec.WriteMode` supports read and update access with an optional `UpdateColumns` list, and strict insert access with optional serial sequence usage. The descriptor derives statements and privileges for the selected operations. Bound methods and pgx COPY check the mode before database I/O.
+- `WriteInsertOnly` supports a named, targetless `ON CONFLICT DO NOTHING` plan. Single inserts leave generated serial keys in PostgreSQL. [Table write modes](docs/AUTHORIZATION.md#table-write-modes)
+
 ## v0.3.10 — 2026-11-26
 
 - `postgresfixture.Fixture.Prepare(ctx, plan)` installs the cached template once or refreshes its last-use mark. It requires no login lease and creates no test clone. When migrations create member roles, call `Prepare`, acquire the process login with those roles in `LoginRoleOptions.MemberOf`, then call `CloneWithLease`. [Cold-start example](docs/AUTHORIZATION.md#process-login-roles)

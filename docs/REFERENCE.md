@@ -53,6 +53,9 @@ const (
 	ErrSessionClosed      staticError = "session is closed"
 	ErrCapabilityDenied   staticError = "operation denied by registry capability policy"
 
+	// ErrOperationDenied means the declared WriteMode forbids an operation or column.
+	ErrOperationDenied staticError = "operation denied by table write mode"
+
 	// ErrUnscopedRequiresReadOnly reports that UnscopedReadOnly denied access
 	// because the transaction is read-write and no shared reader role applies.
 	// It also matches ErrReadOnly.
@@ -913,9 +916,9 @@ func (r *Rows[T, K, S]) CheckCopy() error
     take any empty-input shortcut or touch the driver.
 
 func (r *Rows[T, K, S]) CheckWrite(row *T) error
-    CheckWrite validates session provenance, table mode, unscoped-write policy
-    and row scope for a write. Driver adapters use it when sending rows through
-    a bulk protocol such as COPY.
+    CheckWrite validates session provenance, permission to insert,
+    unscoped-write policy and row scope for the supplied row. Driver adapters
+    use it when sending rows through a bulk protocol such as COPY.
 
 func (r *Rows[T, K, S]) Delete(ctx context.Context, key K) error
     Delete physically deletes the row identified by key within the session
@@ -954,8 +957,8 @@ func (r *Rows[T, K, S]) GetMany(ctx context.Context, keys []K) ([]T, error)
     scope. An empty keys slice returns nil, nil without issuing SQL.
 
 func (r *Rows[T, K, S]) Insert(ctx context.Context, row *T) error
-    Insert writes row; with a serial key the generated key is read back into
-    row.
+    Insert writes row. With a serial key, the default mode reads the generated
+    key back into row. WriteInsertOnly leaves the key field untouched.
 
 func (r *Rows[T, K, S]) InsertMany(ctx context.Context, rows []T) error
     InsertMany inserts all rows using multi-row INSERT ... VALUES (...), (...).
@@ -1268,10 +1271,11 @@ func (d *Table) Definition() Definition
 
 func (t *Table[T, K, S]) Insert() string
     Insert is the INSERT base without RETURNING, for hand-written variants.
+    WriteUpdateOnly has no INSERT base and returns an empty string.
 
 func (t *Table[T, K, S]) InsertColumns() []string
-    InsertColumns returns the column names included in Table.Insert() in bind
-    order.
+    InsertColumns returns the columns bound from each input row for INSERT and
+    COPY, in bind order.
 
 func (d *Table) Name() string
     Name returns the name supplied at definition time.
@@ -1309,6 +1313,12 @@ type TableSpec[T, K any] struct {
 	GroupBy []string
 	// Aggregates registers scalar function/column pairs for sqlcheck verification.
 	Aggregates ScalarAggregates
+	// WriteMode restricts derived SQL, privileges and bound operations. An explicit
+	// mode excludes ReadOnly and AllowDelete and rejects hand-written SQL on Rows.
+	WriteMode WriteMode
+	// UpdateColumns limits WriteUpdateOnly to these columns, in descriptor order.
+	// Nil selects every updatable column. A version column must be included.
+	UpdateColumns []string
 }
     TableSpec declares one table of rows T keyed by K: the qualified name,
     the default order of List, optional SoftDelete config, and the row type's
@@ -1356,6 +1366,9 @@ type UpsertSpec struct {
     statement. Conflict columns identify the unique index or constraint target.
     Update lists the columns updated on conflict (key, scope, and once columns
     are forbidden); leaving Update empty produces ON CONFLICT (...) DO NOTHING.
+    WriteInsertOnly accepts an empty spec for targetless ON CONFLICT DO NOTHING.
+    An explicit conflict target or RETURNING list would require SELECT on its
+    columns.
 
 type View[T, S any] struct {
 	descriptor[T, S]
@@ -1443,6 +1456,19 @@ type ViewSpec[T any] struct {
     Array, custom Scanner/Valuer) and supports nested struct column prefixes
     (e.g. `Job JobRow` tagged `db:"j_"` maps j_id, j_code, ...).
 
+type WriteMode uint8
+    WriteMode selects the operations a table derives and accepts on bound Rows.
+    A PostgreSQL role enforces access for SQL issued through other handles.
+
+const (
+	// WriteDefault uses TableSpec.ReadOnly and TableSpec.AllowDelete.
+	WriteDefault WriteMode = iota
+	// WriteUpdateOnly permits derived reads, locks and updates.
+	WriteUpdateOnly
+	// WriteInsertOnly permits inserts, COPY and targetless ON CONFLICT DO NOTHING.
+	// Inserts leave a generated serial key in PostgreSQL and never read it back.
+	WriteInsertOnly
+)
 type ZeroValue[V any] struct {
 	// Has unexported fields.
 }
@@ -1522,10 +1548,10 @@ func ArrayColumn(ft reflect.Type) (func(any) any, error)
 
 func CopyFrom[T, K, S any](ctx context.Context, sess *Session[S], tbl *tabula.Table[T, K, S], rows []T) (int64, error)
     CopyFrom bulk-inserts rows into tbl using PostgreSQL's binary COPY protocol
-    via pgx.Tx.CopyFrom. It checks session provenance (A4), read-only mode,
-    DenyCopy and DenyUnscopedWrites (A6), and closed-session state before any
-    empty-input shortcut or driver access, then checks each row's scope via
-    CheckWrite.
+    via pgx.Tx.CopyFrom. It checks session provenance (A4), permission to
+    insert, DenyCopy and DenyUnscopedWrites (A6), and closed-session state
+    before any empty-input shortcut or driver access, then checks each row's
+    scope via CheckWrite.
 
     An empty rows slice returns 0, nil after passing capability and session
     checks without touching the database.

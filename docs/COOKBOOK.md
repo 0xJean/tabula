@@ -84,6 +84,18 @@ row.Version++
 err = r.Save(ctx, *row) // checks version CAS and once columns
 ```
 
+### Give an update role access to two columns
+
+```go
+var editable = tabula.Define(reg, tabula.TableSpec[Record, int64]{
+    Name:          "public.records",
+    WriteMode:     tabula.WriteUpdateOnly,
+    UpdateColumns: []string{"code", "version"},
+})
+```
+
+A locked record can be saved with a new code and an incremented version. The generated `UPDATE` assigns those two columns. The role needs `SELECT` on the declared columns for the lock and `UPDATE (code, version)` for the save. [Table write modes](AUTHORIZATION.md#table-write-modes)
+
 ## 3. Conditional state transitions (`UpdateWhere` / `SetWhere`)
 
 ```go

@@ -29,6 +29,24 @@ One read-only query checks effective grants for the named role, including inheri
 
 An absent role returns one role finding. Absent objects and missing grants appear in the sorted results. A canceled query or database error fails the check. The application owns its startup deadline, role selection and response to findings. RLS policy behavior and excess grants have separate audits.
 
+## Table write modes
+
+Choose a descriptor for each execution role and pass that role's definitions to `CollectPrivilegeNeeds` and `VerifyStatements`. Every role also needs schema `USAGE`. PostgreSQL evaluates grants, row policies, defaults and triggers when the statement runs.
+
+| Declaration | Derived operations | Derived privileges |
+| --- | --- | --- |
+| `WriteDefault` (zero) | Existing reads and writes. `ReadOnly` selects reads only. `AllowDelete` enables physical deletes. | Existing column grants, sequence usage for writable serial tables, and table `DELETE` when enabled |
+| `WriteUpdateOnly` | Read live rows, lock rows and update the permitted columns | `SELECT` on all descriptor columns and `UPDATE` on the permitted columns |
+| `WriteInsertOnly` | Insert, batch insert, binary COPY with input columns, and an explicitly declared targetless `ON CONFLICT DO NOTHING` | `INSERT` on bound columns and `USAGE` on the owned sequence of a declared serial key |
+
+**Updating selected columns.** Set `UpdateColumns` to a nonempty list, or omit it to permit all updatable columns. `Save`, `SaveReturning` and `UpdateWhere` assign the selected columns in descriptor order. Key, scope and `once` columns are protected. Include the version column on versioned rows so these methods can compare against the previous version. Existing single-row `Set`, `SetWhere` and `SetExpr` retain their individual version and target rules. `SoftDelete` requires permission to update the deletion marker. Rows already marked deleted stay outside the live-row operations. `SaveReturning` can return any declared column because this role has the corresponding `SELECT` access.
+
+**Appending rows.** `Insert`, `InsertMany` and COPY use the normal insert inputs, including scope, `once` and version values. A timestamp deletion marker uses its database default. Boolean and status markers use the supplied value. With a serial key, the server generates the key and the caller's field stays untouched. If all columns take defaults, the SQL names the serial key with a literal `DEFAULT`, which requires `INSERT` on that key. COPY requires at least one bound input column. An explicit key uses its column's `INSERT` grant and adds no sequence requirement.
+
+For duplicate suppression, declare `entries.DefineUpsert("append_once", tabula.UpsertSpec{})`. Its registered SQL uses `ON CONFLICT DO NOTHING`, which can skip a conflict on any usable unique constraint. An explicit conflict target requires reading the target columns. A `RETURNING` list requires `SELECT` on the returned columns. Strict insert descriptors reject both, along with `DO UPDATE`, reads, locks and deletes. `InsertReturning` is rejected even for an empty list, which normally returns every column.
+
+The two explicit modes reject hand-written `Rows.Exec`, `Scan`, `Select` and `SelectIter`. A mode denial matches `tabula.ErrOperationDenied`. Registry capabilities, session provenance, read-only transactions and scope checks still apply. Explicit `Statement` and `Requires` declarations add application-owned audit entries. SQL issued directly on a session or through another descriptor is governed by that handle and the PostgreSQL role. Verify registered statements under the bound role and exercise inserts to check sequence access at execution time.
+
 ## Collect the workload
 
 Run `tabula inventory --config inventory.json` in the application checkout. `Dir` is relative to the working directory. For example, this configuration collects the SQL argument of `(*sql.Tx).QueryContext` and `(*sql.Tx).ExecContext`.
