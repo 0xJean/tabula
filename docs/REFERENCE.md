@@ -316,6 +316,39 @@ type Binding struct {
 func BindValue[V any](slot Slot[V], value V) Binding
     BindValue pairs an input with a value of its declared Go type.
 
+type BoundMutationPlan[T, S any] struct {
+	rowExecution[T, S]
+	// Has unexported fields.
+}
+    BoundMutationPlan executes one declared mutation family on an authorized
+    session.
+
+func (b *BoundMutationPlan[T, S]) DeleteMany(ctx context.Context, filters []string, values ...Binding) (int64, error)
+    DeleteMany physically deletes matching live rows and returns the exact
+    affected count.
+
+func (b *BoundMutationPlan[T, S]) UpdateMany(ctx context.Context, set string, filters []string, values ...Binding) (int64, error)
+    UpdateMany selects a complete named assignment set and returns the exact
+    affected row count, including zero. The filter list selects optional
+    predicates.
+
+type BoundRowsPlan[T, S any] struct {
+	rowExecution[T, S]
+	// Has unexported fields.
+}
+    BoundRowsPlan executes registered statements on one authorized session.
+
+func (b *BoundRowsPlan[T, S]) Count(ctx context.Context, filters []string, values ...Binding) (int64, error)
+    Count counts unpaged result rows (groups for grouped queries). Supply only
+    the bindings used by the selected WHERE predicates.
+
+func (b *BoundRowsPlan[T, S]) Find(ctx context.Context, choice RowChoice, values ...Binding) ([]T, error)
+    Find returns the selected data page. It executes one registered statement.
+
+func (b *BoundRowsPlan[T, S]) List(ctx context.Context, choice RowChoice, values ...Binding) ([]T, int64, error)
+    List returns a data page and the exact count before pagination. Both
+    registered calls and all bindings are validated before the first execution.
+
 type CallMethod uint8
     CallMethod is the driver operation authorized for one execution.
 
@@ -382,6 +415,17 @@ const (
 	// table instead of scanning rows with COUNT(*).
 	CountEstimate
 )
+type CursorValue struct {
+	// Has unexported fields.
+}
+    CursorValue is one typed field value at a keyset boundary.
+
+func At[V any](field Field[V], value V) CursorValue
+    At supplies one cursor component using the field's input codec.
+
+func NullAt[V any](field Field[V]) CursorValue
+    NullAt supplies a SQL NULL boundary for a nullable order field.
+
 type DefinedColumn struct {
 	Name     string
 	GoType   string
@@ -457,6 +501,29 @@ type Expr[V any] struct {
 }
     Expr is a typed expression assembled from descriptor fields and inputs.
 
+func AvgOf[V, R any](f Expr[V], result PGType[R]) Expr[R]
+    AvgOf averages a numeric field. PostgreSQL returns numeric for integer and
+    numeric inputs and float8 for floating-point inputs. The result is nullable.
+
+func CountAll() Expr[int64]
+    CountAll counts all rows, including those with NULL values.
+
+func CountOf[V any](f Expr[V]) Expr[int64]
+    CountOf counts non-null values of the input expression.
+
+func MaxOf[V any](f Expr[V]) Expr[V]
+    MaxOf computes the maximum of a field, with the same NULL contract as MinOf.
+
+func MinOf[V any](f Expr[V]) Expr[V]
+    MinOf computes the minimum of a field. An empty or all-NULL input yields
+    NULL. PostgreSQL must provide the corresponding same-result-type min
+    overload.
+
+func SumOf[V, R any](f Expr[V], result PGType[R]) Expr[R]
+    SumOf sums a numeric field. Supply the exact PostgreSQL result type and its
+    Go representation. For example, sum(int4) returns int8 and sum(int8) returns
+    numeric. An empty or all-NULL group yields NULL.
+
 type Field[V any] struct {
 	// Has unexported fields.
 }
@@ -465,6 +532,10 @@ type Field[V any] struct {
 func FieldOf[R, V any](r Rel[R], name string, kind PGType[V]) Field[V]
     FieldOf resolves a descriptor column at definition time. The Go value type
     must match. A pointer field may be read as its nullable element type.
+
+func (f Field[V]) Column() RowColumn
+    Column retains the field's occurrence and type in a heterogeneous column
+    list.
 
 func (f Field[V]) Expr() Expr[V]
     Expr references this column on its declaring occurrence.
@@ -638,6 +709,35 @@ type Metrics interface {
     statement execution. Passed explicitly via RegistryConfig.Metrics or
     RunnerOptions.Metrics; nil disables metrics.
 
+type MutationPlan[T, S any] struct {
+	// Has unexported fields.
+}
+    MutationPlan owns one registered UpdateMany or DeleteMany family.
+
+func DefineDeleteMany[T, S any](src RowSource[T, S], name string, spec MutationSpec) *MutationPlan[T, S]
+    DefineDeleteMany registers a physical delete on a table that permits it.
+    It panics on declaration errors.
+
+func DefineUpdateMany[T, S any](src RowSource[T, S], name string, spec MutationSpec, sets ...RowSet) *MutationPlan[T, S]
+    DefineUpdateMany registers the permitted sets of assignments. It panics on
+    declaration errors.
+
+func TryDefineDeleteMany[T, S any](src RowSource[T, S], name string, spec MutationSpec) (*MutationPlan[T, S], error)
+    TryDefineDeleteMany atomically registers a predicate-based DELETE.
+
+func TryDefineUpdateMany[T, S any](src RowSource[T, S], name string, spec MutationSpec, sets ...RowSet) (*MutationPlan[T, S], error)
+    TryDefineUpdateMany atomically registers a predicate-based UPDATE.
+
+func (p *MutationPlan[T, S]) Bind(s Session[S]) *BoundMutationPlan[T, S]
+    Bind attaches this mutation plan to one session.
+
+type MutationSpec struct {
+	RowFilter
+	Version RowVersion
+}
+    MutationSpec requires a fixed WHERE predicate in addition to any optional
+    predicates. Versioned tables require ExpectVersion for updates and deletes.
+
 type ObserveMask uint8
     ObserveMask identifies which observability signals a runner session handles
     itself so that a Registry skips duplicate emissions for those signals.
@@ -754,8 +854,33 @@ func And(first, second Pred, rest ...Pred) Pred
 func Eq[V any](left, right Expr[V]) Pred
     Eq compares two expressions of the same PostgreSQL type.
 
+func Ge[V any](a, b Expr[V]) Pred
+    Ge compares two expressions using PostgreSQL greater-than-or-equal
+    semantics.
+
+func Gt[V any](a, b Expr[V]) Pred
+    Gt compares two expressions using PostgreSQL greater-than semantics.
+
 func IsNotDistinct[V any](left, right Expr[V]) Pred
     IsNotDistinct compares values using PostgreSQL's null-safe equality.
+
+func IsNull[V any](v Expr[V]) Pred
+    IsNull tests SQL NULL and always returns a non-null boolean.
+
+func Le[V any](a, b Expr[V]) Pred
+    Le compares two expressions using PostgreSQL less-than-or-equal semantics.
+
+func Lt[V any](a, b Expr[V]) Pred
+    Lt compares two expressions using PostgreSQL less-than semantics.
+
+func Ne[V any](a, b Expr[V]) Pred
+    Ne compares two expressions for inequality.
+
+func Not(p Pred) Pred
+    Not negates a PostgreSQL boolean, preserving SQL NULL.
+
+func Or(first, second Pred, rest ...Pred) Pred
+    Or combines predicates in declaration order with SQL three-valued logic.
 
 type Projection struct {
 	// Has unexported fields.
@@ -1081,6 +1206,118 @@ type RetryConfig struct {
     RetryConfig controls explicit retries for transient PostgreSQL transaction
     conflicts (serialization failure 40001 and deadlock 40P01).
 
+type RowAssignment struct {
+	// Has unexported fields.
+}
+    RowAssignment assigns a typed expression to a field on the target
+    occurrence.
+
+func Assign[V any](field Field[V], value Expr[V]) RowAssignment
+    Assign sets a column to a compatible expression, evaluated on the old row.
+
+type RowChoice struct {
+	Filters       []string
+	Order         string
+	Page          RowPage
+	Limit, Offset int64
+	After         RowCursor
+}
+    RowChoice selects precompiled alternatives. Filters lists the enabled
+    optional predicates. Order names a declared ordering.
+
+type RowColumn struct {
+	// Has unexported fields.
+}
+    RowColumn identifies a typed descriptor field in a GROUP BY or source
+    declaration.
+
+type RowCursor struct {
+	// Has unexported fields.
+}
+    RowCursor is a boundary issued for one plan and order. Its zero value
+    denotes the absence of a cursor.
+
+type RowFilter struct {
+	Where         Pred
+	Optional      []RowPredicate
+	AllowUnscoped bool
+	Budget        int
+	Observe       []StatementOption
+}
+    RowFilter declares the common WHERE terms and the registration budget. Where
+    is required for mutations. Column-scoped plans register scoped statements by
+    default. AllowUnscoped adds a separate unscoped family.
+
+type RowOrder struct {
+	Name  string
+	Terms []RowTerm
+}
+    RowOrder names one complete ordering, including its tie-breakers.
+
+type RowPage uint8
+    RowPage selects a registered page form.
+
+const (
+	// Unpaged returns the entire filtered result.
+	Unpaged RowPage = iota
+	// OffsetPage binds Limit and Offset.
+	OffsetPage
+	// FirstPage binds Limit and starts at the beginning of a keyset order.
+	FirstPage
+	// AfterPage binds Limit and the cursor of the same plan and order.
+	AfterPage
+)
+type RowPages struct {
+	Unpaged, Offset, Keyset bool
+	MaxLimit, MaxOffset     int64
+}
+    RowPages declares the allowed page forms and their inclusive bounds. Its
+    zero value registers only an unpaged read. Keyset registers first and after.
+
+type RowPredicate struct {
+	Name string
+	When Pred
+}
+    RowPredicate enables one named, independently optional WHERE term.
+
+type RowSet struct {
+	Name        string
+	Assignments []RowAssignment
+}
+    RowSet names a complete, ordered set of simultaneous assignments.
+
+type RowSource[T, S any] struct {
+	// Has unexported fields.
+}
+    RowSource ties a single occurrence to its descriptor's keys and live-row
+    policy.
+
+func RowsFrom[T, K, S any](table *Table[T, K, S], rel Rel[T], columns ...RowColumn) RowSource[T, S]
+    RowsFrom uses the same occurrence as FieldOf. Supply the catalog type of
+    a scope or deleted field with field.Column() when its Go type needs an
+    explicit mapping. ByRLS and Global need no scope field.
+
+type RowTerm struct {
+	// Has unexported fields.
+}
+    RowTerm orders one physical field. PostgreSQL orders NULLs last for
+    ascending terms and first for descending terms.
+
+func Asc[V any](f Field[V]) RowTerm
+    Asc orders a field from least to greatest.
+
+func Desc[V any](f Field[V]) RowTerm
+    Desc orders a field from greatest to least.
+
+type RowVersion struct {
+	// Has unexported fields.
+}
+    RowVersion compares the existing version with a required input.
+
+func ExpectVersion[V any](field Field[V], expected Slot[V]) RowVersion
+    ExpectVersion declares a version check for every shape of a mutation.
+    UpdateMany also increments each matching row's version.
+
 type Rows[T, K, S any] struct {
 	readBinding[T, S]
 
@@ -1241,6 +1478,37 @@ func (r *Rows[T, K, S]) UpsertMany(ctx context.Context, plan *UpsertPlan[T, K, S
 func (r *Rows[T, K, S]) WithLogger(logger *slog.Logger) *Rows[T, K, S]
     WithLogger returns a Rows handle sharing the same Table and Session with a
     per-binding logger override.
+
+type RowsPlan[T, S any] struct {
+	// Has unexported fields.
+}
+    RowsPlan owns the registered data and exact-count shapes for one output
+    view.
+
+func DefineRows[T, R, S any](out *View[T, S], name string, src RowSource[R, S], spec RowsSpec, project ...Projection) *RowsPlan[T, S]
+    DefineRows registers a named single-table read. It panics on declaration
+    errors.
+
+func TryDefineRows[T, R, S any](out *View[T, S], name string, src RowSource[R, S], spec RowsSpec, project ...Projection) (*RowsPlan[T, S], error)
+    TryDefineRows registers the complete read plan or returns an error without
+    publishing any shape. The projection covers the view in descriptor order.
+
+func (p *RowsPlan[T, S]) Bind(s Session[S]) *BoundRowsPlan[T, S]
+    Bind attaches this read plan to a session from the same registry.
+
+func (p *RowsPlan[T, S]) Cursor(order string, values ...CursorValue) (RowCursor, error)
+    Cursor validates a boundary against the specific plan, order, field types
+    and arity. Supply values in order, taken from the last row of the prior
+    page.
+
+type RowsSpec struct {
+	RowFilter
+	GroupBy []RowColumn
+	Orders  []RowOrder
+	Pages   RowPages
+}
+    RowsSpec declares the finite alternatives for Find, List and Count. GroupBy
+    lists the physical fields that determine each aggregate group.
 
 type SQLAuthority struct {
 	// Has unexported fields.
@@ -2360,8 +2628,9 @@ func ClassifyPolicies(policies []Policy, rules []PolicyRule) ([]PolicyClass, []s
     roles.
 
 func CollectPrivilegeNeeds(defs []tabula.Definition) (PrivilegeNeeds, []string)
-    CollectPrivilegeNeeds merges the Privileges declared on defs and also
-    reports any definition names that declared zero privileges.
+    CollectPrivilegeNeeds merges descriptor and typed-shape grants and reports
+    definitions with no explicit grants. Use RoleStatements.Readiness for a
+    role's selected shapes, including any-column, schema and RLS requirements.
 
 func DefaultTypeFamilies() map[string][]string
     DefaultTypeFamilies returns a fresh copy of the built-in Go-type to
@@ -2379,7 +2648,7 @@ func ParseSnapshot(content string) ([]tabula.Definition, error)
     such as tabula check can verify the snapshot against PostgreSQL without
     importing the application's Go packages.
 
-func PrepareStatement(ctx context.Context, tx *sql.Tx, query, role string) (err error)
+func PrepareStatement(ctx context.Context, tx *sql.Tx, query, role string) error
     PrepareStatement has the server PREPARE query inside tx, optionally as role,
     then EXPLAIN EXECUTE it with NULL arguments. PREPARE checks names, types,
     functions and parameter inference. EXPLAIN checks plan-time access without
@@ -2722,6 +2991,12 @@ func (r RoleStatements) AddViews(role string, views ...tabula.ViewDefinition)
     AddViews appends every registered statement from views (including all C3
     composed-query variants) to role's workload without manual listing.
 
+func (r RoleStatements) Readiness(role string) (ReadinessNeeds, error)
+    Readiness collects minimum privileges and scope requirements from the
+    registered shapes bound to role. Pass the result and any application
+    requirements to CheckReadiness. Legacy SQL retains its application-owned
+    needs.
+
 type RuntimeProbe struct {
 	BehaviorStatement
 	Vars   map[string]string
@@ -2738,8 +3013,10 @@ type SQLBinding struct {
 	NoAccess   bool `json:",omitempty"`
 	Variants   []Statement
 	Definition string `json:",omitempty"`
-	Prefix     string `json:",omitempty"`
-	Skip       bool
+	// Plan identifies a registered typed family when the source handle is indirect.
+	Plan   string `json:",omitempty"`
+	Prefix string `json:",omitempty"`
+	Skip   bool
 }
     SQLBinding assigns one inventoried site to its execution roles. Definition
     names the owning table or view when the collector cannot resolve it. Prefix
@@ -2760,9 +3037,11 @@ func CollectSQL(ctx context.Context, cfg InventoryConfig) (SQLInventory, error)
     including aliases and imported constants. It recognizes View.DefineQuery,
     View.TryDefineQuery, and single-table aggregate calls (Max, Min, Sum,
     Avg, CountBy, Exists) as static sites when their key or column is
-    compile-time constant, and collects typed call sites for CallTargets
-    / AuditSecurityCalls. Escaping function or method values are flagged
-    accordingly.
+    compile-time constant, and collects typed call sites for CallTargets /
+    AuditSecurityCalls. Typed row declarations and executions are built-in
+    sites. Indirect plan handles can be resolved through SQLBinding.Definition
+    and SQLBinding.Plan. Raw SQL methods and additional call targets are
+    optional.
 
 func (inv SQLInventory) BindRoles(bindings map[string]SQLBinding) (RoleStatements, error)
     BindRoles produces a workload from the collected SQL. Missing and stale
@@ -2825,6 +3104,8 @@ type Statement struct {
 	SQL      string
 	Access   []PolicyAccess `json:",omitempty"`
 	NoAccess bool           `json:",omitempty"`
+	// Shape carries per-statement types and readiness requirements exported by a typed plan.
+	Shape *tabula.StatementShape `json:",omitempty"`
 }
     Statement is application-owned SQL. Access supplies the complete relation
     and command list for complex statements when checking structural policy

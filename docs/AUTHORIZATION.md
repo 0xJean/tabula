@@ -240,6 +240,11 @@ Each policy must match exactly one rule. Unmatched policies, overlapping matches
 
 ## Check command coverage and exercise rows
 
+For a typed statement with no registered table access, review the routine
+body and declare its caller-context `Access`, or set `NoAccess` after that
+review. Role binding and policy coverage enforce the declaration even for a
+scalar function called without a `FROM` clause.
+
 `tabula check-coverage --config workload.json` checks catalog policy coverage on RLS-enabled tables. It accounts for permissive policies, `ALL`, `PUBLIC`, inherited roles, FORCE and role bypass. `INSERT … RETURNING` requires SELECT coverage. In the example workload, a writer with the required column grants and only an INSERT policy can pass `verify-roles`. Running `check-coverage` then reports a missing SELECT policy for `add-note`. Targeted `ON CONFLICT` needs SELECT coverage and `DO UPDATE` also needs UPDATE.
 
 A simple read such as `SELECT substring(note FOR 3) FROM docs.notes` requires SELECT coverage. Adding a top-level `FOR UPDATE`, `FOR NO KEY UPDATE`, `FOR SHARE`, or `FOR KEY SHARE` clause also requires UPDATE coverage. Null-safe comparisons (`IS [NOT] DISTINCT FROM`) and parenthesized function arguments (`EXTRACT(... FROM ...)`, `TRIM(... FROM ...)`) are recognized inside single-table statements. For joins, CTEs, multi-source writes and other complex SQL, supply the full reviewed `Access` list on the statement, for example `[{"Table":"docs.notes","Command":"SELECT"}]`, or set `"NoAccess": true` when a reviewed complex statement (such as a `SECURITY DEFINER` routine call) accesses no caller-RLS relations. For complex SQL, `NoAccess` records the reviewer’s assessment. Check the routine body, execution role and any views before setting it. Inferred table access conflicts with the declaration. Qualify relations for the application search path. Pair structural checks with role verification so that PostgreSQL also validates the SQL and the referenced objects. [PostgreSQL policy command rules](https://www.postgresql.org/docs/17/sql-createpolicy.html)
@@ -310,3 +315,38 @@ Each live login uses one checked-out maintenance connection even between test ca
 The optional login label is visible in PostgreSQL and accepts 1–25 ASCII lowercase letters, digits or underscores. Multiple processes can use the same label. Each gets an independent random name and lease.
 
 A live lease keeps its clones between connections. After a worker exits, `PruneClones(ctx, 0)` collects marked clones once all clients disconnect. `Prune(ctx, maxIdle)` applies its usual server-timed grace period. An ordinary clone, or a database left by an interruption between creation and marking, requires explicit cleanup. Automatic clone cleanup uses a non-forcing drop. Suites with host-specific teardown requirements should account for those separately before opting in. [Clone ownership and lifetime](DESIGN-v0.3.9.md)
+
+## Bind a typed row plan to roles
+
+`CollectSQL` records row-plan declarations and the calls to `Find`, `List`,
+`Count`, `UpdateMany` and `DeleteMany`. For a direct declaration or a
+single-assignment handle it records the owner and plan name. When a factory,
+parameter or mutable handle hides them, set `SQLBinding.Definition` and
+`SQLBinding.Plan` to the reviewed owner and plan name. A binding can use
+`Prefix` to select a registered shape or a dotted key prefix. A `List` site
+includes the matching count for each selected data shape.
+
+`BindRolesWithDefinitions` expands the registered keys from the live registry
+or a parsed SQL snapshot. A `Count` call adds only the count variants. A
+`Find` call adds only data variants. Each statement supplies its physical
+commands and column privileges. Declaration sites cover the whole family by
+default. Assign them to the roles that need those shapes or use a reviewed
+inventory exception when separate execution sites account for them.
+
+```go
+work, err := inventory.BindRolesWithDefinitions(assignments, tables, views)
+if err != nil {
+    return err
+}
+needs, err := work.Readiness("scope_reader")
+if err != nil {
+    return err
+}
+missing, err := sqlcheck.CheckReadiness(ctx, db, "scope_reader", needs, extraNeeds)
+```
+
+Run `VerifyRoleStatements` to prepare and explain the exported workload under
+each assigned role. For typed reads it also checks physical column types,
+parameter types, and the projected names and types. The type probe uses a
+zero-row source. Run the operations on representative scoped data to verify
+row visibility, aggregate NULL results and affected counts.

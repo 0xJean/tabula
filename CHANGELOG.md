@@ -12,6 +12,8 @@ v1.0 a minor version may contain breaking changes.
 
 - Typed input slots now render an explicit cast to their schema-qualified PostgreSQL type. Regenerate statement snapshots before comparing or verifying plans. `Varchar(n)` records a physical column length for catalog checks. Parameter casts omit the length so PostgreSQL handles comparisons and assignments with their normal semantics.
 
+- Named row plans register typed reads, grouped and scalar aggregates, and affected-count updates and deletes. Role-bound SQL snapshots include every declared alternative and its catalog types and minimum grants. [Row plan examples](docs/COOKBOOK.md#registered-single-table-reads-and-writes)
+
 ## v0.3.11 — 2026-11-26
 
 - `TableSpec.WriteMode` supports read and update access with an optional `UpdateColumns` list, and strict insert access with optional serial sequence usage. The descriptor derives statements and privileges for the selected operations. Bound methods and pgx COPY check the mode before database I/O.

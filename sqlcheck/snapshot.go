@@ -15,10 +15,11 @@ const queryHeader = "-- tabula:statement-queries "
 type snapshotQueries struct {
 	Definition string
 	Statements map[string]string
+	Shapes     map[string]tabula.StatementShape `json:",omitempty"`
 }
 
 func writeQueryHeader(b *strings.Builder, d tabula.Definition) {
-	data, _ := json.Marshal(snapshotQueries{Definition: d.Name, Statements: d.StatementQueries})
+	data, _ := json.Marshal(snapshotQueries{Definition: d.Name, Statements: d.StatementQueries, Shapes: d.StatementShapes})
 	b.WriteString(queryHeader)
 	b.Write(data)
 	b.WriteByte('\n')
@@ -30,7 +31,7 @@ func writeQueryHeader(b *strings.Builder, d tabula.Definition) {
 // importing the application's Go packages.
 func ParseSnapshot(content string) ([]tabula.Definition, error) {
 	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
-	queries := make(map[string]map[string]string)
+	queries := make(map[string]snapshotQueries)
 	var (
 		defs     []tabula.Definition
 		curDef   *tabula.Definition
@@ -74,16 +75,17 @@ func ParseSnapshot(content string) ([]tabula.Definition, error) {
 			}
 			if isTableHeader(lines, i) {
 				owners, recorded := queries[comment]
-				if recorded && owners == nil {
+				if recorded && owners.Statements == nil {
 					return nil, fmt.Errorf("sqlcheck.ParseSnapshot: ambiguous query ownership for duplicate definition %q", comment)
 				}
 				defs = append(defs, tabula.Definition{
 					Name:             comment,
 					Statements:       map[string]string{},
-					StatementQueries: owners,
+					StatementQueries: owners.Statements,
+					StatementShapes:  owners.Shapes,
 				})
 				if recorded {
-					queries[comment] = nil
+					queries[comment] = snapshotQueries{}
 				}
 				curDef = &defs[len(defs)-1]
 				continue
@@ -95,10 +97,10 @@ func ParseSnapshot(content string) ([]tabula.Definition, error) {
 					if err := json.Unmarshal([]byte(data), &h); err != nil {
 						return nil, fmt.Errorf("sqlcheck.ParseSnapshot: query header at line %d: %w", i+1, err)
 					}
-					if h.Definition == "" || len(h.Statements) == 0 || queries[h.Definition] != nil {
+					if h.Definition == "" || len(h.Statements) == 0 || queries[h.Definition].Statements != nil {
 						return nil, fmt.Errorf("sqlcheck.ParseSnapshot: invalid or duplicate query header at line %d", i+1)
 					}
-					queries[h.Definition] = h.Statements
+					queries[h.Definition] = h
 				}
 				continue
 			}
@@ -112,6 +114,18 @@ func ParseSnapshot(content string) ([]tabula.Definition, error) {
 	}
 	if err := flushStmt(); err != nil {
 		return nil, err
+	}
+	for _, def := range defs {
+		for key := range def.StatementShapes {
+			if def.StatementQueries[key] == "" || def.Statements[key] == "" {
+				return nil, fmt.Errorf("sqlcheck.ParseSnapshot: typed shape %q lacks SQL or ownership in %q", key, def.Name)
+			}
+		}
+	}
+	for _, h := range queries {
+		if len(h.Shapes) != 0 {
+			return nil, fmt.Errorf("sqlcheck.ParseSnapshot: missing definition for typed shape header %q", h.Definition)
+		}
 	}
 	return defs, nil
 }

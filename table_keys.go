@@ -33,6 +33,7 @@ type deleteSpec struct {
 	kind       deleteKind
 	aliveSQL   string
 	deletedVal reflect.Value
+	aliveVal   reflect.Value
 	excludeIns bool
 }
 
@@ -172,8 +173,10 @@ func (t *Table[T, K, S]) bindSoftDelete(spec *SoftDelete, fail func(string, ...a
 			return fail("SoftDelete.DeletedValue for %s: %w", col.name, err)
 		}
 		aliveSQL := col.name + " <> " + delLit
+		var aliveVal reflect.Value
 		if spec.AliveValue != nil {
-			aliveVal, aliveLit, err := coerceDeleteLiteral(spec.AliveValue, ft)
+			var aliveLit string
+			aliveVal, aliveLit, err = coerceDeleteLiteral(spec.AliveValue, ft)
 			if err != nil {
 				return fail("SoftDelete.AliveValue for %s: %w", col.name, err)
 			}
@@ -186,6 +189,7 @@ func (t *Table[T, K, S]) bindSoftDelete(spec *SoftDelete, fail func(string, ...a
 			kind:       deleteStatus,
 			aliveSQL:   aliveSQL,
 			deletedVal: delVal,
+			aliveVal:   aliveVal,
 		}
 		return nil
 	default:

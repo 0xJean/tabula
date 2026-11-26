@@ -313,3 +313,79 @@ tabula test-rls --config behavior.json
 ```
 
 Generate `statements.sql` from the tables and views used by the assigned roles. A missing descriptor or aggregate makes `inventory` exit with the affected site ID. Review each unregistered dynamic site and each extra grant before changing the application's grant declarations. [Full JSON examples and interpretation](AUTHORIZATION.md)
+
+## Registered single-table reads and writes
+
+Declare a physical table and an output view at startup. This example uses
+`public.items(id bigint PRIMARY KEY, rank integer NOT NULL)` and a view with
+one Go field, `ID int64` tagged `db:"id"`.
+
+```go
+rel := tabula.FromTable(items, "i", tabula.Global())
+src := tabula.RowsFrom(items, rel)
+id := tabula.FieldOf(rel, "id", tabula.Int8())
+rank := tabula.FieldOf(rel, "rank", tabula.Int4())
+minimum := tabula.Input("minimum", tabula.Int4())
+byRank := tabula.Ge(rank.Expr(), minimum.Expr())
+
+find := tabula.DefineRows(out, "search", src, tabula.RowsSpec{
+    RowFilter: tabula.RowFilter{Optional: []tabula.RowPredicate{
+        {Name: "minimum", When: byRank},
+    }},
+    Orders: []tabula.RowOrder{{Name: "by_id", Terms: []tabula.RowTerm{tabula.Asc(id)}}},
+    Pages:  tabula.RowPages{Offset: true, Keyset: true, MaxLimit: 50, MaxOffset: 500},
+}, tabula.Project(tabula.Output(out, "id", tabula.Int8()), id.Expr()))
+
+// Inside a callback with an authorized session.
+choice := tabula.RowChoice{
+    Filters: []string{"minimum"}, Order: "by_id", Page: tabula.FirstPage, Limit: 10,
+}
+rows, total, err := find.Bind(session).List(ctx, choice, tabula.BindValue(minimum, 3))
+```
+
+`Find` executes the selected data statement. `Count` counts the unpaged result
+for the selected predicates. `List` validates the bindings for both statements,
+then runs the count and the page. Use a repeatable-read transaction when both
+must see the same database snapshot. For a subsequent keyset page, call
+`find.Cursor("by_id", tabula.At(id, last.ID))` with the last result. Set
+`choice.Page` to `AfterPage` and `choice.After` to that cursor. Each keyset
+order projects its terms and ends in the complete table key or grouping key.
+Mixed directions and nullable terms use the same NULL ordering for comparisons
+and sorting. Use `NullAt(field)` for a NULL cursor component.
+
+Use `And`, `Or` and `Not` to combine PostgreSQL boolean expressions.
+A predicate declared with a custom Go codec still requires the catalog type
+`pg_catalog.bool`. Nullable predicates follow PostgreSQL three-valued logic.
+
+Project `CountAll`, `CountOf`, `MinOf`, `MaxOf`, `SumOf` or `AvgOf` to read
+aggregate results through the view. Supply the PostgreSQL result type to
+`SumOf` and `AvgOf`, for example `SumOf(rank.Expr(), Int8())` for an integer field.
+A non-count aggregate needs a nullable destination. Put each free projected
+field in `RowsSpec.GroupBy` when projecting an aggregate. An ungrouped scalar
+aggregate has one result row even on an empty input. Grouped counts count
+groups before the page bounds.
+
+```go
+next := tabula.Input("new_rank", tabula.Int4())
+change := tabula.DefineUpdateMany(src, "change_rank", tabula.MutationSpec{
+    RowFilter: tabula.RowFilter{Where: byRank},
+}, tabula.RowSet{
+    Name: "rank", Assignments: []tabula.RowAssignment{tabula.Assign(rank, next.Expr())},
+})
+affected, err := change.Bind(session).UpdateMany(ctx, "rank", nil,
+    tabula.BindValue(minimum, 3), tabula.BindValue(next, 7))
+```
+
+Every mutation requires a fixed typed predicate. Optional predicates narrow it.
+For a versioned table, supply `MutationSpec.Version` with
+`ExpectVersion(revision, expected)`. Updates compare and advance the version,
+and deletes compare it. A stale version can therefore yield zero affected
+rows. The assignments may include the descriptor's soft-delete marker.
+Subsequent reads and mutations exclude those deleted rows. Physical
+`DefineDeleteMany` requires `TableSpec.AllowDelete`.
+
+The default budget is 256 statements per plan. It includes the declared
+scopes and independent predicate choices, each order and allowed page form,
+and one count per scope and predicate combination. Each update assignment set
+contributes its own shape. `TryDefineRows`, `TryDefineUpdateMany` and
+`TryDefineDeleteMany` return declaration errors before publishing the family.

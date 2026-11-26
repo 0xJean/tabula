@@ -192,8 +192,13 @@ func (s inventorySource) definitionName(expr ast.Expr) string {
 			id = callee.Sel
 		}
 		fn, ok := s.info.Uses[id].(*types.Func)
-		if !ok || fn.Pkg() == nil || fn.Pkg().Path() != tabulaPkgPath ||
-			(fn.Name() != "Define" && fn.Name() != "DefineView") || len(e.Args) != 2 {
+		if !ok || fn.Pkg() == nil || fn.Pkg().Path() != tabulaPkgPath {
+			return ""
+		}
+		if fn.Name() == "RowsFrom" && len(e.Args) >= 2 {
+			return s.definitionName(e.Args[0])
+		}
+		if (fn.Name() != "Define" && fn.Name() != "DefineView") || len(e.Args) != 2 {
 			return ""
 		}
 		// A spec stored in a variable can have its fields mutated independently.
@@ -268,6 +273,10 @@ func singleInitializers(files []*ast.File, info *types.Info) map[types.Object]as
 					var v ast.Expr
 					if id, ok := e.(*ast.Ident); ok && x.Tok == token.DEFINE && info.Defs[id] != nil && len(x.Rhs) == len(x.Lhs) {
 						v = x.Rhs[i]
+					} else if id, ok := e.(*ast.Ident); ok && i == 0 && x.Tok == token.DEFINE && info.Defs[id] != nil && len(x.Rhs) == 1 {
+						if call, ok := ast.Unparen(x.Rhs[0]).(*ast.CallExpr); ok && isTryRowPlan(info, call) {
+							v = call
+						}
 					}
 					record(e, v)
 				}
@@ -276,6 +285,10 @@ func singleInitializers(files []*ast.File, info *types.Info) map[types.Object]as
 					var v ast.Expr
 					if len(x.Values) == len(x.Names) {
 						v = x.Values[i]
+					} else if i == 0 && len(x.Values) == 1 {
+						if call, ok := ast.Unparen(x.Values[0]).(*ast.CallExpr); ok && isTryRowPlan(info, call) {
+							v = call
+						}
 					}
 					record(id, v)
 				}
