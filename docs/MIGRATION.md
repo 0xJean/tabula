@@ -2,6 +2,12 @@
 
 Start with the section for the version you are adopting. The integration guide lists the APIs and commands available in this checkout. [Integration guide](INTEGRATION.md)
 
+## v0.4.4 development
+
+Composable statements follow the [M3 contract](DESIGN-M3.md). The additive `OperationSession` interface does not change `Session` or `AuthorizedSession`. Operations requiring its savepoint guarantee will reject an unsupported adapter with `ErrOperationRequired` before I/O. `sqlcheck.Verifier` keeps a non-executing statement description on the verification transaction's connection; `ErrDescribeRequired` identifies a backend that cannot safely inspect a write result. These contracts do not authorize SQL or add a driver dependency to core.
+
+The planned `StatementPolicy` additions retain zero-value behavior. Use keyed configuration literals: adding public fields requires converting positional literals to named fields. The complete API and snapshot migration notes will accompany the candidate implementation.
+
 ## From v0.4.2 to v0.4.3
 
 Named orders on a `RowsPlan` share one count. Put orders with different result cardinalities in separate plans. For example, an aggregate appearing only in one sort can turn an empty input into one result row. For paired data and count queries, use repeatable membership conditions or a transaction-stable expression. Keyset pages that use computed terms or explicit NULL placement record their catalog requirements in the same way as joined reads.

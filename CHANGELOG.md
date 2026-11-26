@@ -3,6 +3,11 @@
 All notable changes are listed here. The project follows semantic versioning; before
 v1.0 a minor version may contain breaking changes.
 
+## v0.4.4 — unreleased
+
+- Establish shared lexical query, result-identity and write-effect contracts for composable statements. The implementation follows [the M3 design](docs/DESIGN-M3.md).
+- Add the optional `OperationSession` capability and the standard-library `sqlcheck.Verifier` transaction/description contract. Concrete plan and driver integration is in progress; existing execution behavior is unchanged.
+
 ## v0.4.3 — 2026-11-27
 
 - Typed scalar expressions cover conditionals, arithmetic, casts, text, regular expressions, time, JSON, arrays, encoding, hashing and UUID generation. Use them in projections, predicates and conditional updates. Assignment targets require UPDATE. Evaluating a value or predicate requires SELECT on the columns it reads. [Scalar expressions](docs/EXPRESSIONS.md)

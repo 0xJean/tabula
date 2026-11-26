@@ -89,6 +89,10 @@ const ErrLegacySQL legacySQLDenial = "tabula: this operation requires a register
     ErrLegacySQL means the operation needs hand-written SQL or a shape that has
     not been registered. It also matches ErrCapabilityDenied.
 
+const ErrOperationRequired staticError = "tabula: session requires atomic operation support"
+    ErrOperationRequired reports that a plan requires an operation savepoint but
+    its session does not provide OperationSession. No raw SQL fallback is used.
+
 const ErrStatementAuthority staticError = "tabula: statement authority or session does not match"
     ErrStatementAuthority reports an unregistered call, a different registry's
     credential, or a call delivered to a different session.
@@ -1396,6 +1400,20 @@ type ObserverConfig struct {
 }
     ObserverConfig configures a session-level Observer shared by driver runners.
 
+type OperationSession[S any] interface {
+	WithinOperation(context.Context, func(context.Context, Session[S]) error) error
+}
+    OperationSession provides a savepoint-scoped operation within an existing
+    transaction. The callback receives a sealed child session and its context.
+    An error or panic rolls back the operation; cleanup failures must prevent
+    the enclosing transaction from committing. The parent cannot execute
+    concurrently with the child, and the child is closed when the operation
+    ends.
+
+    Plans requiring atomic batches or rollback on a result-decoding failure
+    test for this optional capability before I/O. Ordinary Session and
+    AuthorizedSession implementations keep their existing method sets.
+
 type OrderSpec struct {
 	Columns          map[string]string
 	DefaultColumn    string
@@ -1990,6 +2008,14 @@ func ByScopeColumn() RelationScope
 func Global() RelationScope
     Global declares a physical relation whose rows do not depend on session
     scope.
+
+type ResultStatement interface {
+	// Has unexported methods.
+}
+    ResultStatement is a sealed declaration of a statement producing rows.
+    A returning plan requires an actual write effect, even when its outer
+    command is SELECT. A read declaration cannot obtain write authority through
+    this type.
 
 type RetryConfig struct {
 	// MaxAttempts is the total number of attempts including the initial run
@@ -2997,6 +3023,13 @@ const (
 	// Inserts leave a generated serial key in PostgreSQL and never read it back.
 	WriteInsertOnly
 )
+type WriteStatement interface {
+	// Has unexported methods.
+}
+    WriteStatement is a sealed declaration of a mutation. It does not execute
+    SQL. A write plan checks its physical targets and registers all permitted
+    forms.
+
 type ZeroValue[V any] struct {
 	// Has unexported fields.
 }
@@ -3690,6 +3723,14 @@ Package sqlcheck verifies PostgreSQL descriptors, handwritten SQL and role
 workloads. It checks schema alignment, snapshots database catalogs, compares
 direct grants, trials revocations, classifies policies and tests RLS behavior.
 
+VARIABLES
+
+var ErrDescribeRequired = errors.New("sqlcheck: non-executing result description is required")
+    ErrDescribeRequired reports that a statement's result cannot be checked
+    without a non-executing protocol description. In particular, LIMIT 0 is not
+    a safe substitute for describing a statement containing a modifying CTE.
+
+
 FUNCTIONS
 
 func CheckLoginRole(ctx context.Context, db *sql.DB, exp LoginRoleExpectation) ([]string, error)
@@ -3873,6 +3914,25 @@ type ColumnInfo struct {
 type Definer struct{ Schema, Name, Arguments, Owner, Definition string }
     Definer records the owner, signature, body and settings of a SECURITY
     DEFINER routine.
+
+type DescribedField struct {
+	Name      string
+	TypeOID   uint32
+	TypeMod   int32
+	TableOID  uint32
+	Attribute int16
+}
+    DescribedField is a PostgreSQL RowDescription field. TableOID and Attribute
+    may be zero for computed values. PostgreSQL may report a domain's base type;
+    TypeOID alone does not establish its logical domain identity or nullability.
+
+type Description struct {
+	Parameters []uint32
+	Fields     []DescribedField
+}
+    Description contains a prepared statement's parameter OIDs and ordered wire
+    result fields. Server-local OIDs are evidence for this verification only and
+    must not be persisted as portable schema identities.
 
 type Grant struct {
 	Role, Schema, Kind, Object, Privilege string
@@ -4218,6 +4278,26 @@ type Statement struct {
     Coverage rejects an assertion that conflicts with inferred table access.
     The reviewer checks dependencies inside routines and other SQL outside the
     inference rules.
+
+type VerificationTx interface {
+	Exec(ctx context.Context, sql string, args ...any) error
+	Scan(ctx context.Context, sql string, args []any, dest ...any) error
+	Each(ctx context.Context, sql string, args []any, visit func(scan func(...any) error) error) error
+	Describe(ctx context.Context, statementName, sql string) (Description, error)
+	Rollback(context.Context) error
+}
+    VerificationTx is the standard-library-only connection contract for
+    statement verification. Describe must parse and describe without executing
+    the supplied statement. Rollback releases the transaction and all connection
+    resources.
+
+type Verifier interface {
+	BeginVerification(context.Context) (VerificationTx, error)
+}
+    Verifier begins an isolated read-only verification transaction.
+    Implementations keep catalog reads, role setup, statement description and
+    EXPLAIN on the same connection. This capability grants no runtime statement
+    authority.
 
 ```
 

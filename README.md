@@ -144,3 +144,5 @@ See the [contributing guide](CONTRIBUTING.md) for local checks and the [code of 
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+The next composable-statement development follows the [M3 design](docs/DESIGN-M3.md) and its explicit acceptance matrix. Design contracts are distinct from released capabilities.
