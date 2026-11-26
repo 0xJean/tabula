@@ -6,6 +6,8 @@ no hidden behaviour.
 
 ## 1. Where the logger comes from
 
+Registered lock and routine calls use the owning view and statement key, such as `entries.lock_item.global.data.sort.by_id.first` or `entries.lookup_item.call`. Advisory keys and function arguments follow the same bound-value logging policy as other inputs. [Registered operations](COOKBOOK.md#registered-locks-and-functions)
+
 - The library uses the standard library `log/slog`. The core takes no third-party logging
   dependency.
 - A logger is passed explicitly in `RegistryConfig.Log` (applies to every table and view of
@@ -30,6 +32,8 @@ reg := tabula.NewRegistry(tabula.RegistryConfig[Scope]{
     },
 })
 ```
+
+A typed row plan reports the registered definition and shape key for each execution. A page, its exact count and an optional existence check have separate keys. Internal soft-delete status parameters are always redacted. `RowFilter.Observe` accepts `Quiet()` and `Secret()`. A shape that reads or assigns a secret field redacts its bind values, including the scope and cursor parameters.
 
 ## 2. Switches
 
@@ -100,6 +104,8 @@ Spans carry full statement context (`tabula.key`, `tabula.table`, `tabula.action
 bounded-cardinality labels (`db.system`, `tabula.table`, `tabula.action`, `tabula.role`,
 `tabula.error_class`) and omit per-tenant `tabula.scope` and statement/inline-fingerprint
 `tabula.key` values. See the [Go reference](REFERENCE.md#oteltabula).
+
+Registered driver calls use the statement key and parameter redaction metadata issued with the shape. A write that returns several rows emits one observation for its stream. The driver and descriptor use the existing signal mask to avoid duplicate observations. [Registered execution](AUTHORIZATION.md#registered-execution)
 
 ## 6. Database-side slow statement logs
 

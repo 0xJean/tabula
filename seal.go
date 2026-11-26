@@ -71,7 +71,7 @@ func (r *Registry[S]) checkSession(s Session[S]) error {
 	}
 	tok := r.sessionToken.Load()
 	if tok == nil && !r.requireSealed {
-		return nil
+		return r.checkSQLAuthority(s)
 	}
 	if tok == nil || !eligibleOwner(s) {
 		return ErrForeignSession
@@ -83,6 +83,23 @@ func (r *Registry[S]) checkSession(s Session[S]) error {
 	proof := holder.SessionProof()
 	if proof.token != tok || proof.owner != any(s) {
 		return ErrForeignSession
+	}
+	return r.checkSQLAuthority(s)
+}
+
+func (r *Registry[S]) checkSQLAuthority(s Session[S]) error {
+	want := r.SQLAuthority()
+	var got SQLAuthority
+	if provider, ok := s.(interface{ SQLAuthority() SQLAuthority }); ok {
+		if !eligibleOwner(s) {
+			return ErrStatementAuthority
+		}
+		got = provider.SQLAuthority()
+	}
+	if want.DeniesLegacySQL() || got.DeniesLegacySQL() {
+		if _, ok := s.(AuthorizedSession); !ok || got != want {
+			return ErrStatementAuthority
+		}
 	}
 	return nil
 }

@@ -25,6 +25,7 @@ func ViewsToDefinitions(views []tabula.ViewDefinition) []tabula.Definition {
 			Statements:       maps.Clone(v.Statements),
 			Privileges:       slices.Clone(v.Privileges),
 			StatementQueries: maps.Clone(v.StatementQueries),
+			StatementShapes:  maps.Clone(v.StatementShapes),
 		}
 	}
 	return out
@@ -234,8 +235,9 @@ type PrivilegeNeeds struct {
 	Functions   []string
 }
 
-// CollectPrivilegeNeeds merges the Privileges declared on defs and also
-// reports any definition names that declared zero privileges.
+// CollectPrivilegeNeeds merges descriptor and typed-shape grants and reports
+// definitions with no explicit grants. Use RoleStatements.Readiness for a
+// role's selected shapes, including any-column, schema and RLS requirements.
 func CollectPrivilegeNeeds(defs []tabula.Definition) (PrivilegeNeeds, []string) {
 	n := PrivilegeNeeds{
 		Columns:     map[string]map[string]map[string]bool{},
@@ -243,15 +245,28 @@ func CollectPrivilegeNeeds(defs []tabula.Definition) (PrivilegeNeeds, []string) 
 	}
 	var empty []string
 	seenFunc := map[string]bool{}
+	aliases := grantTableNames(defs)
 	for _, d := range defs {
-		if len(d.Privileges) == 0 {
+		grants := slices.Clip(d.Privileges)
+		for _, key := range slices.Sorted(maps.Keys(d.StatementShapes)) {
+			for _, grant := range d.StatementShapes[key].Privileges {
+				if name, ok := aliases[grant.Table]; ok {
+					grant.Table = name
+				}
+				grants = append(grants, grant)
+			}
+		}
+		if len(grants) == 0 {
 			empty = append(empty, d.Name)
 			continue
 		}
-		for _, p := range d.Privileges {
+		for _, p := range grants {
 			switch p.Privilege {
 			case "USAGE":
-				n.Sequences = append(n.Sequences, [2]string{p.Table, p.Sequence})
+				pair := [2]string{p.Table, p.Sequence}
+				if !slices.Contains(n.Sequences, pair) {
+					n.Sequences = append(n.Sequences, pair)
+				}
 			case "DELETE":
 				n.TableDelete[p.Table] = true
 			case "EXECUTE":
@@ -294,6 +309,9 @@ func CheckRolePrivileges(ctx context.Context, db *sql.DB, needs PrivilegeNeeds, 
 			}
 		}
 		schema, name, _ := strings.Cut(table, ".")
+		if obj, err := resolveReadinessItem(MissingRequirement{Kind: "TABLE", Object: table}); err == nil {
+			schema, name = obj.Schema, obj.Name
+		}
 		type columnGrant struct{ privilege, column string }
 		grants, err := readRows(ctx, db, `SELECT privilege_type, column_name FROM information_schema.role_column_grants
 			 WHERE grantee = $1 AND table_schema = $2 AND table_name = $3 AND privilege_type IN ('SELECT', 'INSERT', 'UPDATE')`, func(r *sql.Rows) (columnGrant, error) {

@@ -3,6 +3,21 @@
 All notable changes are listed here. The project follows semantic versioning; before
 v1.0 a minor version may contain breaking changes.
 
+## v0.4.0 — 2026-11-26
+
+- Use `RowsSpec.Lock` to lock filtered, ordered or paginated rows with `plan.Bind(session).Find`. Transaction advisory locks support shared and exclusive acquisition in both PostgreSQL key spaces. Routine and advisory plans use the same session-binding style.
+- `RowsSpec.WithExists` registers a boolean `SELECT EXISTS` per scope and filter. `IsDistinct` and `IsNotDistinct` provide null-safe inequality and equality. Role inventory binds existence checks independently of data and count statements.
+- Declare scalar and set-returning functions by exact input and result types. Registered calls preserve the declared read or write effect. Role readiness can verify the function signature, catalog properties and effective privileges, including `UPDATE` on any column for a row lock. [Examples](docs/COOKBOOK.md#registered-locks-and-functions)
+
+- Typed relation occurrences, fields, input slots and projections carry their PostgreSQL types through compilation. Each registered shape records its ordered parameters, output columns, effects and grants in `Definition.StatementShapes`.
+- The adapter interface accepts a statement issued by its registry for one session and operation. A snapshot can be inspected independently of execution. [Typed query design](docs/DESIGN-v0.4.md)
+
+- A registry can enable `DenyLegacySQL` and issue its `SQLAuthority` to selected runners or Direct pools. They execute registered calls for that registry and reject direct SQL text, undeclared variants and raw transaction entry. Fixed generated table operations use the same credential. [Registered execution](docs/AUTHORIZATION.md#registered-execution)
+
+- Typed input slots now render an explicit cast to their schema-qualified PostgreSQL type. Regenerate statement snapshots before comparing or verifying plans. `Varchar(n)` records a physical column length for catalog checks. Parameter casts omit the length so PostgreSQL handles comparisons and assignments with their normal semantics.
+
+- Named row plans register typed reads, grouped and scalar aggregates, and affected-count updates and deletes. Role-bound SQL snapshots include every declared alternative and its catalog types and minimum grants. [Row plan examples](docs/COOKBOOK.md#registered-single-table-reads-and-writes)
+
 ## v0.3.11 — 2026-11-26
 
 - `TableSpec.WriteMode` supports read and update access with an optional `UpdateColumns` list, and strict insert access with optional serial sequence usage. The descriptor derives statements and privileges for the selected operations. Bound methods and pgx COPY check the mode before database I/O.

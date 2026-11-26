@@ -108,5 +108,8 @@ func (r *Rows[T, K, S]) checkOperation(op tableOperation) error {
 	if !r.t.mode.allows(op) {
 		return ErrOperationDenied
 	}
+	if op == rawOp {
+		return r.rejectDynamic()
+	}
 	return nil
 }

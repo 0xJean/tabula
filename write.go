@@ -16,7 +16,7 @@ func (r *Rows[T, K, S]) Insert(ctx context.Context, row *T) error {
 	if err := r.CheckWrite(row); err != nil {
 		return err
 	}
-	meta := stmtMeta{key: r.t.name + ".insert"}
+	meta := r.fixedMeta("insert", false)
 	args, secret := r.Args(*row), r.t.insertSecretMask()
 	if r.t.serial && r.t.mode.allows(selectOp) {
 		_, err := r.returning(ctx, "insert", meta, r.t.stmt.insert, args, secret, sql.ErrNoRows, r.t.cols[r.t.keys[0]].target(row))
@@ -29,6 +29,9 @@ func (r *Rows[T, K, S]) Insert(ctx context.Context, row *T) error {
 // InsertReturning writes row and scans the named columns (or all table columns
 // when columns is empty) back into row via RETURNING.
 func (r *Rows[T, K, S]) InsertReturning(ctx context.Context, row *T, columns ...string) error {
+	if err := r.rejectDynamic(); err != nil {
+		return err
+	}
 	if err := r.checkRowWrite(insertReturningOp, row); err != nil {
 		return err
 	}
@@ -53,6 +56,9 @@ func (r *Rows[T, K, S]) InsertMany(ctx context.Context, rows []T) error {
 // writeMany checks each row scope after operation checks and before sending any chunk. conflict is the
 // precompiled ON CONFLICT clause, without a single-row RETURNING list.
 func (r *Rows[T, K, S]) writeMany(ctx context.Context, action string, meta stmtMeta, conflict string, rows []T) (int64, error) {
+	if err := r.rejectDynamic(); err != nil {
+		return 0, err
+	}
 	for i := range rows {
 		if err := r.checkRowScope(&rows[i]); err != nil {
 			return 0, err
@@ -117,7 +123,7 @@ func (r *Rows[T, K, S]) Save(ctx context.Context, row T) error {
 		return err
 	}
 	args, secret := r.saveArgs(&row)
-	_, err := r.execWrite(ctx, "save", stmtMeta{key: r.t.name + ".update"}, r.t.stmt.update, args, secret, 1, 1, r.t.reg.conflictErr())
+	_, err := r.execWrite(ctx, "save", r.fixedMeta("update", false), r.t.stmt.update, args, secret, 1, 1, r.t.reg.conflictErr())
 	return err
 }
 
@@ -126,6 +132,9 @@ func (r *Rows[T, K, S]) Save(ctx context.Context, row T) error {
 // columns (or all columns when empty) back into row via RETURNING. No row
 // matched returns the conflict error.
 func (r *Rows[T, K, S]) SaveReturning(ctx context.Context, row *T, columns ...string) error {
+	if err := r.rejectDynamic(); err != nil {
+		return err
+	}
 	if err := r.checkRowWrite(updateOp, row); err != nil {
 		return err
 	}
@@ -156,6 +165,9 @@ func (r *Rows[T, K, S]) SoftDelete(ctx context.Context, row T) error {
 
 // Set writes only the named columns of the undeleted row (no version check).
 func (r *Rows[T, K, S]) Set(ctx context.Context, row T, columns ...string) error {
+	if err := r.rejectDynamic(); err != nil {
+		return err
+	}
 	if err := r.checkRowWrite(updateOp, &row, columns...); err != nil {
 		return err
 	}
@@ -168,6 +180,9 @@ func (r *Rows[T, K, S]) Set(ctx context.Context, row T, columns ...string) error
 // (and scope/version when declared) plus an extra static SQL predicate over
 // "?" placeholders. Reports whether a row matched; zero rows is not an error.
 func (r *Rows[T, K, S]) UpdateWhere(ctx context.Context, row T, where string, values ...any) (bool, error) {
+	if err := r.rejectDynamic(); err != nil {
+		return false, err
+	}
 	if err := r.checkRowWrite(updateOp, &row); err != nil {
 		return false, err
 	}
@@ -193,6 +208,9 @@ func (r *Rows[T, K, S]) UpdateWhere(ctx context.Context, row T, where string, va
 // (and scope when declared) plus an extra static SQL predicate over "?"
 // placeholders. Reports whether a row matched; zero rows is not an error.
 func (r *Rows[T, K, S]) SetWhere(ctx context.Context, row T, columns []string, where string, values ...any) (bool, error) {
+	if err := r.rejectDynamic(); err != nil {
+		return false, err
+	}
 	if err := r.checkRowWrite(updateOp, &row, columns...); err != nil {
 		return false, err
 	}
@@ -216,7 +234,7 @@ func (r *Rows[T, K, S]) Delete(ctx context.Context, key K) error {
 	if scoped {
 		query = r.t.stmt.deleteStmt
 	}
-	_, err := r.execWrite(ctx, "delete", stmtMeta{key: r.t.name + ".delete"}, query, args, nil, 1, 1, r.t.reg.conflictErr())
+	_, err := r.execWrite(ctx, "delete", r.fixedMeta("delete", true), query, args, nil, 1, 1, r.t.reg.conflictErr())
 	return err
 }
 
@@ -224,6 +242,9 @@ func (r *Rows[T, K, S]) Delete(ctx context.Context, key K) error {
 // non-empty static predicate over "?" placeholders. Requires TableSpec.AllowDelete = true.
 // Returns the affected row count; zero rows matched is not an error.
 func (r *Rows[T, K, S]) DeleteWhere(ctx context.Context, where string, values ...any) (int64, error) {
+	if err := r.rejectDynamic(); err != nil {
+		return 0, err
+	}
 	if err := r.checkWriteAccess(deleteOp); err != nil {
 		return 0, err
 	}

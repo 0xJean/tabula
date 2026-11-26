@@ -34,9 +34,13 @@ func (c Column[T]) Secret() Column[T] { c.secret = true; return c }
 // type's db tags, read once by Define.
 // Tag options: key, serial, scope, deleted, version, once, json, zero, array, secret.
 type TableSpec[T, K any] struct {
-	Name, Order string
-	Columns     []Column[T]
-	SoftDelete  *SoftDelete
+	// RelationScope declares how a typed query may access this physical table.
+	// A tagged scope column implies ByScopeColumn when this field is zero.
+	// An untagged table needs an explicit ByRLS or Global declaration for typed use.
+	RelationScope RelationScope
+	Name, Order   string
+	Columns       []Column[T]
+	SoftDelete    *SoftDelete
 	// ReadOnly restricts this table to read operations only: no INSERT/UPDATE/DELETE
 	// statements or write privileges are derived, and write methods return ErrReadOnly.
 	ReadOnly bool
@@ -60,6 +64,7 @@ type TableSpec[T, K any] struct {
 // access modes are fixed by Define.
 type Table[T, K, S any] struct {
 	descriptor[T, S]
+	relationScope           RelationScope
 	order                   string
 	readOnly, allowDelete   bool
 	mode                    WriteMode
@@ -117,6 +122,8 @@ type Definition struct {
 	// StatementQueries records the owner of each composed-query variant and
 	// registered scalar aggregate (for example, sum_rank belongs to sum:rank).
 	StatementQueries map[string]string `json:",omitempty"`
+	// StatementShapes holds verification metadata for each typed variant.
+	StatementShapes map[string]StatementShape `json:",omitempty"`
 }
 
 // DefinedColumn is one column's metadata for schema and privilege checks.
@@ -137,52 +144,7 @@ func Define[T, K, S any](r *Registry[S], spec TableSpec[T, K]) *Table[T, K, S] {
 	if err != nil {
 		panic(err)
 	}
-	cols := d.definedColumns()
-	stmts := make(map[string]string)
-	if d.mode.allows(selectOp) {
-		stmts["get"], stmts["count"], stmts["list"] = d.stmt.get, d.stmt.count, d.stmt.list
-		if d.stmt.unscopedGet != d.stmt.get {
-			stmts["unscoped_get"] = d.stmt.unscopedGet
-		}
-	}
-	if !d.readOnly && d.mode.allows(updateOp) {
-		stmts["update"], stmts["lock"] = d.stmt.update, d.stmt.lock
-		if d.stmt.unscopedLock != d.stmt.lock {
-			stmts["unscoped_lock"] = d.stmt.unscopedLock
-		}
-	}
-	if !d.readOnly && d.mode.allows(insertOp) {
-		stmts["insert"] = d.stmt.insert
-	}
-	if d.allowDelete {
-		stmts["delete"] = d.stmt.deleteStmt
-		if d.stmt.unscopedDelete != d.stmt.deleteStmt {
-			stmts["unscoped_delete"] = d.stmt.unscopedDelete
-		}
-	}
-	for _, col := range d.groupByOrder {
-		stmts["count_by_"+col] = "SELECT " + col + ", count(*) FROM " + d.name + " WHERE true GROUP BY " + col
-	}
-	var owners map[string]string
-	for fn, col := range spec.Aggregates.columns {
-		if owners == nil {
-			owners = make(map[string]string)
-		}
-		op := strings.ToLower(fn)
-		key := op + "_" + col
-		base := scalarSQL(fn, col, d.name)
-		owner := op + ":" + col
-		stmts[key] = base + d.liveFilter(d.scope >= 0, nil).Where()
-		owners[key] = owner
-		if d.scope >= 0 {
-			stmts["unscoped_"+key] = base + d.liveFilter(false, nil).Where()
-			owners["unscoped_"+key] = owner
-		}
-	}
-	d.entry = r.record(Definition{
-		Name: d.name, Columns: cols, Statements: stmts, StatementQueries: owners,
-		Privileges: d.derivePrivileges(),
-	}, false)
+	d.record(spec)
 	return d
 }
 
@@ -220,8 +182,16 @@ func TryDefine[T, K, S any](r *Registry[S], spec TableSpec[T, K]) (*Table[T, K, 
 			return nil, err
 		}
 	}
+	if r.SQLAuthority().DeniesLegacySQL() {
+		if err := t.checkFixedIdentifiers(); err != nil {
+			return nil, err
+		}
+	}
 	if err := t.bindUpdateColumns(spec.UpdateColumns, fail); err != nil {
 		return nil, err
+	}
+	if err := t.bindRelationScope(spec.RelationScope); err != nil {
+		return nil, fail("%v", err)
 	}
 	if len(spec.GroupBy) > 0 {
 		t.groupBy = make(map[string]bool, len(spec.GroupBy))

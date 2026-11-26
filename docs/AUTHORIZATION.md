@@ -27,7 +27,31 @@ if len(missing) > 0 {
 
 One read-only query checks effective grants for the named role, including inherited and PUBLIC grants. It reads PostgreSQL catalogs without assuming that role or executing the named functions. Use qualified relation names and function signatures such as `public.find_item(integer, public.item_kind[])`. Supply schema and column names as they appear in the catalog. Use `Privileges.Columns` for named column grants. `AnyColumnSelect` requires access to at least one column. `ForceRLS` checks the ENABLE and FORCE flags independently of SELECT access. Owned-sequence requirements come from `Privileges.Sequences`.
 
+A registered existence check requires access to its scope, soft-delete and predicate columns. A check that references no columns needs SELECT on any one column of its table.
+
+A locking read needs `SELECT` on the columns it references and `UPDATE` on any column of each locked table. Pass `StatementShape.AnyColumnUpdate` to `ReadinessNeeds.AnyColumnUpdate`. A missing grant yields `UPDATE ANY COLUMN`. PostgreSQL also filters lockable rows through both the SELECT and UPDATE row-security policies. [Lock privileges](https://www.postgresql.org/docs/17/sql-select.html) · [Policies by command](https://www.postgresql.org/docs/17/sql-createpolicy.html)
+
+`RoleStatements.Readiness` collects locking and routine requirements from the selected shapes. When assembling the check manually, pass the shape's `Routines` to `ReadinessNeeds.Routines`. The check resolves schema, function name and ordered input types in the catalog and checks the result type, scalar or set cardinality, invoker or definer mode, and a read declaration's STABLE or IMMUTABLE volatility. Include the shape's `SchemaUsage` and `Privileges` to verify schema access and EXECUTE on the exact overload. Review function bodies and declare any caller-side table dependencies in the application's role workload. [Function catalog](https://www.postgresql.org/docs/17/catalog-pg-proc.html)
+
 An absent role returns one role finding. Absent objects and missing grants appear in the sorted results. A canceled query or database error fails the check. The application owns its startup deadline, role selection and response to findings. RLS policy behavior and excess grants have separate audits.
+
+## Registered execution
+
+Enable `DenyLegacySQL` on a registry and pass its verification credential to each runner serving the corresponding role.
+
+```go
+reg := tabula.NewRegistry(tabula.RegistryConfig[int64]{Deny: tabula.DenyLegacySQL})
+authority := reg.SQLAuthority()
+runner, err := stdsql.NewRunner(db, scope, stdsql.RunnerOptions{SQLAuthority: authority})
+```
+
+Use the same field on `pgxdriver.RunnerOptions`. For a read-only pool, use `stdsql.DirectSQLAuthority(authority)` or `pgxdriver.DirectWithConfig` with `DirectConfig{SQLAuthority: authority}`. The zero credential permits the existing text methods. A registry with a different credential cannot execute its descriptors on a strict session. A session key can additionally restrict which concrete session instances the registry trusts.
+
+The registry signs each call for the receiving session, method, statement and ordered parameters. Registered executions still pass through the session guard, method policy, role and observability hooks. Streams returning rows from a write use the Returning policy. Direct rejects writes, row locks and transaction-level advisory locks before acquiring a connection.
+
+Fixed generated operations include primary-key reads and locks, insert, save, soft delete, physical delete, declared single-row upserts, and declared scalar and grouped aggregates. A baseline list or find uses the default ordering and the session's live-row predicate. Strict declarations accept table and column identifiers and default ordering over declared columns with optional direction and null placement. Filter callbacks, run-time string order, dynamic column lists and batch sizes require an explicitly compiled alternative. A fragment-based upsert, `QuerySpec`, hand-written `Statement`, and raw transaction entry are rejected. `ErrLegacySQL` matches `ErrCapabilityDenied`.
+
+PostgreSQL grants and RLS still apply. A separately acquired database connection has its own privileges. The binary COPY protocol retains its descriptor and session checks, including the independent `DenyCopy` capability.
 
 ## Table write modes
 
@@ -69,6 +93,8 @@ Specify each adapter or interface that accepts SQL. Argument positions start at 
 The default inventory covers production sources selected by the current Go build configuration. Use `Tests: true` for test files and `Tags` for optional code. Run once per supported build configuration. Calls through interfaces need the interface receiver in `Methods`. Site IDs survive line moves and distinguish repeated calls. An ID changing after an edit calls for reviewing its role assignment and exception.
 
 Assign each site ID to an entry such as `{"Roles":["docs_reader"]}` in a bindings file. Run `tabula inventory --config inventory.json --bindings bindings.json > workload.json` to collect statements and check their assignments together. `SQLInventory.BindRoles` reports missing or retired assignments. A dynamic entry supplies named `Variants` with their SQL. An explicitly skipped site requires a registered exception. A static site can supply `Access` for command coverage. The same site can be assigned to several roles.
+
+Inventory records declarations and uses of typed row locks, transaction advisory locks and routine calls. For an indirect plan, supply its owning `Definition` and `Plan`. The registered effect and result cardinality must match the source method. A row lock contributes both SELECT and UPDATE policy access. A routine needs reviewed `Access` or `NoAccess` for its body. Role readiness uses its exact function signature, and a dedicated advisory lock records the privilege for its built-in overload.
 
 For composed queries and aggregates, add `--snapshot statements.sql`, generated with `sqlcheck.RenderAllSnapshot(reg.Defined(), reg.DefinedViews())`. The collector resolves literal descriptor names in direct declarations and single-assignment local or private package handles. A query key such as `list` can be reused on several views. Each role receives the variants registered for its own view and query. An optional `Prefix` selects a subset of those variants.
 
@@ -222,6 +248,13 @@ Each policy must match exactly one rule. Unmatched policies, overlapping matches
 
 ## Check command coverage and exercise rows
 
+For a typed statement with no registered table access, review the routine
+body and declare its caller-context `Access`, or set `NoAccess` after that
+review. Role binding and policy coverage enforce the declaration even for a
+scalar function called without a `FROM` clause. The dedicated PostgreSQL
+transaction advisory lock has no table dependency. Row locks require SELECT
+and UPDATE policy coverage, together with UPDATE on at least one column.
+
 `tabula check-coverage --config workload.json` checks catalog policy coverage on RLS-enabled tables. It accounts for permissive policies, `ALL`, `PUBLIC`, inherited roles, FORCE and role bypass. `INSERT … RETURNING` requires SELECT coverage. In the example workload, a writer with the required column grants and only an INSERT policy can pass `verify-roles`. Running `check-coverage` then reports a missing SELECT policy for `add-note`. Targeted `ON CONFLICT` needs SELECT coverage and `DO UPDATE` also needs UPDATE.
 
 A simple read such as `SELECT substring(note FOR 3) FROM docs.notes` requires SELECT coverage. Adding a top-level `FOR UPDATE`, `FOR NO KEY UPDATE`, `FOR SHARE`, or `FOR KEY SHARE` clause also requires UPDATE coverage. Null-safe comparisons (`IS [NOT] DISTINCT FROM`) and parenthesized function arguments (`EXTRACT(... FROM ...)`, `TRIM(... FROM ...)`) are recognized inside single-table statements. For joins, CTEs, multi-source writes and other complex SQL, supply the full reviewed `Access` list on the statement, for example `[{"Table":"docs.notes","Command":"SELECT"}]`, or set `"NoAccess": true` when a reviewed complex statement (such as a `SECURITY DEFINER` routine call) accesses no caller-RLS relations. For complex SQL, `NoAccess` records the reviewer’s assessment. Check the routine body, execution role and any views before setting it. Inferred table access conflicts with the declaration. Qualify relations for the application search path. Pair structural checks with role verification so that PostgreSQL also validates the SQL and the referenced objects. [PostgreSQL policy command rules](https://www.postgresql.org/docs/17/sql-createpolicy.html)
@@ -292,3 +325,38 @@ Each live login uses one checked-out maintenance connection even between test ca
 The optional login label is visible in PostgreSQL and accepts 1–25 ASCII lowercase letters, digits or underscores. Multiple processes can use the same label. Each gets an independent random name and lease.
 
 A live lease keeps its clones between connections. After a worker exits, `PruneClones(ctx, 0)` collects marked clones once all clients disconnect. `Prune(ctx, maxIdle)` applies its usual server-timed grace period. An ordinary clone, or a database left by an interruption between creation and marking, requires explicit cleanup. Automatic clone cleanup uses a non-forcing drop. Suites with host-specific teardown requirements should account for those separately before opting in. [Clone ownership and lifetime](DESIGN-v0.3.9.md)
+
+## Bind a typed row plan to roles
+
+`CollectSQL` records row-plan declarations and the calls to `Find`, `List`,
+`Count`, `UpdateMany` and `DeleteMany`. For a direct declaration or a
+single-assignment handle it records the owner and plan name. When a factory,
+parameter or mutable handle hides them, set `SQLBinding.Definition` and
+`SQLBinding.Plan` to the reviewed owner and plan name. A binding can use
+`Prefix` to select a registered shape or a dotted key prefix. A `List` site
+includes the matching count for each selected data shape.
+
+`BindRolesWithDefinitions` expands the registered keys from the live registry
+or a parsed SQL snapshot. A `Count` call adds only the count variants. A
+`Find` call adds only data variants. Each statement supplies its physical
+commands and column privileges. Declaration sites cover the whole family by
+default. Assign them to the roles that need those shapes or use a reviewed
+inventory exception when separate execution sites account for them.
+
+```go
+work, err := inventory.BindRolesWithDefinitions(assignments, tables, views)
+if err != nil {
+    return err
+}
+needs, err := work.Readiness("scope_reader")
+if err != nil {
+    return err
+}
+missing, err := sqlcheck.CheckReadiness(ctx, db, "scope_reader", needs, extraNeeds)
+```
+
+Run `VerifyRoleStatements` to prepare and explain the exported workload under
+each assigned role. For typed reads it also checks physical column types,
+parameter types, and the projected names and types. The type probe uses a
+zero-row source. Run the operations on representative scoped data to verify
+row visibility, aggregate NULL results and affected counts.

@@ -63,6 +63,7 @@ func quoteIdent(ident string) string {
 // transaction. Overlapping statements or savepoint requests on the transaction
 // return tabula.ErrSessionBusy, including inside Each or a binary COPY.
 type Session[S any] struct {
+	authority  tabula.SQLAuthority
 	statements tabula.StatementGuard
 	mu         *statementLock // shared by handles on the same transaction
 	closed     atomic.Bool
@@ -260,8 +261,7 @@ func (s readQueries) check(query string) error {
 	return nil
 }
 
-// Exec executes query and returns the affected row count.
-func (s *Session[S]) Exec(ctx context.Context, query string, args ...any) (int64, error) {
+func (s *Session[S]) exec(ctx context.Context, query string, args []any) (int64, error) {
 	if err := s.checkContext(ctx); err != nil {
 		return 0, err
 	}
@@ -294,11 +294,6 @@ func (s *Session[S]) Exec(ctx context.Context, query string, args ...any) (int64
 	return n, nil
 }
 
-// Scan executes a single-row query and maps pgx.ErrNoRows to sql.ErrNoRows.
-func (s *Session[S]) Scan(ctx context.Context, query string, args []any, dest ...any) error {
-	return s.scan(ctx, "Scan", query, args, dest...)
-}
-
 func (s *Session[S]) scan(ctx context.Context, method, query string, args []any, dest ...any) error {
 	if err := s.checkContext(ctx); err != nil {
 		return err
@@ -325,8 +320,7 @@ func (s *Session[S]) scan(ctx context.Context, method, query string, args []any,
 	return err
 }
 
-// Returning executes a write with RETURNING and maps pgx.ErrNoRows to sql.ErrNoRows.
-func (s *Session[S]) Returning(ctx context.Context, query string, args []any, dest ...any) error {
+func (s *Session[S]) returning(ctx context.Context, query string, args []any, dest ...any) error {
 	if s.readRole {
 		if err := s.checkContext(ctx); err != nil {
 			return err
@@ -339,13 +333,11 @@ func (s *Session[S]) Returning(ctx context.Context, query string, args []any, de
 	return s.scan(ctx, "Returning", query, args, dest...)
 }
 
-// Each streams rows through decode. The runner closes an unfinished cursor at
-// transaction or savepoint exit. A resumed consumer receives ErrSessionClosed.
-func (s *Session[S]) Each(ctx context.Context, query string, args []any, decode func(func(...any) error) error) error {
+func (s *Session[S]) each(ctx context.Context, method, query string, args []any, decode func(func(...any) error) error) error {
 	if err := s.checkContext(ctx); err != nil {
 		return err
 	}
-	if err := s.check("Each", query, args); err != nil {
+	if err := s.check(method, query, args); err != nil {
 		return err
 	}
 	if err := s.tryLock(); err != nil {
@@ -430,6 +422,7 @@ func (s *Session[S]) Savepoint(ctx context.Context, fn func(context.Context, *Se
 		scopeLog:    s.scopeLog,
 		shared:      s.shared,
 		statements:  s.statements,
+		authority:   s.authority,
 		readQueries: readQueries{db: nested, guard: s.guard},
 	}
 	child.proof = s.key.Sign(child)

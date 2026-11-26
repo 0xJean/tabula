@@ -76,6 +76,14 @@ const (
 	ErrInsufficientPrivilege staticError = "insufficient PostgreSQL privilege"
 	ErrCanceled              staticError = "statement canceled"
 )
+const ErrLegacySQL legacySQLDenial = "tabula: this operation requires a registered statement"
+    ErrLegacySQL means the operation needs hand-written SQL or a shape that has
+    not been registered. It also matches ErrCapabilityDenied.
+
+const ErrStatementAuthority staticError = "tabula: statement authority or session does not match"
+    ErrStatementAuthority reports an unregistered call, a different registry's
+    credential, or a call delivered to a different session.
+
 
 FUNCTIONS
 
@@ -252,6 +260,43 @@ func Zero[V any](p *V) any
 
 TYPES
 
+type AdvisoryLock struct {
+	// Has unexported fields.
+}
+    AdvisoryLock declares a transaction-level PostgreSQL advisory operation.
+    The bigint and two-integer key spaces are independent in PostgreSQL.
+
+func AdvisoryXactLock(mode AdvisoryMode, wait LockWait, key Expr[int64]) AdvisoryLock
+    AdvisoryXactLock uses a single bigint key. Wait blocks, Try returns false on
+    contention. Both modes hold an acquired lock until transaction end.
+
+func AdvisoryXactLockPair(mode AdvisoryMode, wait LockWait, first, second Expr[int32]) AdvisoryLock
+    AdvisoryXactLockPair uses the separate PostgreSQL (integer, integer)
+    overload.
+
+type AdvisoryLockPlan[T, S any] struct {
+	// Has unexported fields.
+}
+    AdvisoryLockPlan acquires a registered advisory lock through an authorized
+    transaction session. Its View owns the statement in the registry.
+
+func DefineAdvisoryLock[T, S any](view *View[T, S], key string, lock AdvisoryLock) *AdvisoryLockPlan[T, S]
+    DefineAdvisoryLock registers a transaction lock independently of any table
+    access. The output view has one boolean column indicating acquisition.
+
+func TryDefineAdvisoryLock[T, S any](view *View[T, S], key string, lock AdvisoryLock) (*AdvisoryLockPlan[T, S], error)
+    TryDefineAdvisoryLock registers the complete operation or returns an error.
+
+func (p *AdvisoryLockPlan[T, S]) Bind(s Session[S]) *BoundAdvisoryLockPlan[T, S]
+    Bind attaches the advisory lock plan to a session from its registry.
+
+type AdvisoryMode uint8
+    AdvisoryMode selects an exclusive or shared transaction-level advisory lock.
+
+const (
+	Exclusive AdvisoryMode = iota + 1
+	Shared
+)
 type Assignment struct {
 	// Has unexported fields.
 }
@@ -263,6 +308,127 @@ func Add[N number](column string, delta N) Assignment
 func SetNow(column string) Assignment
     SetNow assigns PostgreSQL's transaction timestamp, now(), to a column.
 
+type AuthorizedSQL struct {
+	Query, Key string
+	Args       []any
+	Effects    ShapeEffects
+	// SecretArgs uses the same bind order as Args.
+	SecretArgs []bool
+
+	// Has unexported fields.
+}
+    AuthorizedSQL is the driver view of a successfully verified call. Its fields
+    describe this call only. Editing the view cannot authorize SQL.
+
+func (q AuthorizedSQL) ObservationContext(ctx context.Context) context.Context
+    ObservationContext attaches the registered key and redaction policy before
+    a driver starts observing the call. It preserves the descriptor's logger,
+    scope label and treatment of empty results.
+
+type AuthorizedSession interface {
+	ExecAuthorized(context.Context, AuthorizedStatement) (int64, error)
+	ScanAuthorized(context.Context, AuthorizedStatement, ...any) error
+	EachAuthorized(context.Context, AuthorizedStatement, func(func(...any) error) error) error
+}
+    AuthorizedSession is the driver channel used for registered queries.
+    Every entry verifies its AuthorizedStatement against the receiving session
+    and applies the usual method, transaction and database guards.
+
+type AuthorizedStatement struct {
+	// Has unexported fields.
+}
+    AuthorizedStatement is an opaque call bound to one registered shape, one
+    session instance and its ordered parameters. Applications cannot construct
+    it from SQL text, a snapshot or a verification credential.
+
+func (c AuthorizedStatement) Method() CallMethod
+    Method identifies the intended driver operation. The driver verifies it with
+    Open before using the SQL or arguments.
+
+type Binding struct {
+	// Has unexported fields.
+}
+    Binding supplies the value of one Slot to an execution.
+
+func BindValue[V any](slot Slot[V], value V) Binding
+    BindValue pairs an input with a value of its declared Go type.
+
+type BoundAdvisoryLockPlan[T, S any] struct {
+	// Has unexported fields.
+}
+    BoundAdvisoryLockPlan executes a transaction-level advisory lock on one
+    session.
+
+func (b *BoundAdvisoryLockPlan[T, S]) Acquire(ctx context.Context, args ...Binding) (bool, error)
+    Acquire reports whether this transaction holds the requested lock. Wait
+    returns true on success. Try returns false while another transaction holds a
+    conflicting lock. Direct rejects both modes.
+
+type BoundMutationPlan[T, S any] struct {
+	rowExecution[T, S]
+	// Has unexported fields.
+}
+    BoundMutationPlan executes one declared mutation family on an authorized
+    session.
+
+func (b *BoundMutationPlan[T, S]) DeleteMany(ctx context.Context, filters []string, values ...Binding) (int64, error)
+    DeleteMany physically deletes matching live rows and returns the exact
+    affected count.
+
+func (b *BoundMutationPlan[T, S]) UpdateMany(ctx context.Context, set string, filters []string, values ...Binding) (int64, error)
+    UpdateMany selects a complete named assignment set and returns the exact
+    affected row count, including zero. The filter list selects optional
+    predicates.
+
+type BoundRoutinePlan[T, S any] struct {
+	// Has unexported fields.
+}
+    BoundRoutinePlan executes a registered function on one session.
+
+func (b *BoundRoutinePlan[T, S]) All(ctx context.Context, args ...Binding) ([]T, error)
+    All decodes every value of a RoutineSet call, including an empty result.
+
+func (b *BoundRoutinePlan[T, S]) One(ctx context.Context, args ...Binding) (T, error)
+    One decodes the single value of a RoutineOne call into the registered view.
+
+type BoundRowsPlan[T, S any] struct {
+	rowExecution[T, S]
+	// Has unexported fields.
+}
+    BoundRowsPlan executes registered statements on one authorized session.
+
+func (b *BoundRowsPlan[T, S]) Count(ctx context.Context, filters []string, values ...Binding) (int64, error)
+    Count counts unpaged result rows (groups for grouped queries). Supply only
+    the bindings used by the selected WHERE predicates. A locking plan returns
+    ErrOperationDenied.
+
+func (b *BoundRowsPlan[T, S]) Exists(ctx context.Context, filters []string, values ...Binding) (bool, error)
+    Exists reports whether a visible row satisfies the selected filter. Declare
+    WithExists to enable it. It ignores data-page ordering and bounds.
+
+func (b *BoundRowsPlan[T, S]) Find(ctx context.Context, choice RowChoice, values ...Binding) ([]T, error)
+    Find returns the selected data page. It executes one registered statement.
+
+func (b *BoundRowsPlan[T, S]) List(ctx context.Context, choice RowChoice, values ...Binding) ([]T, int64, error)
+    List returns a data page and the exact count before pagination. Both
+    registered calls and all bindings are validated before the first execution.
+    A locking plan returns ErrOperationDenied.
+
+type CallMethod uint8
+    CallMethod is the driver operation authorized for one execution.
+
+const (
+	// CallExec executes an affected-row mutation without a result shape.
+	CallExec CallMethod = iota + 1
+	// CallScan decodes a single read result.
+	CallScan
+	// CallEach visits results of a read.
+	CallEach
+	// CallReturning decodes a single row produced by a write.
+	CallReturning
+	// CallReturningEach streams rows produced by a write.
+	CallReturningEach
+)
 type Capability uint32
     Capability is a bitmask of operations that RegistryConfig.Deny forbids on
     tables and bindings belonging to a Registry.
@@ -277,6 +443,9 @@ const (
 	DenyUnscopedWrites
 	// DenyCopy rejects binary COPY operations checked via Rows.CheckCopy.
 	DenyCopy
+	// DenyLegacySQL requires registered descriptor calls and forbids SQL
+	// fragments, raw session methods and raw transaction access.
+	DenyLegacySQL
 )
 type Column[T any] struct {
 	Name string
@@ -311,6 +480,17 @@ const (
 	// table instead of scanning rows with COUNT(*).
 	CountEstimate
 )
+type CursorValue struct {
+	// Has unexported fields.
+}
+    CursorValue is one typed field value at a keyset boundary.
+
+func At[V any](field Field[V], value V) CursorValue
+    At supplies one cursor component using the field's input codec.
+
+func NullAt[V any](field Field[V]) CursorValue
+    NullAt supplies a SQL NULL boundary for a nullable order field.
+
 type DefinedColumn struct {
 	Name     string
 	GoType   string
@@ -342,6 +522,8 @@ type Definition struct {
 	// StatementQueries records the owner of each composed-query variant and
 	// registered scalar aggregate (for example, sum_rank belongs to sum:rank).
 	StatementQueries map[string]string `json:",omitempty"`
+	// StatementShapes holds verification metadata for each typed variant.
+	StatementShapes map[string]StatementShape `json:",omitempty"`
 }
     Definition is one defined table as Registry.Defined lists it.
 
@@ -378,6 +560,50 @@ type ErrorPolicy struct {
 }
     ErrorPolicy maps execution and write-guard failures into the host's own
     error categories. Nil fields fall back to the package's default sentinels.
+
+type Expr[V any] struct {
+	// Has unexported fields.
+}
+    Expr is a typed expression assembled from descriptor fields and inputs.
+
+func AvgOf[V, R any](f Expr[V], result PGType[R]) Expr[R]
+    AvgOf averages a numeric field. PostgreSQL returns numeric for integer and
+    numeric inputs and float8 for floating-point inputs. The result is nullable.
+
+func CountAll() Expr[int64]
+    CountAll counts all rows, including those with NULL values.
+
+func CountOf[V any](f Expr[V]) Expr[int64]
+    CountOf counts non-null values of the input expression.
+
+func MaxOf[V any](f Expr[V]) Expr[V]
+    MaxOf computes the maximum of a field, with the same NULL contract as MinOf.
+
+func MinOf[V any](f Expr[V]) Expr[V]
+    MinOf computes the minimum of a field. An empty or all-NULL input yields
+    NULL. PostgreSQL must provide the corresponding same-result-type min
+    overload.
+
+func SumOf[V, R any](f Expr[V], result PGType[R]) Expr[R]
+    SumOf sums a numeric field. Supply the exact PostgreSQL result type and its
+    Go representation. For example, sum(int4) returns int8 and sum(int8) returns
+    numeric. An empty or all-NULL group yields NULL.
+
+type Field[V any] struct {
+	// Has unexported fields.
+}
+    Field is a typed column on exactly one relation occurrence.
+
+func FieldOf[R, V any](r Rel[R], name string, kind PGType[V]) Field[V]
+    FieldOf resolves a descriptor column at definition time. The Go value type
+    must match. A pointer field may be read as its nullable element type.
+
+func (f Field[V]) Column() RowColumn
+    Column retains the field's occurrence and type in a heterogeneous column
+    list.
+
+func (f Field[V]) Expr() Expr[V]
+    Expr references this column on its declaring occurrence.
 
 type Filter struct {
 	// Has unexported fields.
@@ -424,6 +650,14 @@ func (f *Filter) Range(column string, from, to any)
 
 func (f *Filter) Where() string
     Where returns the predicates as " AND (p1) AND (p2)", or "" when none.
+
+type Formal[V any] struct {
+	// Has unexported fields.
+}
+    Formal is a typed argument position owned by one declared routine.
+
+func FormalOf[R, V any](r *Routine[R], name string, kind PGType[V]) Formal[V]
+    FormalOf resolves a named parameter on this exact signature.
 
 type JSONValue struct {
 	// Has unexported fields.
@@ -481,6 +715,19 @@ const (
 	LockSkipLocked          // FOR UPDATE SKIP LOCKED
 	LockNoWait              // FOR UPDATE NOWAIT
 	LockShare               // FOR SHARE
+)
+type LockWait uint8
+    LockWait selects how an operation handles contention.
+
+const (
+	// Wait blocks until PostgreSQL grants the lock or the operation ends.
+	Wait LockWait = iota + 1
+	// SkipLocked excludes conflicting rows from a locking read.
+	SkipLocked
+	// NoWait raises PostgreSQL lock_not_available on a conflicting row.
+	NoWait
+	// Try returns false immediately on an advisory lock conflict.
+	Try
 )
 type LogConfig struct {
 	Logger        *slog.Logger
@@ -548,6 +795,35 @@ type Metrics interface {
     statement execution. Passed explicitly via RegistryConfig.Metrics or
     RunnerOptions.Metrics; nil disables metrics.
 
+type MutationPlan[T, S any] struct {
+	// Has unexported fields.
+}
+    MutationPlan owns one registered UpdateMany or DeleteMany family.
+
+func DefineDeleteMany[T, S any](src RowSource[T, S], name string, spec MutationSpec) *MutationPlan[T, S]
+    DefineDeleteMany registers a physical delete on a table that permits it.
+    It panics on declaration errors.
+
+func DefineUpdateMany[T, S any](src RowSource[T, S], name string, spec MutationSpec, sets ...RowSet) *MutationPlan[T, S]
+    DefineUpdateMany registers the permitted sets of assignments. It panics on
+    declaration errors.
+
+func TryDefineDeleteMany[T, S any](src RowSource[T, S], name string, spec MutationSpec) (*MutationPlan[T, S], error)
+    TryDefineDeleteMany atomically registers a predicate-based DELETE.
+
+func TryDefineUpdateMany[T, S any](src RowSource[T, S], name string, spec MutationSpec, sets ...RowSet) (*MutationPlan[T, S], error)
+    TryDefineUpdateMany atomically registers a predicate-based UPDATE.
+
+func (p *MutationPlan[T, S]) Bind(s Session[S]) *BoundMutationPlan[T, S]
+    Bind attaches this mutation plan to one session.
+
+type MutationSpec struct {
+	RowFilter
+	Version RowVersion
+}
+    MutationSpec requires a fixed WHERE predicate in addition to any optional
+    predicates. Versioned tables require ExpectVersion for updates and deletes.
+
 type ObserveMask uint8
     ObserveMask identifies which observability signals a runner session handles
     itself so that a Registry skips duplicate emissions for those signals.
@@ -613,6 +889,96 @@ func MustOrderSpec(spec OrderSpec) OrderSpec
 func (s OrderSpec) Resolve(by, dir string) string
     Resolve maps caller-provided sort key and direction to a safe SQL ORDER BY
     expression (without leading "ORDER BY").
+
+type OutputField[V any] struct {
+	// Has unexported fields.
+}
+    OutputField is a named projection target on a registered View.
+
+func Output[T, S, V any](view *View[T, S], name string, kind PGType[V]) OutputField[V]
+    Output resolves a view column and checks its Go type at definition time.
+
+type PGType[V any] struct {
+	// Has unexported fields.
+}
+    PGType pairs a Go value type with an exact PostgreSQL catalog type. Its zero
+    value cannot be used to declare a column or parameter.
+
+func Bool() PGType[bool]
+    Bool declares PostgreSQL boolean.
+
+func CatalogType[V any](schema, name string, encode func(V) any) PGType[V]
+    CatalogType declares a schema-qualified PostgreSQL type. Supply its encoding
+    for a bound input, or nil when the driver already accepts V. Both names are
+    exact catalog identifiers. No portion is interpreted as a SQL expression.
+
+func Int4() PGType[int32]
+    Int4 declares PostgreSQL integer.
+
+func Int8() PGType[int64]
+    Int8 declares PostgreSQL bigint.
+
+func Text() PGType[string]
+    Text declares PostgreSQL text.
+
+func Timestamptz() PGType[time.Time]
+    Timestamptz declares PostgreSQL timestamp with time zone.
+
+func Varchar(n int) PGType[string]
+    Varchar declares PostgreSQL character varying with a column length in
+    characters. Verification checks the column modifier. The parameter uses
+    unbounded varchar so comparisons preserve the entire value and PostgreSQL
+    applies its native length rules on assignment.
+
+type Pred = Expr[bool]
+    Pred is a PostgreSQL boolean expression. A nullable predicate follows SQL
+    three-valued logic when it is used in WHERE.
+
+func And(first, second Pred, rest ...Pred) Pred
+    And combines two or more typed predicates in declaration order.
+
+func Eq[V any](left, right Expr[V]) Pred
+    Eq compares two expressions of the same PostgreSQL type.
+
+func Ge[V any](a, b Expr[V]) Pred
+    Ge compares two expressions using PostgreSQL greater-than-or-equal
+    semantics.
+
+func Gt[V any](a, b Expr[V]) Pred
+    Gt compares two expressions using PostgreSQL greater-than semantics.
+
+func IsDistinct[V any](left, right Expr[V]) Pred
+    IsDistinct compares values using PostgreSQL's null-safe inequality.
+
+func IsNotDistinct[V any](left, right Expr[V]) Pred
+    IsNotDistinct compares values using PostgreSQL's null-safe equality.
+
+func IsNull[V any](v Expr[V]) Pred
+    IsNull tests SQL NULL and always returns a non-null boolean.
+
+func Le[V any](a, b Expr[V]) Pred
+    Le compares two expressions using PostgreSQL less-than-or-equal semantics.
+
+func Lt[V any](a, b Expr[V]) Pred
+    Lt compares two expressions using PostgreSQL less-than semantics.
+
+func Ne[V any](a, b Expr[V]) Pred
+    Ne compares two expressions for inequality.
+
+func Not(p Pred) Pred
+    Not negates a PostgreSQL boolean, preserving SQL NULL.
+
+func Or(first, second Pred, rest ...Pred) Pred
+    Or combines predicates in declaration order with SQL three-valued logic.
+
+type Projection struct {
+	// Has unexported fields.
+}
+    Projection assigns a typed expression to one output column.
+
+func Project[V any](target OutputField[V], value Expr[V]) Projection
+    Project pairs an output target with an expression of the same Go value type.
+    Compilation also checks the PostgreSQL types, nullability and output order.
 
 type Query[T, S any] struct {
 	// Has unexported fields.
@@ -831,6 +1197,10 @@ func (r *Registry[S]) Resolve(ft reflect.Type, jsonOption, zeroOption bool) (fun
      5. database/sql native primitives (bool, ints, floats, string, []byte,
         time.Time).
 
+func (r *Registry[S]) SQLAuthority() SQLAuthority
+    SQLAuthority returns this registry's verification credential. Pass it to a
+    driver that executes authorized statements for this registry.
+
 func (r *Registry[S]) Seal(key SessionKey) error
     Seal atomically attaches key to a Registry created with RequireSealed:
     true and a zero SessionKey. It fails on an open registry, a zero key, or any
@@ -882,6 +1252,33 @@ type RegistryConfig[S any] struct {
 }
     RegistryConfig configures one isolated Registry for scope type S.
 
+type Rel[T any] struct {
+	// Has unexported fields.
+}
+    Rel identifies one occurrence of a physical table in a query. Two
+    occurrences are distinct even when they use the same descriptor and alias.
+
+func FromTable[T, K, S any](t *Table[T, K, S], alias string, scope RelationScope) Rel[T]
+    FromTable declares an occurrence of a registered, schema-qualified Table.
+    The requested strategy must match the descriptor's declared enforcement.
+
+type RelationScope struct {
+	// Has unexported fields.
+}
+    RelationScope identifies the enforcement declared for a physical relation.
+
+func ByRLS() RelationScope
+    ByRLS delegates scoping to PostgreSQL row-level security. A compiled shape
+    records the physical relation for role-bound ENABLE and FORCE checks.
+
+func ByScopeColumn() RelationScope
+    ByScopeColumn binds the session scope to the descriptor's tagged scope
+    column.
+
+func Global() RelationScope
+    Global declares a physical relation whose rows do not depend on session
+    scope.
+
 type RetryConfig struct {
 	// MaxAttempts is the total number of attempts including the initial run
 	// (defaults to 3 when <= 0).
@@ -897,6 +1294,208 @@ type RetryConfig struct {
 }
     RetryConfig controls explicit retries for transient PostgreSQL transaction
     conflicts (serialization failure 40001 and deadlock 40P01).
+
+type Routine[V any] struct {
+	// Has unexported fields.
+}
+    Routine is an immutable, schema-qualified function signature.
+
+func DeclareRoutine[V any](spec RoutineSpec[V], params ...RoutineParameter) *Routine[V]
+    DeclareRoutine freezes a function signature at startup. Supply the
+    parameters in catalog order. Use AdvisoryXactLock for built-in advisory
+    operations.
+
+type RoutineArgument struct {
+	// Has unexported fields.
+}
+    RoutineArgument assigns a typed expression to a signature's formal.
+
+func Arg[V any](formal Formal[V], value Expr[V]) RoutineArgument
+    Arg pairs a formal with an expression of the same Go type. Registration
+    checks its PostgreSQL type and emits an explicit cast at the call site.
+
+type RoutineCardinality uint8
+    RoutineCardinality is the number of results a function can return.
+
+const (
+	// RoutineOne declares an ordinary function returning one value, possibly NULL.
+	RoutineOne RoutineCardinality = iota + 1
+	// RoutineSet declares a function returning SETOF its result type.
+	RoutineSet
+)
+type RoutineParameter struct {
+	// Has unexported fields.
+}
+    RoutineParameter declares one input in PostgreSQL signature order.
+
+func Parameter[V any](name string, kind PGType[V]) RoutineParameter
+    Parameter names a formal parameter and its exact PostgreSQL type.
+
+type RoutinePlan[T, S any] struct {
+	// Has unexported fields.
+}
+    RoutinePlan executes one registered function call using its declared result
+    cardinality and a one-column View's decoder.
+
+func DefineRoutine[T, S, V any](view *View[T, S], key string, r *Routine[V], args ...RoutineArgument) *RoutinePlan[T, S]
+    DefineRoutine registers a standalone call to a declared function. Each input
+    needs exactly one Arg. Values bind in signature order. The output view must
+    have one column compatible with the declared result.
+
+func TryDefineRoutine[T, S, V any](view *View[T, S], key string, r *Routine[V], args ...RoutineArgument) (*RoutinePlan[T, S], error)
+    TryDefineRoutine registers the complete call or returns a declaration error.
+
+func (p *RoutinePlan[T, S]) Bind(s Session[S]) *BoundRoutinePlan[T, S]
+    Bind attaches the function plan to a session from its registry.
+
+type RoutineRequirement struct {
+	Signature, ResultType                 string
+	ReturnsSet, ReadOnly, SecurityDefiner bool
+}
+    RoutineRequirement describes one exact, non-variadic pg_proc entry.
+    Signature and ResultType use schema-qualified catalog names. ReadOnly
+    requires STABLE or IMMUTABLE. SecurityDefiner must match the function.
+
+type RoutineSpec[V any] struct {
+	Schema, Name                        string
+	Result                              PGType[V]
+	Cardinality                         RoutineCardinality
+	Nullable, ReadOnly, SecurityDefiner bool
+}
+    RoutineSpec declares a scalar or set-returning PostgreSQL function. ReadOnly
+    is an explicit assertion about the reviewed body. The default requires write
+    authorization. Nullable describes individual result values.
+
+type RowAssignment struct {
+	// Has unexported fields.
+}
+    RowAssignment assigns a typed expression to a field on the target
+    occurrence.
+
+func Assign[V any](field Field[V], value Expr[V]) RowAssignment
+    Assign sets a column to a compatible expression, evaluated on the old row.
+
+type RowChoice struct {
+	Filters       []string
+	Order         string
+	Page          RowPage
+	Limit, Offset int64
+	After         RowCursor
+}
+    RowChoice selects precompiled alternatives. Filters lists the enabled
+    optional predicates. Order names a declared ordering.
+
+type RowColumn struct {
+	// Has unexported fields.
+}
+    RowColumn identifies a typed descriptor field in a GROUP BY or source
+    declaration.
+
+type RowCursor struct {
+	// Has unexported fields.
+}
+    RowCursor is a boundary issued for one plan and order. Its zero value
+    denotes the absence of a cursor.
+
+type RowFilter struct {
+	Where         Pred
+	Optional      []RowPredicate
+	AllowUnscoped bool
+	Budget        int
+	Observe       []StatementOption
+}
+    RowFilter declares the common WHERE terms and the registration budget. Where
+    is required for mutations. Column-scoped plans register scoped statements by
+    default. AllowUnscoped adds a separate unscoped family.
+
+type RowLock struct {
+	// Has unexported fields.
+}
+    RowLock identifies a locking strength, a specific occurrence and a wait
+    mode.
+
+func ForRows[T any](strength RowLockStrength, target Rel[T], wait LockWait) RowLock
+    ForRows declares a lock on target. Wait, SkipLocked and NoWait are valid.
+
+type RowLockStrength uint8
+    RowLockStrength selects the PostgreSQL locking clause on a physical
+    relation.
+
+const (
+	ForUpdate RowLockStrength = iota + 1
+	ForNoKeyUpdate
+	ForShare
+	ForKeyShare
+)
+type RowOrder struct {
+	Name  string
+	Terms []RowTerm
+}
+    RowOrder names one complete ordering, including its tie-breakers.
+
+type RowPage uint8
+    RowPage selects a registered page form.
+
+const (
+	// Unpaged returns the entire filtered result.
+	Unpaged RowPage = iota
+	// OffsetPage binds Limit and Offset.
+	OffsetPage
+	// FirstPage binds Limit and starts at the beginning of a keyset order.
+	FirstPage
+	// AfterPage binds Limit and the cursor of the same plan and order.
+	AfterPage
+)
+type RowPages struct {
+	Unpaged, Offset, Keyset bool
+	MaxLimit, MaxOffset     int64
+}
+    RowPages declares the allowed page forms and their inclusive bounds. Its
+    zero value registers only an unpaged read. Keyset registers first and after.
+
+type RowPredicate struct {
+	Name string
+	When Pred
+}
+    RowPredicate enables one named, independently optional WHERE term.
+
+type RowSet struct {
+	Name        string
+	Assignments []RowAssignment
+}
+    RowSet names a complete, ordered set of simultaneous assignments.
+
+type RowSource[T, S any] struct {
+	// Has unexported fields.
+}
+    RowSource ties a single occurrence to its descriptor's keys and live-row
+    policy.
+
+func RowsFrom[T, K, S any](table *Table[T, K, S], rel Rel[T], columns ...RowColumn) RowSource[T, S]
+    RowsFrom uses the same occurrence as FieldOf. Supply the catalog type of
+    a scope or deleted field with field.Column() when its Go type needs an
+    explicit mapping. ByRLS and Global need no scope field.
+
+type RowTerm struct {
+	// Has unexported fields.
+}
+    RowTerm orders one physical field. PostgreSQL orders NULLs last for
+    ascending terms and first for descending terms.
+
+func Asc[V any](f Field[V]) RowTerm
+    Asc orders a field from least to greatest.
+
+func Desc[V any](f Field[V]) RowTerm
+    Desc orders a field from greatest to least.
+
+type RowVersion struct {
+	// Has unexported fields.
+}
+    RowVersion compares the existing version with a required input.
+
+func ExpectVersion[V any](field Field[V], expected Slot[V]) RowVersion
+    ExpectVersion declares a version check for every shape of a mutation.
+    UpdateMany also increments each matching row's version.
 
 type Rows[T, K, S any] struct {
 	readBinding[T, S]
@@ -1059,6 +1658,59 @@ func (r *Rows[T, K, S]) WithLogger(logger *slog.Logger) *Rows[T, K, S]
     WithLogger returns a Rows handle sharing the same Table and Session with a
     per-binding logger override.
 
+type RowsPlan[T, S any] struct {
+	// Has unexported fields.
+}
+    RowsPlan owns the registered read shapes for one output view.
+
+func DefineRows[T, R, S any](out *View[T, S], name string, src RowSource[R, S], spec RowsSpec, project ...Projection) *RowsPlan[T, S]
+    DefineRows registers a named single-table read. It panics on declaration
+    errors.
+
+func TryDefineRows[T, R, S any](out *View[T, S], name string, src RowSource[R, S], spec RowsSpec, project ...Projection) (*RowsPlan[T, S], error)
+    TryDefineRows registers the complete read plan or returns an error without
+    publishing any shape. The projection covers the view in descriptor order.
+
+func (p *RowsPlan[T, S]) Bind(s Session[S]) *BoundRowsPlan[T, S]
+    Bind attaches this read plan to a session from the same registry.
+
+func (p *RowsPlan[T, S]) Cursor(order string, values ...CursorValue) (RowCursor, error)
+    Cursor validates a boundary against the specific plan, order, field types
+    and arity. Supply values in order, taken from the last row of the prior
+    page.
+
+type RowsSpec struct {
+	RowFilter
+	GroupBy []RowColumn
+	Orders  []RowOrder
+	Pages   RowPages
+	// Lock applies to every data page. A locking plan supports Find only
+	// and requires an ungrouped, non-aggregate projection.
+	Lock RowLock
+	// WithExists registers a boolean existence check for each filter and
+	// scope choice of an unlocked, non-aggregate plan.
+	WithExists bool
+}
+    RowsSpec declares the finite alternatives for a single-table read. GroupBy
+    lists the physical fields that determine each aggregate group.
+
+type SQLAuthority struct {
+	// Has unexported fields.
+}
+    SQLAuthority verifies registered statements for a driver on behalf of one
+    registry. It cannot sign SQL or change which statements that registry owns.
+
+func (a SQLAuthority) DeniesLegacySQL() bool
+    DeniesLegacySQL reports whether this credential requires registered SQL on
+    its runner or Direct pool. A zero credential leaves ordinary SQL available.
+
+func (a SQLAuthority) IsZero() bool
+    IsZero reports whether this is the unset credential.
+
+func (a SQLAuthority) Open(owner any, method CallMethod, call AuthorizedStatement) (AuthorizedSQL, error)
+    Open validates a compiled call for the receiving session. Drivers pass their
+    own session pointer. The returned parameters are in PostgreSQL bind order.
+
 type SQLFiles struct {
 	// Has unexported fields.
 }
@@ -1149,6 +1801,58 @@ type SessionProof struct {
     key token and the concrete owner pointer, so copying a proof onto another
     struct or wrapping a session fails verification.
 
+type ShapeAccess struct{ Relation, Command string }
+    ShapeAccess identifies one physical relation and command for policy checks.
+
+type ShapeColumn struct {
+	Relation, Name, Type string
+	// TypeMod is the expected pg_attribute.atttypmod when the declaration
+	// specifies a modifier. Nil requests verification of the type OID alone.
+	TypeMod *int32 `json:",omitempty"`
+}
+    ShapeColumn records the declared PostgreSQL type of a referenced physical
+    column for catalog verification. Relation is its quoted, qualified table.
+
+type ShapeEffects uint8
+    ShapeEffects describes what a compiled statement can do on its session.
+
+const (
+	// EffectRead marks a statement that observes rows.
+	EffectRead ShapeEffects = 1 << iota
+	// EffectWrite marks a statement that can modify data, including through a routine.
+	EffectWrite
+	// EffectRowLock marks a row-locking read that needs a writable transaction.
+	EffectRowLock
+	// EffectAdvisoryLock marks an operation whose advisory lock needs a transaction.
+	EffectAdvisoryLock
+)
+type ShapeField struct {
+	Name, Type string
+	Nullable   bool
+}
+    ShapeField describes a result column in projection order.
+
+type ShapeInput struct {
+	Name, Type string
+	Scope      bool
+	// Secret requests redaction of this bind value by observers.
+	Secret bool
+}
+    ShapeInput identifies a numbered parameter. Scope marks a parameter supplied
+    by the session. Values are kept outside all snapshots.
+
+type Slot[V any] struct {
+	// Has unexported fields.
+}
+    Slot is the identity of a typed input. Reusing it in a statement reuses the
+    parameter position. Two Input calls always allocate distinct inputs.
+
+func Input[V any](name string, kind PGType[V]) Slot[V]
+    Input declares one named input at definition time.
+
+func (s Slot[V]) Expr() Expr[V]
+    Expr references a bound value. Its value never enters the SQL text.
+
 type SoftDelete struct {
 	// DeletedValue is the sentinel value written to mark a row deleted
 	// (must be string/~string or an integer matching the ",deleted" field type).
@@ -1234,6 +1938,26 @@ func (p StatementPolicy) Compile(singleStatement bool) (StatementGuard, error)
     enabled, the guard checks statement boundaries without restricting the
     method.
 
+type StatementShape struct {
+	Inputs          []ShapeInput
+	Result          []ShapeField
+	Effects         ShapeEffects
+	Privileges      []DefinedPrivilege
+	Access          []ShapeAccess
+	PhysicalColumns []ShapeColumn
+	ForceRLS        []string
+	SchemaUsage     []string
+	AnyColumnSelect []string
+	AnyColumnUpdate []string
+	// Routines records the catalog contracts of called PostgreSQL functions.
+	Routines []RoutineRequirement
+	// UnscopedOnly marks a shape that omits a declared column-scope predicate.
+	// It can be bound only to an unscoped session.
+	UnscopedOnly bool
+}
+    StatementShape describes the inputs, results, effects and minimum grants for
+    one SQL string in Definition.Statements under the same key.
+
 type Table[T, K, S any] struct {
 	descriptor[T, S]
 
@@ -1299,9 +2023,13 @@ func (t *Table[T, K, S]) TryDefineUpsert(key string, spec UpsertSpec, opts ...St
     in the Registry.
 
 type TableSpec[T, K any] struct {
-	Name, Order string
-	Columns     []Column[T]
-	SoftDelete  *SoftDelete
+	// RelationScope declares how a typed query may access this physical table.
+	// A tagged scope column implies ByScopeColumn when this field is zero.
+	// An untagged table needs an explicit ByRLS or Global declaration for typed use.
+	RelationScope RelationScope
+	Name, Order   string
+	Columns       []Column[T]
+	SoftDelete    *SoftDelete
 	// ReadOnly restricts this table to read operations only: no INSERT/UPDATE/DELETE
 	// statements or write privileges are derived, and write methods return ErrReadOnly.
 	ReadOnly bool
@@ -1567,8 +2295,11 @@ func SetLocalRole(ctx context.Context, tx pgx.Tx, role string) error
 TYPES
 
 type DirectConfig struct {
-	SessionKey tabula.SessionKey
-	Observer   *tabula.Observer
+	// SQLAuthority accepts calls issued by one registry. A strict credential
+	// also rejects direct SQL text on sessions of this pool.
+	SQLAuthority tabula.SQLAuthority
+	SessionKey   tabula.SessionKey
+	Observer     *tabula.Observer
 }
     DirectConfig configures A4 session signing and B1/B3 observability on a
     read-only DirectPool created by DirectWithConfig.
@@ -1613,8 +2344,14 @@ type RawSession[S any] struct {
 func (s *RawSession[S]) Each(ctx context.Context, query string, args []any, decode func(func(...any) error) error) error
     Each streams all rows of query through decode.
 
+func (s *RawSession[S]) EachAuthorized(ctx context.Context, call tabula.AuthorizedStatement, visit func(func(...any) error) error) error
+    EachAuthorized verifies a registered streaming call for this instance.
+
 func (s *RawSession[S]) Exec(ctx context.Context, query string, args ...any) (int64, error)
     Exec executes query and returns the affected row count.
+
+func (s *RawSession[S]) ExecAuthorized(ctx context.Context, call tabula.AuthorizedStatement) (int64, error)
+    ExecAuthorized verifies a registered mutation for this raw-session instance.
 
 func (s *RawSession[S]) ReadOnly() bool
     ReadOnly reports whether this handle permits only reads.
@@ -1623,11 +2360,17 @@ func (s *RawSession[S]) Returning(ctx context.Context, query string, args []any,
     Returning executes a write with RETURNING and maps pgx.ErrNoRows to
     sql.ErrNoRows.
 
+func (s *RawSession[S]) SQLAuthority() tabula.SQLAuthority
+    SQLAuthority returns the credential of the underlying session.
+
 func (s *RawSession[S]) Savepoint(ctx context.Context, fn func(context.Context, *Session[S]) error) error
     Savepoint runs fn inside a nested pgx transaction (PostgreSQL SAVEPOINT).
 
 func (s *RawSession[S]) Scan(ctx context.Context, query string, args []any, dest ...any) error
     Scan executes a single-row query and maps pgx.ErrNoRows to sql.ErrNoRows.
+
+func (s *RawSession[S]) ScanAuthorized(ctx context.Context, call tabula.AuthorizedStatement, dest ...any) error
+    ScanAuthorized verifies a registered single-row call for this instance.
 
 func (s *RawSession[S]) Scope() S
     Scope returns the session's bound scope value.
@@ -1725,11 +2468,14 @@ type RunnerOptions struct {
 	// An empty value keeps unscoped access restricted to READ ONLY transactions.
 	UnscopedReadRole string
 	Timeouts         Timeouts
-	SessionKey       tabula.SessionKey
-	ExposeTx         bool
-	Tracer           tabula.Tracer
-	Metrics          tabula.Metrics
-	Log              tabula.LogConfig
+	// SQLAuthority verifies descriptor calls from one registry. Its DenyLegacySQL
+	// policy also disables raw session methods and raw transaction access.
+	SQLAuthority tabula.SQLAuthority
+	SessionKey   tabula.SessionKey
+	ExposeTx     bool
+	Tracer       tabula.Tracer
+	Metrics      tabula.Metrics
+	Log          tabula.LogConfig
 	// RawErrorDiagnostics passes original errors to the statement tracer. Driver
 	// messages can contain bound values. The default traces the class and SQLSTATE.
 	RawErrorDiagnostics bool
@@ -1768,19 +2514,29 @@ func NewSession[S any](tx pgx.Tx, scope S, policy ScopePolicy[S]) *Session[S]
     NewSession wraps an existing pgx.Tx with scope and policy as an unsealed
     migration handle. Keyed registries require a Runner or keyed DirectPool.
 
-func (s *Session[S]) Each(ctx context.Context, query string, args []any, decode func(func(...any) error) error) error
-    Each streams rows through decode. The runner closes an unfinished cursor at
-    transaction or savepoint exit. A resumed consumer receives ErrSessionClosed.
+func (s *Session[S]) Each(ctx context.Context, query string, args []any, visit func(func(...any) error) error) error
+    Each streams rows on a runner that allows SQL text. The runner closes an
+    unfinished cursor at transaction or savepoint exit.
+
+func (s *Session[S]) EachAuthorized(ctx context.Context, call tabula.AuthorizedStatement, visit func(func(...any) error) error) error
+    EachAuthorized streams a registered read or multirow write. A returning
+    write uses the write policy and holds the cursor until iteration ends.
 
 func (s *Session[S]) Exec(ctx context.Context, query string, args ...any) (int64, error)
-    Exec executes query and returns the affected row count.
+    Exec executes SQL text on a runner that allows it.
+
+func (s *Session[S]) ExecAuthorized(ctx context.Context, call tabula.AuthorizedStatement) (int64, error)
+    ExecAuthorized executes a registered mutation and returns its affected-row
+    count.
 
 func (s *Session[S]) ReadOnly() bool
     ReadOnly reports whether this handle permits only reads.
 
 func (s *Session[S]) Returning(ctx context.Context, query string, args []any, dest ...any) error
-    Returning executes a write with RETURNING and maps pgx.ErrNoRows to
-    sql.ErrNoRows.
+    Returning reads one row from a write on a runner that allows SQL text.
+
+func (s *Session[S]) SQLAuthority() tabula.SQLAuthority
+    SQLAuthority returns the registry credential configured on the runner.
 
 func (s *Session[S]) Savepoint(ctx context.Context, fn func(context.Context, *Session[S]) error) (err error)
     Savepoint runs fn inside a nested pgx transaction (PostgreSQL SAVEPOINT).
@@ -1788,7 +2544,11 @@ func (s *Session[S]) Savepoint(ctx context.Context, fn func(context.Context, *Se
     closed when Savepoint returns.
 
 func (s *Session[S]) Scan(ctx context.Context, query string, args []any, dest ...any) error
-    Scan executes a single-row query and maps pgx.ErrNoRows to sql.ErrNoRows.
+    Scan reads a single row on a runner that allows SQL text.
+
+func (s *Session[S]) ScanAuthorized(ctx context.Context, call tabula.AuthorizedStatement, dest ...any) error
+    ScanAuthorized decodes one result of a registered read or write. A write
+    follows the runner's Returning policy.
 
 func (s *Session[S]) Scope() S
     Scope returns the session's bound scope value.
@@ -2054,8 +2814,9 @@ func ClassifyPolicies(policies []Policy, rules []PolicyRule) ([]PolicyClass, []s
     roles.
 
 func CollectPrivilegeNeeds(defs []tabula.Definition) (PrivilegeNeeds, []string)
-    CollectPrivilegeNeeds merges the Privileges declared on defs and also
-    reports any definition names that declared zero privileges.
+    CollectPrivilegeNeeds merges descriptor and typed-shape grants and reports
+    definitions with no explicit grants. Use RoleStatements.Readiness for a
+    role's selected shapes, including any-column, schema and RLS requirements.
 
 func DefaultTypeFamilies() map[string][]string
     DefaultTypeFamilies returns a fresh copy of the built-in Go-type to
@@ -2073,7 +2834,7 @@ func ParseSnapshot(content string) ([]tabula.Definition, error)
     such as tabula check can verify the snapshot against PostgreSQL without
     importing the application's Go packages.
 
-func PrepareStatement(ctx context.Context, tx *sql.Tx, query, role string) (err error)
+func PrepareStatement(ctx context.Context, tx *sql.Tx, query, role string) error
     PrepareStatement has the server PREPARE query inside tx, optionally as role,
     then EXPLAIN EXECUTE it with NULL arguments. PREPARE checks names, types,
     functions and parameter inference. EXPLAIN checks plan-time access without
@@ -2393,9 +3154,11 @@ type RLSMatrix struct {
 type ReadinessNeeds struct {
 	Privileges      PrivilegeNeeds
 	SchemaUsage     []string
-	AnyColumnSelect []string // SELECT on at least one column of each relation
-	ForceRLS        []string // both ENABLE and FORCE ROW LEVEL SECURITY
-	SequenceUsage   []string // named sequences in addition to column-owned sequences
+	AnyColumnSelect []string                    // SELECT on at least one column of each relation
+	AnyColumnUpdate []string                    // UPDATE on at least one column of each locked relation
+	Routines        []tabula.RoutineRequirement // exact function catalog contracts
+	ForceRLS        []string                    // both ENABLE and FORCE ROW LEVEL SECURITY
+	SequenceUsage   []string                    // named sequences in addition to column-owned sequences
 }
     ReadinessNeeds describes minimum capabilities for one role. Privileges
     accepts the result of CollectPrivilegeNeeds. Relations and function
@@ -2416,6 +3179,12 @@ func (r RoleStatements) AddViews(role string, views ...tabula.ViewDefinition)
     AddViews appends every registered statement from views (including all C3
     composed-query variants) to role's workload without manual listing.
 
+func (r RoleStatements) Readiness(role string) (ReadinessNeeds, error)
+    Readiness collects minimum privileges and scope requirements from the
+    registered shapes bound to role. Pass the result and any application
+    requirements to CheckReadiness. Legacy SQL retains its application-owned
+    needs.
+
 type RuntimeProbe struct {
 	BehaviorStatement
 	Vars   map[string]string
@@ -2432,12 +3201,14 @@ type SQLBinding struct {
 	NoAccess   bool `json:",omitempty"`
 	Variants   []Statement
 	Definition string `json:",omitempty"`
-	Prefix     string `json:",omitempty"`
-	Skip       bool
+	// Plan identifies a registered typed family when the source handle is indirect.
+	Plan   string `json:",omitempty"`
+	Prefix string `json:",omitempty"`
+	Skip   bool
 }
     SQLBinding assigns one inventoried site to its execution roles. Definition
     names the owning table or view when the collector cannot resolve it. Prefix
-    optionally narrows the variants of that one composed query. Manual Variants
+    optionally narrows the registered variants of one plan. Manual Variants
     carry their own Access or NoAccess requirements. Skip requires a registered
     exception.
 
@@ -2454,9 +3225,11 @@ func CollectSQL(ctx context.Context, cfg InventoryConfig) (SQLInventory, error)
     including aliases and imported constants. It recognizes View.DefineQuery,
     View.TryDefineQuery, and single-table aggregate calls (Max, Min, Sum,
     Avg, CountBy, Exists) as static sites when their key or column is
-    compile-time constant, and collects typed call sites for CallTargets
-    / AuditSecurityCalls. Escaping function or method values are flagged
-    accordingly.
+    compile-time constant, and collects typed call sites for CallTargets /
+    AuditSecurityCalls. Typed row declarations and executions are built-in
+    sites. Indirect plan handles can be resolved through SQLBinding.Definition
+    and SQLBinding.Plan. Raw SQL methods and additional call targets are
+    optional.
 
 func (inv SQLInventory) BindRoles(bindings map[string]SQLBinding) (RoleStatements, error)
     BindRoles produces a workload from the collected SQL. Missing and stale
@@ -2467,10 +3240,11 @@ func (inv SQLInventory) BindRolesWithDefinitions(
 	defs []tabula.Definition,
 	views []tabula.ViewDefinition,
 ) (RoleStatements, error)
-    BindRolesWithDefinitions expands each static composed query or aggregate
-    against its owning definition. A missing owner, ambiguous definition, or
-    site with no matching statements returns an error and no partial workload.
-    Supply named Variants for SQL that is not registered in a definition.
+    BindRolesWithDefinitions expands composed queries, aggregates and typed
+    plans against their owning definitions. A missing owner, ambiguous
+    definition, or site with no matching statements returns an error and no
+    partial workload. Supply named Variants for SQL that is not registered in a
+    definition.
 
 type SQLMethod struct {
 	Receiver, Method string
@@ -2511,14 +3285,19 @@ type SQLSite struct {
 	Dynamic   bool   `json:",omitempty"`
 	Exception string `json:",omitempty"`
 }
-    SQLSite describes a static or dynamic SQL call, composed query definition,
-    or single-table aggregate call. ID is independent of line numbers.
+    SQLSite describes an SQL call or a registered statement declaration or use.
+    Typed row families, including locking reads, use Kind "typed_rows".
+    Transaction advisory locks and routine plans use "typed_plan" with the
+    declaring function or concrete method receiver. ID is independent of line
+    numbers.
 
 type Statement struct {
 	Name     string
 	SQL      string
 	Access   []PolicyAccess `json:",omitempty"`
 	NoAccess bool           `json:",omitempty"`
+	// Shape carries per-statement types and readiness requirements exported by a typed plan.
+	Shape *tabula.StatementShape `json:",omitempty"`
 }
     Statement is application-owned SQL. Access supplies the complete relation
     and command list for complex statements when checking structural policy
@@ -2556,6 +3335,11 @@ type DirectOption func(*directConfig)
 
 func DirectObserver(obs *tabula.Observer) DirectOption
     DirectObserver attaches a session-level Observer to a DirectPool.
+
+func DirectSQLAuthority(a tabula.SQLAuthority) DirectOption
+    DirectSQLAuthority binds the pool to registered calls issued by a registry.
+    A strict credential also rejects direct SQL text on every session of the
+    pool.
 
 func DirectSessionKey(key tabula.SessionKey) DirectOption
     DirectSessionKey binds a SessionKey to a DirectPool so every pointer
@@ -2606,8 +3390,14 @@ type RawSession[S any] struct {
 func (s *RawSession[S]) Each(ctx context.Context, query string, args []any, decode func(func(...any) error) error) error
     Each streams all rows of query through decode.
 
+func (s *RawSession[S]) EachAuthorized(ctx context.Context, call tabula.AuthorizedStatement, visit func(func(...any) error) error) error
+    EachAuthorized verifies a registered streaming call for this instance.
+
 func (s *RawSession[S]) Exec(ctx context.Context, query string, args ...any) (int64, error)
     Exec executes a statement and returns its affected row count.
+
+func (s *RawSession[S]) ExecAuthorized(ctx context.Context, call tabula.AuthorizedStatement) (int64, error)
+    ExecAuthorized verifies a registered mutation for this raw-session instance.
 
 func (s *RawSession[S]) ReadOnly() bool
     ReadOnly reports whether this handle permits only reads.
@@ -2616,12 +3406,18 @@ func (s *RawSession[S]) Returning(ctx context.Context, query string, args []any,
     Returning executes a write with RETURNING and scans the returned row into
     dest.
 
+func (s *RawSession[S]) SQLAuthority() tabula.SQLAuthority
+    SQLAuthority returns the credential of the underlying session.
+
 func (s *RawSession[S]) Savepoint(ctx context.Context, name string, fn func(context.Context) error) error
     Savepoint runs fn inside a PostgreSQL SAVEPOINT on the underlying
     transaction.
 
 func (s *RawSession[S]) Scan(ctx context.Context, query string, args []any, dest ...any) error
     Scan executes a single-row query and scans into dest.
+
+func (s *RawSession[S]) ScanAuthorized(ctx context.Context, call tabula.AuthorizedStatement, dest ...any) error
+    ScanAuthorized verifies a registered single-row call for this instance.
 
 func (s *RawSession[S]) Scope() S
     Scope returns the session's bound scope value.
@@ -2733,6 +3529,9 @@ type RunnerOptions struct {
 	// Timeouts bounds lock waits, statement duration, idle-in-transaction duration
 	// and whole-attempt Go context duration.
 	Timeouts Timeouts
+	// SQLAuthority verifies descriptor calls from one registry. Its DenyLegacySQL
+	// policy also disables raw session methods and raw transaction access.
+	SQLAuthority tabula.SQLAuthority
 	// SessionKey signs every Session created by this runner for A4 sealed
 	// registries.
 	SessionKey tabula.SessionKey
@@ -2795,19 +3594,29 @@ func NewSession[S any](tx *sql.Tx, scope S, policy ScopePolicy[S]) *Session[S]
     NewSession wraps an existing *sql.Tx with scope and policy as an unsealed
     migration handle. Keyed registries require a Runner or keyed DirectPool.
 
-func (s *Session[S]) Each(ctx context.Context, query string, args []any, decode func(func(...any) error) error) error
-    Each streams rows through decode. The runner closes an unfinished cursor at
-    transaction or savepoint exit. A resumed consumer receives ErrSessionClosed.
+func (s *Session[S]) Each(ctx context.Context, query string, args []any, visit func(func(...any) error) error) error
+    Each streams rows on a runner that allows SQL text. The runner closes an
+    unfinished cursor at transaction or savepoint exit.
+
+func (s *Session[S]) EachAuthorized(ctx context.Context, call tabula.AuthorizedStatement, visit func(func(...any) error) error) error
+    EachAuthorized streams a registered read or multirow write. A returning
+    write uses the write policy and holds the cursor until iteration ends.
 
 func (s *Session[S]) Exec(ctx context.Context, query string, args ...any) (int64, error)
-    Exec executes a statement and returns its affected row count.
+    Exec executes SQL text on a runner that allows it.
+
+func (s *Session[S]) ExecAuthorized(ctx context.Context, call tabula.AuthorizedStatement) (int64, error)
+    ExecAuthorized executes a registered mutation and returns its affected-row
+    count.
 
 func (s *Session[S]) ReadOnly() bool
     ReadOnly reports whether this handle permits only reads.
 
 func (s *Session[S]) Returning(ctx context.Context, query string, args []any, dest ...any) error
-    Returning executes a write with RETURNING and scans the returned row into
-    dest.
+    Returning reads one row from a write on a runner that allows SQL text.
+
+func (s *Session[S]) SQLAuthority() tabula.SQLAuthority
+    SQLAuthority returns the registry credential configured on the runner.
 
 func (s *Session[S]) Savepoint(ctx context.Context, name string, fn func(context.Context) error) (err error)
     Savepoint runs fn inside a PostgreSQL SAVEPOINT. On error or panic, changes
@@ -2815,7 +3624,11 @@ func (s *Session[S]) Savepoint(ctx context.Context, name string, fn func(context
     transaction usable; on success the savepoint is released.
 
 func (s *Session[S]) Scan(ctx context.Context, query string, args []any, dest ...any) error
-    Scan executes a single-row query and scans into dest.
+    Scan reads a single row on a runner that allows SQL text.
+
+func (s *Session[S]) ScanAuthorized(ctx context.Context, call tabula.AuthorizedStatement, dest ...any) error
+    ScanAuthorized decodes one result of a registered read or write. A write
+    follows the runner's Returning policy.
 
 func (s *Session[S]) Scope() S
     Scope returns the session's bound scope value.

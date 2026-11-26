@@ -313,3 +313,137 @@ tabula test-rls --config behavior.json
 ```
 
 Generate `statements.sql` from the tables and views used by the assigned roles. A missing descriptor or aggregate makes `inventory` exit with the affected site ID. Review each unregistered dynamic site and each extra grant before changing the application's grant declarations. [Full JSON examples and interpretation](AUTHORIZATION.md)
+
+## Registered single-table reads and writes
+
+Declare a physical table and an output view at startup. This example uses
+`public.items(id bigint PRIMARY KEY, rank integer NOT NULL)` and a view with
+one Go field, `ID int64` tagged `db:"id"`.
+
+```go
+rel := tabula.FromTable(items, "i", tabula.Global())
+src := tabula.RowsFrom(items, rel)
+id := tabula.FieldOf(rel, "id", tabula.Int8())
+rank := tabula.FieldOf(rel, "rank", tabula.Int4())
+minimum := tabula.Input("minimum", tabula.Int4())
+byRank := tabula.Ge(rank.Expr(), minimum.Expr())
+
+find := tabula.DefineRows(out, "search", src, tabula.RowsSpec{
+    RowFilter: tabula.RowFilter{Optional: []tabula.RowPredicate{
+        {Name: "minimum", When: byRank},
+    }},
+    WithExists: true,
+    Orders: []tabula.RowOrder{{Name: "by_id", Terms: []tabula.RowTerm{tabula.Asc(id)}}},
+    Pages:  tabula.RowPages{Offset: true, Keyset: true, MaxLimit: 50, MaxOffset: 500},
+}, tabula.Project(tabula.Output(out, "id", tabula.Int8()), id.Expr()))
+
+// Inside a callback with an authorized session.
+choice := tabula.RowChoice{
+    Filters: []string{"minimum"}, Order: "by_id", Page: tabula.FirstPage, Limit: 10,
+}
+bound := find.Bind(session)
+rows, total, err := bound.List(ctx, choice, tabula.BindValue(minimum, 3))
+// For a boolean answer, select the predicates without a page or count.
+present, err := bound.Exists(ctx, choice.Filters, tabula.BindValue(minimum, 3))
+```
+
+`Find` executes the selected data statement. `Count` counts the unpaged result
+for the selected predicates. `List` validates the bindings for both statements,
+then runs the count and the page. Use a repeatable-read transaction when both
+must see the same database snapshot. For a subsequent keyset page, call
+`find.Cursor("by_id", tabula.At(id, last.ID))` with the last result. Set
+`choice.Page` to `AfterPage` and `choice.After` to that cursor. Each keyset
+order projects its terms and ends in the complete table key or grouping key.
+Mixed directions and nullable terms use the same NULL ordering for comparisons
+and sorting. Use `NullAt(field)` for a NULL cursor component.
+
+With `RowsSpec.WithExists`, each filter and scope choice has one registered
+`SELECT EXISTS`. It reads only the live-row and predicate columns, stops at
+the first match, and needs no bindings from the projection, sort or page.
+`IsNotDistinct` and `IsDistinct` compare nullable values and always return a
+boolean, including when both values are NULL.
+
+Use `And`, `Or` and `Not` to combine PostgreSQL boolean expressions.
+A predicate declared with a custom Go codec still requires the catalog type
+`pg_catalog.bool`. Nullable predicates follow PostgreSQL three-valued logic.
+
+Project `CountAll`, `CountOf`, `MinOf`, `MaxOf`, `SumOf` or `AvgOf` to read
+aggregate results through the view. Supply the PostgreSQL result type to
+`SumOf` and `AvgOf`, for example `SumOf(rank.Expr(), Int8())` for an integer field.
+A non-count aggregate needs a nullable destination. Put each free projected
+field in `RowsSpec.GroupBy` when projecting an aggregate. An ungrouped scalar
+aggregate has one result row even on an empty input. Grouped counts count
+groups before the page bounds.
+
+```go
+next := tabula.Input("new_rank", tabula.Int4())
+change := tabula.DefineUpdateMany(src, "change_rank", tabula.MutationSpec{
+    RowFilter: tabula.RowFilter{Where: byRank},
+}, tabula.RowSet{
+    Name: "rank", Assignments: []tabula.RowAssignment{tabula.Assign(rank, next.Expr())},
+})
+affected, err := change.Bind(session).UpdateMany(ctx, "rank", nil,
+    tabula.BindValue(minimum, 3), tabula.BindValue(next, 7))
+```
+
+Every mutation requires a fixed typed predicate. Optional predicates narrow it.
+For a versioned table, supply `MutationSpec.Version` with
+`ExpectVersion(revision, expected)`. Updates compare and advance the version,
+and deletes compare it. A stale version can therefore yield zero affected
+rows. The assignments may include the descriptor's soft-delete marker.
+Subsequent reads and mutations exclude those deleted rows. Physical
+`DefineDeleteMany` requires `TableSpec.AllowDelete`.
+
+The default budget is 256 statements per plan. It includes the declared
+scopes and independent predicate choices, each order and allowed page form,
+and one count per scope and predicate combination on ordinary reads. Enabling
+`WithExists` adds one existence check per combination. Each update assignment set
+contributes its own shape. `TryDefineRows`, `TryDefineUpdateMany` and
+`TryDefineDeleteMany` return declaration errors before publishing the family.
+
+## Registered locks and functions
+
+These examples use `q` for the root package, a global `public.items` table and a one-column view named `entries` with an `int64` field tagged `db:"id"`. Configure the session adapter with the registry's `SQLAuthority()`. Execute locking reads inside a writable transaction.
+
+```go
+i := q.FromTable(items, "i", q.Global())
+id := q.FieldOf(i, "id", q.Int8())
+key := q.Input("key", q.Int8())
+locked := q.DefineRows(entries, "lock_item", q.RowsFrom(items, i), q.RowsSpec{
+    RowFilter: q.RowFilter{Where: q.Ge(id.Expr(), key.Expr())},
+    Orders: []q.RowOrder{{Name: "by_id", Terms: []q.RowTerm{q.Asc(id)}}},
+    Pages: q.RowPages{Keyset: true, MaxLimit: 1},
+    Lock: q.ForRows(q.ForNoKeyUpdate, i, q.SkipLocked),
+}, q.Project(q.Output(entries, "id", q.Int8()), id.Expr()))
+choice := q.RowChoice{Order: "by_id", Page: q.FirstPage, Limit: 1}
+rows, err := locked.Bind(session).Find(ctx, choice, q.BindValue(key, int64(7)))
+```
+
+This reads the first visible, available row at or above the bound key. `SkipLocked` moves past conflicting rows in the declared order. `NoWait` returns SQLSTATE `55P03` on conflict. `Wait` waits for acquisition. A locking plan registers data pages only. Grouped or aggregate projections and `WithExists` fail at declaration. `Count`, `List` and `Exists` return `ErrOperationDenied` before executing a statement.
+
+Column-scoped, RLS-enforced and soft-deleting tables use the same `RowsFrom` declaration for locking and ordinary reads. Pass `FieldOf(...).Column()` for a nonstandard scope or status type. Configured status values bind internally and are redacted. Boolean and timestamp markers use `= FALSE` and `IS NULL`.
+
+For a transaction advisory lock, declare a one-boolean view. Each key binds separately. The two-integer key space is independent of the bigint key space.
+
+```go
+first, second := q.Input("first", q.Int4()), q.Input("second", q.Int4())
+pair := q.AdvisoryXactLockPair(q.Shared, q.Try, first.Expr(), second.Expr())
+lock := q.DefineAdvisoryLock(flags, "group_lock", pair)
+held, err := lock.Bind(session).Acquire(ctx, q.BindValue(first, int32(1)), q.BindValue(second, int32(7)))
+```
+
+`Try` reports contention as `false, nil`. `Wait` reports successful acquisition as `true, nil`. Both commit and rollback release the lock. An explicit read-only transaction can acquire a transaction advisory lock. Direct accepts only reads without lock effects.
+
+To call a scalar function, declare its signature and assign a typed expression to each formal. Reusing an input slot reuses its bind position. The function's declaration order determines the SQL argument order.
+
+```go
+find := q.DeclareRoutine(q.RoutineSpec[int64]{
+    Schema: "public", Name: "lookup", Result: q.Int8(),
+    Cardinality: q.RoutineOne, ReadOnly: true,
+}, q.Parameter("id", q.Int8()))
+lookup := q.DefineRoutine(entries, "lookup_item", find,
+    q.Arg(q.FormalOf(find, "id", q.Int8()), key.Expr()))
+row, err := lookup.Bind(session).One(ctx, q.BindValue(key, int64(7)))
+```
+
+Use `RoutineSet` and `All` for a set of values. Declare `Nullable` and a nullable view column for results that can be SQL NULL. The default function effect requires write authorization. A write call returning one or many results runs under the session's `Returning` policy. A command allowlist for writes rejects its outer `SELECT`. Verify each overload under its executing role. [Role readiness](AUTHORIZATION.md#check-a-role-at-startup)

@@ -27,7 +27,8 @@ func TestCheckLoginRole(t *testing.T) {
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	schema := "tabula_lr_" + suffix
-	loginRole := "tabula_login_" + suffix
+	// Fixture tests inventory their own login prefix on the same cluster.
+	loginRole := schema + "_login"
 	workerRole := "tabula_worker_" + suffix
 	extraRole := "tabula_extra_" + suffix
 

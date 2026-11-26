@@ -1,6 +1,20 @@
-# Migrating to Tabula v0.3
+# Migrating to Tabula v0.4
 
-Follow this guide when upgrading an application to v0.3. For the full surface after the upgrade, see the [integration guide](INTEGRATION.md).
+Start with the section for the version you are adopting. The integration guide lists the APIs and commands available in this checkout. [Integration guide](INTEGRATION.md)
+
+## Typed relation declarations in v0.4
+
+Set `RowsSpec.Lock = ForRows(strength, rel, wait)` on a single-table plan and execute `plan.Bind(session).Find` with its declared filters and page. Request `WithExists` on an unlocked row plan for a boolean result. For advisory locks, choose the bigint or two-integer overload and run the operation inside a transaction. When moving a function call to `DefineRoutine`, declare its exact signature, cardinality, effect and security mode. Bind the session once, then call `One`, `All` or, for an advisory lock, `Acquire`. Add per-shape requirements to role readiness and use keyed `ReadinessNeeds` literals for the added fields. [Lock and function examples](COOKBOOK.md#registered-locks-and-functions)
+
+Name a physical table by schema and relation. Declare `TableSpec.RelationScope` for a table whose rows depend on database RLS or are shared globally. A table with a tagged scope column can use `ByScopeColumn()` directly. Declare one table occurrence for each single-table plan. Use its fields and slots consistently in the plan and pass runtime values with `BindValue`. [Compilation and role verification](DESIGN-v0.4.md#compilation-binding-and-snapshots)
+
+Typed SQL now spells out each slot's catalog type, including a column-scoped parameter. Refresh stored SQL snapshots and rerun per-role PREPARE and EXPLAIN. A domain or enum retains its own type identity. Declare a bounded character column with `Varchar(n)` to verify the length in `pg_attribute.atttypmod` alongside its type OID. Contradictory declarations for a column fail during registration. PostgreSQL returns zero matches for an overlength equality parameter and applies its native length check on write, including SQLSTATE `22001`. Parameter casts always use the type without its length modifier. [PostgreSQL character types](https://www.postgresql.org/docs/17/datatype-character.html)
+
+### Enable registered SQL by role
+
+Create each strict registry with `Deny: tabula.DenyLegacySQL`. Pass `reg.SQLAuthority()` to its runner or Direct pool during startup. First migrate string predicates, raw statements and dynamically selected columns to registered plans. Regenerate the role's SQL snapshot after switching because the fixed count, list and grouping statements now include the actual scoped and unscoped live-row variants. The zero capability keeps existing registrations and executions available. Use keyed literals for extended option structs. [Registered execution](AUTHORIZATION.md#registered-execution)
+
+Move one single-table operation at a time to a named row plan. Declare the inputs, optional predicates, assignment sets and allowed pages at startup, then bind the plan to an `AuthorizedSession`. Use `RowsFrom(table, rel)` for global or RLS-enforced relations. For a nonstandard scope or soft-delete Go type, pass its `FieldOf(...).Column()` to declare the exact catalog type. Regenerate the snapshot, run source inventory with the new role assignments and verify the bound statements on the migration-built database. Use keyed `sqlcheck.Statement` and `SQLBinding` literals to accommodate their additional fields. [Row plan examples](COOKBOOK.md#registered-single-table-reads-and-writes)
 
 ## From v0.3.10 to v0.3.11
 

@@ -44,7 +44,14 @@ func (t *Table[T, K, S]) DefineUpsert(key string, spec UpsertSpec, opts ...State
 	if err != nil {
 		panic(err)
 	}
-	t.Statement(key, plan.sql, opts...)
+	t.registerStatement(key, plan.sql, "", opts)
+	if t.reg.SQLAuthority().DeniesLegacySQL() {
+		method := CallExec
+		if len(plan.retIdx) > 0 {
+			method = CallReturning
+		}
+		plan.meta.fixed = t.fixedShape(key, plan.sql, method, EffectWrite)
+	}
 	return plan
 }
 
@@ -56,6 +63,9 @@ func (t *Table[T, K, S]) TryDefineUpsert(key string, spec UpsertSpec, opts ...St
 	}
 	fail := func(format string, args ...any) error {
 		return fmt.Errorf(t.prefix()+".Upsert "+t.name+": "+format, args...)
+	}
+	if spec.Where != "" && t.reg.SQLAuthority().DeniesLegacySQL() {
+		return nil, ErrLegacySQL
 	}
 	if t.readOnly {
 		return nil, fail("cannot define upsert on a ReadOnly table")

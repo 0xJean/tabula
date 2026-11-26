@@ -25,26 +25,31 @@ type DirectOption func(*pgxpool.Config)
 // DirectConfig configures A4 session signing and B1/B3 observability on a
 // read-only DirectPool created by DirectWithConfig.
 type DirectConfig struct {
-	SessionKey tabula.SessionKey
-	Observer   *tabula.Observer
+	// SQLAuthority accepts calls issued by one registry. A strict credential
+	// also rejects direct SQL text on sessions of this pool.
+	SQLAuthority tabula.SQLAuthority
+	SessionKey   tabula.SessionKey
+	Observer     *tabula.Observer
 }
 
 // DirectPool owns a pool of read-only pgx connections.
 type DirectPool[S any] struct {
-	pool   *pgxpool.Pool
-	policy ScopePolicy[S]
-	key    tabula.SessionKey
-	obs    *tabula.Observer
+	authority tabula.SQLAuthority
+	pool      *pgxpool.Pool
+	policy    ScopePolicy[S]
+	key       tabula.SessionKey
+	obs       *tabula.Observer
 }
 
 // Session binds the scope without opening a transaction or checking out a connection.
 func (p *DirectPool[S]) Session(scope S) tabula.Session[S] {
 	s := &directSession[S]{
-		reader:   readQueries{db: p.pool, guard: p.check},
-		scope:    scope,
-		unscoped: p.policy.IsUnscoped != nil && p.policy.IsUnscoped(scope),
-		scopeLog: p.policy.ScopeLog,
-		obs:      p.obs,
+		authority: p.authority,
+		reader:    readQueries{db: p.pool, guard: p.check},
+		scope:     scope,
+		unscoped:  p.policy.IsUnscoped != nil && p.policy.IsUnscoped(scope),
+		scopeLog:  p.policy.ScopeLog,
+		obs:       p.obs,
 	}
 	s.proof = p.key.Sign(s)
 	return s
@@ -100,16 +105,17 @@ func DirectWithConfig[S any](ctx context.Context, dsn string, policy ScopePolicy
 	if err != nil {
 		return nil, err
 	}
-	return &DirectPool[S]{pool: pool, policy: policy, key: dcfg.SessionKey, obs: dcfg.Observer}, nil
+	return &DirectPool[S]{pool: pool, policy: policy, authority: dcfg.SQLAuthority, key: dcfg.SessionKey, obs: dcfg.Observer}, nil
 }
 
 type directSession[S any] struct {
-	reader   readQueries
-	scope    S
-	unscoped bool
-	scopeLog func(S) string
-	proof    tabula.SessionProof
-	obs      *tabula.Observer
+	authority tabula.SQLAuthority
+	reader    readQueries
+	scope     S
+	unscoped  bool
+	scopeLog  func(S) string
+	proof     tabula.SessionProof
+	obs       *tabula.Observer
 }
 
 func (s *directSession[S]) Scope() S                           { return s.scope }
@@ -126,14 +132,27 @@ func (s *directSession[S]) scopeLabel() string {
 }
 
 func (s *directSession[S]) Exec(context.Context, string, ...any) (int64, error) {
+	if s.authority.DeniesLegacySQL() {
+		return 0, errors.Join(tabula.ErrReadOnly, tabula.ErrLegacySQL)
+	}
 	return 0, tabula.ErrReadOnly
 }
 
 func (s *directSession[S]) Returning(context.Context, string, []any, ...any) error {
+	if s.authority.DeniesLegacySQL() {
+		return errors.Join(tabula.ErrReadOnly, tabula.ErrLegacySQL)
+	}
 	return tabula.ErrReadOnly
 }
 
 func (s *directSession[S]) Scan(ctx context.Context, query string, args []any, dest ...any) error {
+	if s.authority.DeniesLegacySQL() {
+		return tabula.ErrLegacySQL
+	}
+	return s.scan(ctx, query, args, dest...)
+}
+
+func (s *directSession[S]) scan(ctx context.Context, query string, args []any, dest ...any) error {
 	if err := s.reader.check(query); err != nil {
 		return err
 	}
@@ -145,6 +164,13 @@ func (s *directSession[S]) Scan(ctx context.Context, query string, args []any, d
 }
 
 func (s *directSession[S]) Each(ctx context.Context, query string, args []any, visit func(func(...any) error) error) error {
+	if s.authority.DeniesLegacySQL() {
+		return tabula.ErrLegacySQL
+	}
+	return s.each(ctx, query, args, visit)
+}
+
+func (s *directSession[S]) each(ctx context.Context, query string, args []any, visit func(func(...any) error) error) error {
 	if err := s.reader.check(query); err != nil {
 		return err
 	}

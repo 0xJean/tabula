@@ -237,8 +237,12 @@ func CheckPolicyCoverage(ctx context.Context, db *sql.DB, work RoleStatements) (
 			return nil, err
 		}
 		for _, s := range stmts {
+			if s.needsPolicyAccess() {
+				findings = append(findings, fmt.Sprintf("%s/%s: typed statement requires reviewed Access or NoAccess", role, s.Name))
+				continue
+			}
 			auto, err := inferAccess(s.SQL)
-			if s.NoAccess {
+			if s.NoAccess || s.builtInAdvisoryLock() && len(s.Access) == 0 {
 				if len(auto) > 0 {
 					findings = append(findings, fmt.Sprintf("%s/%s: NoAccess cannot override inferred table access", role, s.Name))
 				}

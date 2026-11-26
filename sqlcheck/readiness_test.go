@@ -3,6 +3,7 @@ package sqlcheck
 import (
 	"testing"
 
+	"github.com/0xJean/tabula"
 	"github.com/stretchr/testify/require"
 )
 
@@ -20,4 +21,16 @@ func TestReadinessNames(t *testing.T) {
 	require.Error(t, err)
 	_, err = CheckReadiness(t.Context(), nil, "r")
 	require.Error(t, err)
+}
+
+func TestReadinessRoutineNames(t *testing.T) {
+	for _, r := range []tabula.RoutineRequirement{
+		{Signature: "lookup()", ResultType: "pg_catalog.int8"},
+		{Signature: "public.lookup", ResultType: "pg_catalog.int8"},
+		{Signature: "public.lookup()", ResultType: "bigint"},
+		{Signature: "public.lookup()", ResultType: "pg_catalog.int8()"},
+	} {
+		_, err := readinessItems(ReadinessNeeds{Routines: []tabula.RoutineRequirement{r}})
+		require.Error(t, err)
+	}
 }

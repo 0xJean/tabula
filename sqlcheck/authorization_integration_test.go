@@ -204,6 +204,19 @@ func TestAuthorizationWorkflow(t *testing.T) {
 	findings, err = CheckPolicyCoverage(ctx, db, RoleStatements{reader: {srf}})
 	require.NoError(t, err)
 	require.Empty(t, findings)
+	scalar := Statement{Name: "scalar", SQL: "SELECT " + ns + ".f(1)", Shape: &tabula.StatementShape{Effects: tabula.EffectRead}}
+	findings, err = CheckPolicyCoverage(ctx, db, RoleStatements{reader: {scalar}})
+	require.NoError(t, err)
+	require.Len(t, findings, 1)
+	require.Contains(t, findings[0], "reviewed Access or NoAccess")
+	scalar.Access = []PolicyAccess{{Table: tbl, Command: "SELECT"}}
+	findings, err = CheckPolicyCoverage(ctx, db, RoleStatements{reader: {scalar}})
+	require.NoError(t, err)
+	require.Empty(t, findings)
+	scalar.Access, scalar.NoAccess = nil, true
+	findings, err = CheckPolicyCoverage(ctx, db, RoleStatements{reader: {scalar}})
+	require.NoError(t, err)
+	require.Empty(t, findings)
 	findings, err = CheckPolicyCoverage(ctx, db, RoleStatements{reader: {{Name: "bad_no_access", SQL: "SELECT id FROM " + tbl, NoAccess: true}}})
 	require.NoError(t, err)
 	require.Contains(t, strings.Join(findings, " "), "NoAccess cannot override")

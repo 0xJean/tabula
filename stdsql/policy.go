@@ -99,6 +99,9 @@ type RunnerOptions struct {
 	// Timeouts bounds lock waits, statement duration, idle-in-transaction duration
 	// and whole-attempt Go context duration.
 	Timeouts Timeouts
+	// SQLAuthority verifies descriptor calls from one registry. Its DenyLegacySQL
+	// policy also disables raw session methods and raw transaction access.
+	SQLAuthority tabula.SQLAuthority
 	// SessionKey signs every Session created by this runner for A4 sealed
 	// registries.
 	SessionKey tabula.SessionKey

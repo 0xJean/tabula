@@ -10,13 +10,20 @@ Send the following details to the maintainers. [Report a vulnerability](https://
 - Minimal reproduction steps or a failing Go test.
 - Any suggested remediation if known.
 
+## Registered statements
+
+`DenyLegacySQL` rejects SQL text and raw transaction entry on a runner carrying the registry's credential. A statement must originate from a registered shape and match the driver method and receiving session. Public observation metadata and SQL snapshots grant no execution authority. Configure PostgreSQL privileges and row policies for the same role. [Registered execution](docs/AUTHORIZATION.md#registered-execution)
+
 ## Security Design Guarantees
+
+- Registered physical row locks require writable transactions. Advisory locks require explicit transactions. Direct rejects both lock effects and function calls declared writable. Read declarations require a reviewed function body and a matching catalog contract. The executing role, server transaction mode and session guards apply to the call. [Role verification](docs/AUTHORIZATION.md#check-a-role-at-startup)
 
 - **Identifiers never come from untrusted input**: table, column, and sort identifiers are
   validated at definition time (`Define` / `MustOrderSpec` / `View.DefineQuery`). Dynamic
   values always bind via numbered PostgreSQL placeholders (`$1..$n`). Composed query
   fragments are lexically checked and fuzzed (`FuzzCompileQueryFragment`), and C3 registers
   all deterministic variants for PostgreSQL `PREPARE`/`EXPLAIN` verification.
+- A typed row plan selects an immutable registered statement for an authorized session. It checks optional predicates, page bounds, cursor provenance, write permissions and binding identities before execution. [Registered reads and mutations](docs/COOKBOOK.md#registered-single-table-reads-and-writes)
 - Role workload verification matches registered statements to their owning descriptor
   and query. Missing registrations and unreviewed skips fail the inventory check.
   [Authorization guide](docs/AUTHORIZATION.md)

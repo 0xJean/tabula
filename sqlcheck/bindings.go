@@ -12,7 +12,7 @@ import (
 
 // SQLBinding assigns one inventoried site to its execution roles. Definition
 // names the owning table or view when the collector cannot resolve it. Prefix
-// optionally narrows the variants of that one composed query. Manual Variants
+// optionally narrows the registered variants of one plan. Manual Variants
 // carry their own Access or NoAccess requirements. Skip requires a registered exception.
 type SQLBinding struct {
 	Roles      []string
@@ -20,8 +20,10 @@ type SQLBinding struct {
 	NoAccess   bool `json:",omitempty"`
 	Variants   []Statement
 	Definition string `json:",omitempty"`
-	Prefix     string `json:",omitempty"`
-	Skip       bool
+	// Plan identifies a registered typed family when the source handle is indirect.
+	Plan   string `json:",omitempty"`
+	Prefix string `json:",omitempty"`
+	Skip   bool
 }
 
 // BindRoles produces a workload from the collected SQL. Missing and stale
@@ -30,8 +32,8 @@ func (inv SQLInventory) BindRoles(bindings map[string]SQLBinding) (RoleStatement
 	return inv.BindRolesWithDefinitions(bindings, nil, nil)
 }
 
-// BindRolesWithDefinitions expands each static composed query or aggregate
-// against its owning definition. A missing owner, ambiguous definition, or
+// BindRolesWithDefinitions expands composed queries, aggregates and typed
+// plans against their owning definitions. A missing owner, ambiguous definition, or
 // site with no matching statements returns an error and no partial workload.
 // Supply named Variants for SQL that is not registered in a definition.
 func (inv SQLInventory) BindRolesWithDefinitions(
@@ -59,7 +61,7 @@ func (inv SQLInventory) BindRolesWithDefinitions(
 		}
 		seen[site.ID] = true
 		if b.Skip {
-			if strings.TrimSpace(site.Exception) == "" || len(b.Roles)+len(b.Access)+len(b.Variants) != 0 || b.NoAccess || b.Definition != "" || b.Prefix != "" {
+			if strings.TrimSpace(site.Exception) == "" || len(b.Roles)+len(b.Access)+len(b.Variants) != 0 || b.NoAccess || b.Definition != "" || b.Plan != "" || b.Prefix != "" {
 				return nil, fmt.Errorf("%s: skipped site requires a reviewed exception and no workload", site.ID)
 			}
 			continue
@@ -90,6 +92,12 @@ func (site SQLSite) bindStatements(b SQLBinding, byName map[string][]tabula.Defi
 	if b.NoAccess && len(b.Access) > 0 {
 		return nil, fmt.Errorf("cannot combine NoAccess with Access")
 	}
+	if site.Kind == "typed_rows" || site.Kind == "typed_plan" {
+		return site.bindRowPlan(b, byName)
+	}
+	if b.Plan != "" {
+		return nil, fmt.Errorf("binding Plan requires a typed plan")
+	}
 	registered := site.Kind == "composed_query" || site.Kind == "aggregate"
 	if site.Dynamic && (strings.TrimSpace(site.Exception) == "" || len(b.Variants) == 0) {
 		return nil, fmt.Errorf("dynamic site needs reviewed variants")
@@ -101,7 +109,7 @@ func (site SQLSite) bindStatements(b SQLBinding, byName map[string][]tabula.Defi
 		if len(b.Access) > 0 || b.NoAccess {
 			return nil, fmt.Errorf("supply Access or NoAccess on each variant when using Variants")
 		}
-		if b.Definition != "" || b.Prefix != "" {
+		if b.Definition != "" || b.Plan != "" || b.Prefix != "" {
 			return nil, fmt.Errorf("manual variants cannot also select a definition or prefix")
 		}
 		stmts := slices.Clone(b.Variants)
@@ -152,7 +160,7 @@ func (site SQLSite) expand(d tabula.Definition, b SQLBinding) ([]Statement, erro
 		for key, query := range d.StatementQueries {
 			// Composed variants have a dotted suffix. Scalar registrations can
 			// share an owner string with a user-chosen composed query key.
-			if query != site.QueryKey || query == "" || !strings.HasPrefix(key, query+".") {
+			if _, typed := d.StatementShapes[key]; typed || query != site.QueryKey || query == "" || !strings.HasPrefix(key, query+".") {
 				continue
 			}
 			if strings.HasPrefix(key, b.Prefix) || key == exact {
@@ -165,6 +173,9 @@ func (site SQLSite) expand(d tabula.Definition, b SQLBinding) ([]Statement, erro
 		slices.Sort(keys)
 	case site.QueryKey == "exists":
 		keys = []string{"exists"}
+		if d.StatementQueries["unscoped_exists"] == "exists" {
+			keys = append(keys, "unscoped_exists")
+		}
 	default:
 		op, column, ok := strings.Cut(site.QueryKey, ":")
 		if !ok || column == "" {
