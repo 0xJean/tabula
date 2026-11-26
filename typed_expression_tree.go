@@ -64,11 +64,6 @@ func expressionStructure(p expressionPart) (expressionTraits, bool) {
 			t.identity = "any"
 		}
 		t.children = append([]expressionPart{n.value}, n.members...)
-	case rowAggregate:
-		t.identity, t.aggregate = "aggregate/"+n.fn, true
-		if !n.star {
-			t.children = []expressionPart{n.arg}
-		}
 	case rowNull:
 		t.identity, t.children = "is null", []expressionPart{n.value}
 	case rowNot:

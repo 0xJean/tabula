@@ -49,7 +49,7 @@ func TestArrayColumn(t *testing.T) {
 	require.Equal(t, want, got)
 	_, err = ArrayColumn(reflect.TypeFor[int]())
 	require.ErrorContains(t, err, "slice type")
-	_, err = ArrayColumn(reflect.TypeFor[[]int16]())
+	_, err = ArrayColumn(reflect.TypeFor[[]uint64]())
 	require.ErrorContains(t, err, "unsupported array element type")
 }
 

@@ -28,16 +28,17 @@ func (r RowSource[T, S]) readSource() (rowSource, error) {
 	return r.rowSource, nil
 }
 
-// GroupField is a physical field used in a SELECT grouping. Pass field.Expr()
-// or field.Column(). Definitions check that every grouping belongs to the query.
-type GroupField interface{ groupField() *fieldRef }
+// GroupField is a sealed grouping expression. Pass field.Expr(), field.Column(),
+// or a computed expression. Definitions validate its type and occurrence scope.
+type GroupField interface{ groupOperand() scalarOperand }
 
-func (e Expr[V]) groupField() *fieldRef {
-	f, _ := e.part.(*fieldRef)
-	return f
+func (e Expr[V]) groupOperand() scalarOperand { return e.scalarOperand() }
+func (c RowColumn) groupOperand() scalarOperand {
+	if c.ref != nil {
+		return scalarOperand{c.ref, c.ref.kind, c.ref.nullable}
+	}
+	return c.expr
 }
-
-func (c RowColumn) groupField() *fieldRef { return c.ref }
 
 type readJoin struct {
 	kind   string
@@ -59,6 +60,7 @@ type ReadSelect struct {
 	forms         ReadForms
 	distinct      bool
 	distinctOn    []scalarOperand
+	clauseErr     error
 }
 
 // Select projects expressions into the declared output view in field order.
@@ -96,7 +98,7 @@ func (q ReadSelect) Where(terms ...Pred) ReadSelect {
 	return q
 }
 
-// GroupBy groups rows by the declared fields of their respective occurrences.
+// GroupBy groups rows by declared typed expressions.
 func (q ReadSelect) GroupBy(fields ...GroupField) ReadSelect {
 	q.group = slices.Concat(q.group, fields)
 	return q
@@ -108,7 +110,7 @@ func (q ReadSelect) Having(terms ...Pred) ReadSelect {
 	return q
 }
 
-// OrderBy declares the ordered physical fields of this result.
+// OrderBy declares the typed ordering expressions of this result.
 func (q ReadSelect) OrderBy(terms ...RowTerm) ReadSelect {
 	q.order = slices.Concat(q.order, terms)
 	return q

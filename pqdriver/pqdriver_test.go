@@ -88,6 +88,6 @@ func TestArrayColumnReflectionResolver(t *testing.T) {
 
 	_, err = ArrayColumn(reflect.TypeFor[string]())
 	require.EqualError(t, err, "array option requires a slice type, got string")
-	_, err = ArrayColumn(reflect.TypeFor[[]int16]())
-	require.EqualError(t, err, "unsupported array element type int16")
+	_, err = ArrayColumn(reflect.TypeFor[[]uint64]())
+	require.EqualError(t, err, "unsupported array element type uint64")
 }

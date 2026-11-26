@@ -87,6 +87,8 @@ Tabula v0.4.0 registers single-table reads, aggregates and conditional writes. E
 
 The same registry records row locks, transaction advisory locks and calls to declared PostgreSQL functions. Tabula v0.4.1 registers explicit inner, left, cross and self-joins, fixed-list and array membership, and string pattern matches. In v0.4.2 a physical source can derive all its grants from typed plans. Reusable table mappings support narrow reads and self-joins. Exact-cardinality, first-row and existence queries register their own bounded forms when requested. Further patches extend expressions, aggregates and multi-table list pagination. [Release sequence](docs/DESIGN-v0.4.md#release-sequence-and-acceptance)
 
+The advanced-read milestone will add distinct row-lock strengths and wait options for separate occurrences in one joined SELECT. Each target will have its own grant and policy checks. The existing `ReadSelect.Lock` method selects a single target and a later call replaces it. The same milestone will cover row-local materialization for volatile array expressions used as the first operand of `NullIf`.
+
 ## v1.0 — stability and ecosystem adapters
 
 - API freeze and semver compatibility promise.

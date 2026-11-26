@@ -34,20 +34,25 @@ func checkNullableArrayScalar[E any](t *testing.T, db *sql.DB, pool *pgxpool.Poo
 	t.Helper()
 	t.Run(catalog, func(t *testing.T) {
 		query := "SELECT CAST($1 AS pg_catalog." + catalog + "[])"
-		input := []*E{nil, &value}
-		sqlColumn, err := pqdriver.ArrayColumn(reflect.TypeFor[[]*E]())
-		require.NoError(t, err)
-		var fromSQL []*E
-		err = db.QueryRowContext(t.Context(), query, sqlColumn(&input)).Scan(sqlColumn(&fromSQL))
-		require.NoError(t, err)
-		require.Equal(t, input, fromSQL)
-		pgxColumn, err := pgxdriver.ArrayColumn(reflect.TypeFor[[]*E]())
-		require.NoError(t, err)
-		var fromPGX []*E
-		err = pool.QueryRow(t.Context(), query, input).Scan(pgxColumn(&fromPGX))
-		require.NoError(t, err)
-		require.Equal(t, input, fromPGX)
+		roundTripArray(t, db, pool, query, []E{value})
+		roundTripArray(t, db, pool, query, []*E{nil, &value})
 	})
+}
+
+func roundTripArray[S any](t *testing.T, db *sql.DB, pool *pgxpool.Pool, query string, input S) {
+	t.Helper()
+	sqlColumn, err := pqdriver.ArrayColumn(reflect.TypeFor[S]())
+	require.NoError(t, err)
+	var fromSQL S
+	err = db.QueryRowContext(t.Context(), query, sqlColumn(&input)).Scan(sqlColumn(&fromSQL))
+	require.NoError(t, err)
+	require.Equal(t, input, fromSQL)
+	pgxColumn, err := pgxdriver.ArrayColumn(reflect.TypeFor[S]())
+	require.NoError(t, err)
+	var fromPGX S
+	err = pool.QueryRow(t.Context(), query, input).Scan(pgxColumn(&fromPGX))
+	require.NoError(t, err)
+	require.Equal(t, input, fromPGX)
 }
 
 func TestNullableArrayElementsOnMappedReads(t *testing.T) {

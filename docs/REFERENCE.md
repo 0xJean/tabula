@@ -631,8 +631,15 @@ type CursorValue struct {
 func At[V any](field Field[V], value V) CursorValue
     At supplies one cursor component using the field's input codec.
 
+func AtExpr[V any](expr Expr[V], value V) CursorValue
+    AtExpr supplies one cursor component using the expression's declared codec.
+    Its expression must match the corresponding projected order term.
+
 func NullAt[V any](field Field[V]) CursorValue
     NullAt supplies a SQL NULL boundary for a nullable order field.
+
+func NullAtExpr[V any](expr Expr[V]) CursorValue
+    NullAtExpr supplies a SQL NULL boundary for a nullable order expression.
 
 type DefinedColumn struct {
 	Name     string
@@ -719,15 +726,55 @@ type Expr[V any] struct {
 }
     Expr is a typed expression assembled from descriptor fields and inputs.
 
+func AggregateOrder[V any](aggregate Expr[V], first RowTerm, rest ...RowTerm) Expr[V]
+    AggregateOrder declares input order for string, array or JSON aggregation.
+    With DistinctInputs each ordering expression must also be an argument.
+
+func ArrayAgg[V any](element Expr[V]) Expr[[]V]
+    ArrayAgg collects non-NULL scalar elements using the declared array codec.
+    Nullable elements require ArrayAggAs with an array-of-nullable result type.
+
+func ArrayAggAs[R, V any](result PGType[R], element Expr[V]) Expr[R]
+    ArrayAggAs collects scalar elements into the exact declared array type. A
+    nullable input requires a result codec preserving individual NULL elements.
+    Empty input returns a NULL array, independently of a NULL array element.
+
 func AvgOf[V, R any](f Expr[V], result PGType[R]) Expr[R]
     AvgOf averages a numeric field. PostgreSQL returns numeric for integer and
     numeric inputs and float8 for floating-point inputs. The result is nullable.
 
+func BoolAnd(value Pred) Expr[bool]
+    BoolAnd reports whether every non-NULL input is true, with BoolOr's NULL
+    contract.
+
+func BoolOr(value Pred) Expr[bool]
+    BoolOr reports whether any non-NULL input is true. Empty or all-NULL input
+    yields NULL. It accepts FilterWhere and DistinctInputs.
+
 func CountAll() Expr[int64]
     CountAll counts all rows, including those with NULL values.
 
+func CountDistinct[V any](value Expr[V]) Expr[int64]
+    CountDistinct counts distinct non-NULL values using their native equality.
+
 func CountOf[V any](f Expr[V]) Expr[int64]
     CountOf counts non-null values of the input expression.
+
+func DistinctInputs[V any](aggregate Expr[V]) Expr[V]
+    DistinctInputs removes duplicate argument tuples before aggregation. It
+    requires comparable arguments and does not accept CountAll or JSON inputs.
+
+func FilterWhere[V any](aggregate Expr[V], condition Pred) Expr[V]
+    FilterWhere applies SQL FILTER to one aggregate, including existing CountOf,
+    SumOf and AvgOf expressions. Filtering preserves the native empty-input
+    result.
+
+func JSONAgg[R, V any](result PGType[R], value Expr[V]) Expr[R]
+    JSONAgg collects typed values, including SQL NULL as JSON null, using the
+    declared json or jsonb result codec. Empty input returns SQL NULL.
+
+func JSONBAgg[R, V any](result PGType[R], value Expr[V]) Expr[R]
+    JSONBAgg is JSONAgg restricted to a declared pg_catalog.jsonb result.
 
 func MaxOf[V any](f Expr[V]) Expr[V]
     MaxOf computes the maximum of a field, with the same NULL contract as MinOf.
@@ -736,6 +783,11 @@ func MinOf[V any](f Expr[V]) Expr[V]
     MinOf computes the minimum of a field. An empty or all-NULL input yields
     NULL. PostgreSQL must provide the corresponding same-result-type min
     overload.
+
+func StringAgg[A, B ~string](value Expr[A], delimiter Expr[B]) Expr[string]
+    StringAgg concatenates non-NULL text values with the bound text delimiter.
+    Empty or all-NULL input returns SQL NULL. Use AggregateOrder for input
+    order.
 
 func SumOf[V, R any](f Expr[V], result PGType[R]) Expr[R]
     SumOf sums a numeric field. Supply the exact PostgreSQL result type and its
@@ -826,9 +878,9 @@ func FormalOf[R, V any](r *Routine[R], name string, kind PGType[V]) Formal[V]
 type GroupField interface {
 	// Has unexported methods.
 }
-    GroupField is a physical field used in a SELECT grouping. Pass field.Expr()
-    or field.Column(). Definitions check that every grouping belongs to the
-    query.
+    GroupField is a sealed grouping expression. Pass field.Expr(),
+    field.Column(), or a computed expression. Definitions validate its type and
+    occurrence scope.
 
 type JSONValue struct {
 	// Has unexported fields.
@@ -1114,8 +1166,9 @@ func (t PGType[V]) WithEncoder(encode func(V) (any, error)) PGType[V]
     unless RegistryConfig.ScopeID supplies the session's scope argument.
 
 type Pred = Expr[bool]
-    Pred is a PostgreSQL boolean expression. A nullable predicate follows SQL
-    three-valued logic when it is used in WHERE.
+    Pred is an Expr[bool] and can be passed directly to Project. A nullable
+    predicate projects SQL UNKNOWN as NULL and follows three-valued logic in
+    WHERE.
 
 func And(first, second Pred, rest ...Pred) Pred
     And combines two or more typed predicates in declaration order.
@@ -1404,11 +1457,21 @@ func (q ReadSelect) AllowUnscoped() ReadSelect
 func (q ReadSelect) CrossJoin(right ReadSource) ReadSelect
     CrossJoin returns the product of the visible rows of both sides.
 
+func (q ReadSelect) Distinct() ReadSelect
+    Distinct removes duplicates of the complete projection. ORDER BY must use
+    projected expressions. It cannot be combined with DistinctOn or row locks.
+
+func (q ReadSelect) DistinctOn(first Scalar, rest ...Scalar) ReadSelect
+    DistinctOn selects one representative per expression tuple. OrderBy must
+    start with those keys and establish a stable total winner order in each
+    group. Joined winners conservatively require every occurrence's complete
+    key.
+
 func (q ReadSelect) From(source ReadSource) ReadSelect
     From names the first physical occurrence.
 
 func (q ReadSelect) GroupBy(fields ...GroupField) ReadSelect
-    GroupBy groups rows by the declared fields of their respective occurrences.
+    GroupBy groups rows by declared typed expressions.
 
 func (q ReadSelect) Having(terms ...Pred) ReadSelect
     Having filters aggregate groups after grouping.
@@ -1425,7 +1488,7 @@ func (q ReadSelect) Lock(lock RowLock) ReadSelect
     Lock applies a row lock to one eligible occurrence of an ungrouped read.
 
 func (q ReadSelect) OrderBy(terms ...RowTerm) ReadSelect
-    OrderBy declares the ordered physical fields of this result.
+    OrderBy declares the typed ordering expressions of this result.
 
 func (q ReadSelect) Where(terms ...Pred) ReadSelect
     Where restricts rows before grouping. Multiple terms are combined with AND.
@@ -1667,6 +1730,10 @@ type RowColumn struct {
     RowColumn identifies a typed descriptor field in a GROUP BY or source
     declaration.
 
+func GroupExpr[V any](value Expr[V]) RowColumn
+    GroupExpr retains a computed expression for RowsSpec.GroupBy. It cannot be
+    used as a physical column in a selection, source policy or write target.
+
 type RowCursor struct {
 	// Has unexported fields.
 }
@@ -1759,14 +1826,27 @@ func (src RowSource[T, S]) Rel() Rel[T]
 type RowTerm struct {
 	// Has unexported fields.
 }
-    RowTerm orders one physical field. PostgreSQL orders NULLs last for
-    ascending terms and first for descending terms.
+    RowTerm orders one declared typed expression. PostgreSQL orders NULLs last
+    for ascending terms and first for descending terms.
 
 func Asc[V any](f Field[V]) RowTerm
     Asc orders a field from least to greatest.
 
+func AscExpr[V any](value Expr[V]) RowTerm
+    AscExpr orders a typed expression from least to greatest.
+
 func Desc[V any](f Field[V]) RowTerm
     Desc orders a field from greatest to least.
+
+func DescExpr[V any](value Expr[V]) RowTerm
+    DescExpr orders a typed expression from greatest to least.
+
+func (t RowTerm) NullsFirst() RowTerm
+    NullsFirst places SQL NULL before non-NULL values, independently of
+    direction.
+
+func (t RowTerm) NullsLast() RowTerm
+    NullsLast places SQL NULL after non-NULL values, independently of direction.
 
 type RowVersion struct {
 	// Has unexported fields.
@@ -1964,6 +2044,10 @@ func (p *RowsPlan[T, S]) Cursor(order string, values ...CursorValue) (RowCursor,
     and arity. Supply values in order, taken from the last row of the prior
     page.
 
+func (p *RowsPlan[T, S]) CursorFrom(order string, row T) (RowCursor, error)
+    CursorFrom extracts the projected ordering values from a decoded row, using
+    their declared input codecs. The boundary belongs to this plan and order.
+
 type RowsSpec struct {
 	RowFilter
 	GroupBy []RowColumn
@@ -1977,7 +2061,7 @@ type RowsSpec struct {
 	WithExists bool
 }
     RowsSpec declares the finite alternatives for a single-table read. GroupBy
-    lists the physical fields that determine each aggregate group.
+    lists the fields or GroupExpr terms that determine each group.
 
 type SQLAuthority struct {
 	// Has unexported fields.
@@ -3209,8 +3293,8 @@ func Array(v any) any
     Array wraps a Go slice for PostgreSQL "= ANY($n)" binding via lib/pq.
 
 func ArrayColumn(ft reflect.Type) (func(any) any, error)
-    ArrayColumn resolves one-dimensional string, int32, int64, float64 and
-    bool slices. A slice of pointers also supports int16, uint32 and float32.
+    ArrayColumn resolves one-dimensional bool, string, int16, int32, int64,
+    uint32, float32 and float64 slices, including slices of scalar pointers.
     Named types and NULL elements retain their identities when scanned.
 
 func Int64Array[E ~int64](p *[]E) any

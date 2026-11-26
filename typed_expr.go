@@ -14,8 +14,8 @@ type Expr[V any] struct {
 	nullable bool
 }
 
-// Pred is a PostgreSQL boolean expression. A nullable predicate follows SQL
-// three-valued logic when it is used in WHERE.
+// Pred is an Expr[bool] and can be passed directly to Project. A nullable
+// predicate projects SQL UNKNOWN as NULL and follows three-valued logic in WHERE.
 type Pred = Expr[bool]
 
 type expressionPart interface {

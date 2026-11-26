@@ -5,8 +5,11 @@ v1.0 a minor version may contain breaking changes.
 
 ## v0.4.3 — unreleased
 
+- Typed grouping and ordering accept computed expressions and explicit NULL placement. `RowsPlan.CursorFrom` reads projected ordering values, including reordered table selections; `AtExpr` and `NullAtExpr` supply manual expression boundaries.
+- Aggregates support `FilterWhere`, `CountDistinct`, `DistinctInputs`, ordered string/array/JSON/JSONB inputs and `BoolOr`/`BoolAnd`. `ArrayAggAs` checks the declared element type and requires a codec preserving NULL elements for nullable inputs. [Aggregate inputs](docs/COOKBOOK.md#computed-groups-and-aggregate-inputs)
+- `ReadSelect.Distinct` and `DistinctOn` work with single sources and joins. Representative selection requires a repeatable winner order with the complete result key; invalid grouping, modifiers, types and locking combinations fail before registration.
 - `DefineTableRead` and `TryDefineTableRead` apply SELECT clauses to a mapped table selection and reuse its existing result decoders. [Mapped table reads](docs/COOKBOOK.md#mapped-table-reads)
-- `pgtype.ArrayOfNullable` and the two driver array-column adapters preserve SQL NULL elements in a one-dimensional array of pointers. A typed binding snapshots the pointed-to values. [PostgreSQL arrays](docs/COOKBOOK.md#13-postgresql-network-addresses-and-arrays)
+- `pgtype.ArrayOfNullable` and both driver array-column adapters preserve SQL NULL elements in a one-dimensional array of scalar pointers. A typed binding copies those scalar values. Array columns also accept ordinary `[]int16`, `[]uint32` and `[]float32` for non-NULL elements. [PostgreSQL arrays](docs/COOKBOOK.md#13-postgresql-network-addresses-and-arrays)
 
 ## v0.4.2 — 2026-11-27
 

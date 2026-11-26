@@ -252,7 +252,7 @@ Use a read-role connection URL and application-owned SQL. Both Direct adapters a
 
 Use `netip.Addr` for a host address and `netip.Prefix` for CIDR networks or inet values with a subnet mask. An SQL NULL maps to an invalid address or prefix, or to nil for pointer fields. Scanning a subnet into a host address returns an error so the prefix length is preserved.
 
-Set `RegistryConfig.ArrayColumn` to `pqdriver.ArrayColumn` or `pgxdriver.ArrayColumn` for one-dimensional string, int32, int64, float64 and bool slices, including named element types. A nil slice represents SQL NULL and a non-nil empty slice represents an empty PostgreSQL array.
+Set `RegistryConfig.ArrayColumn` to `pqdriver.ArrayColumn` or `pgxdriver.ArrayColumn` for one-dimensional bool, string, int16, int32, int64, uint32, float32 and float64 slices, including named element types. A nil slice represents SQL NULL and a non-nil empty slice represents an empty PostgreSQL array.
 
 Use a pointer for each element when individual array entries may be NULL. For example, declare a field `Ranks []*int32` with the tag `db:",array"` and map it with `ColumnType("ranks", pg.ArrayOfNullable(pg.Int4()))`. The PostgreSQL value `ARRAY[0,NULL]` decodes to a pointer to zero followed by a nil pointer. An input declared with the same mapping preserves these distinctions across executions.
 
@@ -395,7 +395,7 @@ Project `CountAll`, `CountOf`, `MinOf`, `MaxOf`, `SumOf` or `AvgOf` to read
 aggregate results through the view. Supply the PostgreSQL result type to
 `SumOf` and `AvgOf`, for example `SumOf(rank.Expr(), Int8())` for an integer field.
 A non-count aggregate needs a nullable destination. Put each free projected
-field in `RowsSpec.GroupBy` when projecting an aggregate. An ungrouped scalar
+field or computed group key in `RowsSpec.GroupBy` when projecting an aggregate. An ungrouped scalar
 aggregate has one result row even on an empty input. Grouped counts count
 groups before the page bounds.
 
@@ -482,6 +482,68 @@ Use `pg.JSONB[V]()` or `pg.JSON[V]()` for JSON input. A Go string encodes as a J
 `BindValue` applies the slot's encoder once. Reuse the resulting binding for the data page, count, existence check or another session using the same slot. Built-in arrays and bytes preserve their input buffers. A custom `WithEncoder` function owns the stability of the value it returns. Keep its result independent of later changes to the caller's objects.
 
 A column mapping selects its PostgreSQL type and input encoder. Results use the table field's scan target. For a `time` or `timetz` result, a field scanner can accept `time.Time` from lib/pq and clock text from pgx, including PostgreSQL's `24:00` boundary. An interval field can use `sql.NullString` to receive interval text with either driver.
+
+## Computed groups and aggregate inputs
+
+Use the same expression for a projected group key and its grouping declaration.
+`GroupExpr` stores an expression in the existing `RowsSpec.GroupBy` slice.
+`ReadSelect.GroupBy` accepts expressions directly. Expressions built from group
+keys are also legal; a field inside a computed key is not independently grouped.
+
+```go
+missing := tabula.IsNull(label.Expr())
+hits := tabula.FilterWhere(tabula.CountDistinct(id.Expr()),
+    tabula.Ge(rank.Expr(), floor.Expr()))
+query := tabula.Select(
+    tabula.Project(outMissing, missing),
+    tabula.Project(outCount, hits),
+).From(source).GroupBy(missing).OrderBy(tabula.AscExpr(missing))
+report := tabula.DefineRead(summary, "counts", query)
+rows, err := report.Bind(session).Find(ctx, tabula.BindValue(floor, int32(3)))
+```
+
+The `missing` predicate projects directly into a Go `bool`. For a comparison that can yield SQL UNKNOWN, use a nullable output such as `*bool`. PostgreSQL requires `SELECT` on the columns read by either predicate.
+
+The equivalent single-table grouping is `[]tabula.RowColumn{tabula.GroupExpr(missing)}`.
+`AscExpr` and `DescExpr` accept computed expressions in either read form. Call
+`NullsFirst` or `NullsLast` on a term to override PostgreSQL's direction-dependent
+default. An ordered aggregate consumes its own terms independently of the result
+order:
+
+```go
+names := tabula.AggregateOrder(
+    tabula.StringAgg(label.Expr(), separator.Expr()),
+    tabula.Desc(rank).NullsLast(), tabula.Asc(id),
+)
+matchingNames := tabula.FilterWhere(names, tabula.Ge(rank.Expr(), floor.Expr()))
+```
+
+`DistinctInputs` removes duplicate argument tuples. When combined with an input
+order, every order expression must match an aggregate argument. `CountDistinct`
+ignores NULL. `BoolOr` and `BoolAnd` ignore NULL inputs and return NULL if none
+remain. String aggregation skips NULL values; JSON aggregation retains them as
+JSON null. `JSONAgg(result,value)` selects json or jsonb from the declared result
+type; `JSONBAgg` specifically requires jsonb. All non-count aggregates return SQL
+NULL on empty input. Use nullable destinations accordingly.
+
+`ArrayAgg` requires a supported scalar input and array codec. If the input can be
+NULL, including through a left join, use `ArrayAggAs` with a declared array type
+whose element representation preserves SQL NULL. A NULL aggregate result and an
+array containing a NULL element are different values. A filter does not change
+the declared element nullability.
+
+`ReadSelect.Distinct()` removes duplicate complete projections; its order terms
+must be projected. `DistinctOn(key,...)` chooses one representative per key tuple.
+Its fixed `OrderBy` starts with those keys and includes a complete, repeatable
+winner key. For joined rows include the keys of every occurrence, including both
+aliases of a self join. Neither distinct form accepts row locks.
+
+On a `RowsPlan`, call `CursorFrom(order,lastRow)` to encode the ordering values
+from a decoded result. It respects reordered and partial table projections.
+`AtExpr(expression,value)` and `NullAtExpr(expression)` supply manual boundaries.
+Every keyset term must be projected and repeatable; clocks or volatile values
+cannot determine a stable page boundary. Computed group seeks apply to the grouped
+result, after aggregate evaluation.
 
 ## Explicit joins
 

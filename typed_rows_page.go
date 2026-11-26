@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// RowTerm orders one physical field. PostgreSQL orders NULLs last for
+// RowTerm orders one declared typed expression. PostgreSQL orders NULLs last for
 // ascending terms and first for descending terms.
 type RowTerm struct {
 	field *fieldRef
@@ -40,6 +40,18 @@ func Asc[V any](f Field[V]) RowTerm { return RowTerm{field: f.ref} }
 
 // Desc orders a field from greatest to least.
 func Desc[V any](f Field[V]) RowTerm { return RowTerm{field: f.ref, desc: true} }
+
+// AscExpr orders a typed expression from least to greatest.
+func AscExpr[V any](value Expr[V]) RowTerm { return RowTerm{expr: value.scalarOperand()} }
+
+// DescExpr orders a typed expression from greatest to least.
+func DescExpr[V any](value Expr[V]) RowTerm { return RowTerm{expr: value.scalarOperand(), desc: true} }
+
+// NullsFirst places SQL NULL before non-NULL values, independently of direction.
+func (t RowTerm) NullsFirst() RowTerm { t.nulls = firstNulls; return t }
+
+// NullsLast places SQL NULL after non-NULL values, independently of direction.
+func (t RowTerm) NullsLast() RowTerm { t.nulls = lastNulls; return t }
 
 // RowOrder names one complete ordering, including its tie-breakers.
 type RowOrder struct {
@@ -85,6 +97,7 @@ type CursorValue struct {
 	field *fieldRef
 	value any
 	err   error
+	expr  scalarOperand
 }
 
 // At supplies one cursor component using the field's input codec.
@@ -104,54 +117,89 @@ type RowCursor struct {
 }
 
 type rowOrdering struct {
-	name    string
-	terms   []RowTerm
-	cursors []*typedInput
+	name              string
+	terms             []RowTerm
+	cursors           []*typedInput
+	projectionIndexes []int
+	nullable          []bool
 }
 
 func newRowOrder(order RowOrder, src rowSource, groups []RowColumn, aggregate, keyset bool, projection []Projection) (*rowOrdering, error) {
 	if !rowLabel(order.Name) || len(order.Terms) == 0 {
-		return nil, fmt.Errorf("tabula: a named row order requires at least one field")
+		return nil, fmt.Errorf("tabula: a named row order requires at least one expression")
 	}
 	o := &rowOrdering{name: order.Name, terms: slices.Clone(order.Terms)}
-	seen := make(map[string]bool)
-	unique := src.keys
-	if len(groups) != 0 {
-		unique = make([]string, len(groups))
-		for i, g := range groups {
-			unique[i] = g.ref.name
+	group := rowGroupOperands(groups)
+	for i, term := range o.terms {
+		value := term.orderValue()
+		if err := validateOrderTerm(term); err != nil {
+			return nil, err
 		}
-	}
-	for _, term := range o.terms {
-		f := term.field
-		if f == nil || f.source != src.rel || seen[f.name] {
-			return nil, fmt.Errorf("tabula: order %q requires distinct fields of its source", order.Name)
+		if err := checkExpressionScope(value.part, map[*occurrence]bool{src.rel: true}); err != nil {
+			return nil, err
 		}
-		if aggregate && !slices.Contains(unique, f.name) || aggregate && len(groups) == 0 {
-			return nil, fmt.Errorf("tabula: ungrouped order field %q", f.name)
-		}
-		seen[f.name] = true
-		if keyset {
-			if !slices.ContainsFunc(projection, func(p Projection) bool {
-				col, ok := p.part.(*fieldRef)
-				return ok && col.source == f.source && col.name == f.name && sameSQLType(col.kind, f.kind)
-			}) {
-				return nil, fmt.Errorf("tabula: keyset order field %q must be projected", f.name)
+		for _, earlier := range o.terms[:i] {
+			if sameExpression(earlier.orderValue().part, value.part) {
+				return nil, fmt.Errorf("tabula: duplicate order expression")
 			}
-			o.cursors = append(o.cursors, &typedInput{name: "@after." + f.name, kind: f.kind})
+		}
+		if aggregate {
+			if err := groupDetermined(value.part, group); err != nil {
+				return nil, fmt.Errorf("tabula: ungrouped order: %w", err)
+			}
 		}
 	}
 	if keyset {
-		if len(o.terms) < len(unique) {
-			return nil, fmt.Errorf("tabula: keyset order %q needs the complete key as a tie-breaker", order.Name)
+		if aggregate && len(groups) == 0 {
+			return nil, fmt.Errorf("tabula: scalar aggregate cannot have a keyset order")
 		}
-		for _, term := range o.terms[len(o.terms)-len(unique):] {
-			if !slices.Contains(unique, term.field.name) {
-				return nil, fmt.Errorf("tabula: incomplete keyset tie-breaker in order %q", order.Name)
+		if err := prepareOrderCursor(o, projection, nil); err != nil {
+			return nil, err
+		}
+		if len(groups) > 0 {
+			for _, g := range group {
+				if !orderIncludes(o.terms, g.part) {
+					return nil, fmt.Errorf("tabula: keyset order needs the complete group key")
+				}
+			}
+		} else {
+			if len(o.terms) < len(src.keys) {
+				return nil, fmt.Errorf("tabula: keyset order %q needs the complete key as a tie-breaker", order.Name)
+			}
+			for _, name := range src.keys {
+				if !slices.ContainsFunc(o.terms[len(o.terms)-len(src.keys):], func(t RowTerm) bool {
+					f, ok := t.orderValue().part.(*fieldRef)
+					return ok && f.source == src.rel && f.name == name
+				}) {
+					return nil, fmt.Errorf("tabula: incomplete keyset tie-breaker in order %q", order.Name)
+				}
 			}
 		}
 	}
 	return o, nil
+}
+
+func orderIncludes(terms []RowTerm, part expressionPart) bool {
+	return slices.ContainsFunc(terms, func(t RowTerm) bool { return sameExpression(t.orderValue().part, part) })
+}
+
+func validateOrderTerm(t RowTerm) error {
+	v := t.orderValue()
+	if t.nulls > lastNulls || !groupOrderComparable(v) {
+		return fmt.Errorf("tabula: ORDER BY requires a comparable native type, got %s", v.kind.qualified())
+	}
+	return checkRowExpr(v.part, func(expressionPart) error { return nil })
+}
+
+func orderDirection(t RowTerm) string {
+	direction := " ASC"
+	if t.desc {
+		direction = " DESC"
+	}
+	if t.nullsFirst() {
+		return direction + " NULLS FIRST"
+	}
+	return direction + " NULLS LAST"
 }
 
 func (o *rowOrdering) orderSQL(c *typedCompiler) (string, error) {
@@ -160,14 +208,14 @@ func (o *rowOrdering) orderSQL(c *typedCompiler) (string, error) {
 	}
 	parts := make([]string, len(o.terms))
 	for i, term := range o.terms {
-		field, err := term.field.render(c)
+		if err := validateOrderTerm(term); err != nil {
+			return "", err
+		}
+		field, err := term.orderValue().part.render(c)
 		if err != nil {
 			return "", err
 		}
-		parts[i] = field + " ASC NULLS LAST"
-		if term.desc {
-			parts[i] = field + " DESC NULLS FIRST"
-		}
+		parts[i] = field + orderDirection(term)
 	}
 	return " ORDER BY " + strings.Join(parts, ", "), nil
 }
@@ -175,7 +223,10 @@ func (o *rowOrdering) orderSQL(c *typedCompiler) (string, error) {
 func (o *rowOrdering) afterSQL(c *typedCompiler) (string, error) {
 	var prefixes []string
 	for i, term := range o.terms {
-		field, err := term.field.render(c)
+		if err := validateOrderTerm(term); err != nil {
+			return "", err
+		}
+		field, err := term.orderValue().part.render(c)
 		if err != nil {
 			return "", err
 		}
@@ -187,9 +238,9 @@ func (o *rowOrdering) afterSQL(c *typedCompiler) (string, error) {
 		if term.desc {
 			greater = field + " < " + slot
 		}
-		if term.field.nullable {
+		if o.termNullable(i) {
 			nulls := field + " IS NULL AND " + slot + " IS NOT NULL"
-			if term.desc {
+			if term.nullsFirst() {
 				nulls = field + " IS NOT NULL AND " + slot + " IS NULL"
 			}
 			greater = "(" + greater + " OR (" + nulls + "))"

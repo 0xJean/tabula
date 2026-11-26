@@ -35,6 +35,11 @@ func TestNullableArrayCodec(t *testing.T) {
 	require.NoError(t, numbers(&integers).(sql.Scanner).Scan("{3,NULL}"))
 	require.Error(t, numbers(&integers).(sql.Scanner).Scan("{2,99999}"))
 	require.Equal(t, []*int16{new(int16(3)), nil}, integers)
+	fixed := []int16{7}
+	small, err := ArrayColumn(reflect.TypeFor[[]int16]())
+	require.NoError(t, err)
+	require.ErrorContains(t, small(&fixed).(sql.Scanner).Scan("{2,NULL}"), "NULL array element")
+	require.Equal(t, []int16{7}, fixed)
 	_, err = ArrayColumn(reflect.TypeFor[[]*complex64]())
 	require.Error(t, err)
 }

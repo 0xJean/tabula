@@ -30,16 +30,12 @@ func ArrayColumn(ft reflect.Type) (func(any) any, error) {
 	if ft.Kind() != reflect.Slice {
 		return nil, fmt.Errorf("array option requires a slice type, got %s", ft)
 	}
-	if elem := ft.Elem(); elem.Kind() == reflect.Pointer {
-		switch elem.Elem().Kind() {
-		case reflect.Bool, reflect.String, reflect.Int16, reflect.Int32, reflect.Int64, reflect.Uint32, reflect.Float32, reflect.Float64:
-			return func(p any) any { return p }, nil
-		default:
-			return nil, fmt.Errorf("unsupported nullable array element type %s", elem)
-		}
+	elem := ft.Elem()
+	if elem.Kind() == reflect.Pointer {
+		elem = elem.Elem()
 	}
-	switch ft.Elem().Kind() {
-	case reflect.String, reflect.Int64, reflect.Int32, reflect.Float64, reflect.Bool:
+	switch elem.Kind() {
+	case reflect.Bool, reflect.String, reflect.Int16, reflect.Int32, reflect.Int64, reflect.Uint32, reflect.Float32, reflect.Float64:
 		return func(p any) any { return p }, nil
 	default:
 		return nil, fmt.Errorf("unsupported array element type %s", ft.Elem())

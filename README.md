@@ -26,6 +26,8 @@ The [v0.4 design](docs/DESIGN-v0.4.md) describes typed predicates, per-shape ver
 
 `DefineRows`, `DefineUpdateMany` and `DefineDeleteMany` register the exact statements a single-table plan can execute. The inventory expands those statements for each assigned PostgreSQL role. [Registered row plans](docs/COOKBOOK.md#registered-single-table-reads-and-writes)
 
+Typed reads support computed group and order expressions, explicit NULL placement, aggregate filters and ordered string, array and JSON aggregation. `ReadSelect.Distinct` removes duplicate projections; `DistinctOn` selects representatives with a complete winner order. [Grouping and aggregate examples](docs/COOKBOOK.md#computed-groups-and-aggregate-inputs)
+
 Use `DefinePlanSource` for a physical table accessed exclusively through typed plans. Call `MapTable(items).As("i")` to reuse its fields in reads, writes and joins. `DefineTableRows` returns rows of the table's Go type and `DefineExists` registers a standalone boolean query. A narrow read needs grants on its referenced columns. A conditional update can write a column on which the role has only `UPDATE`. [Mapped table example](docs/COOKBOOK.md#mapped-table-reads) and [minimum grants](docs/AUTHORIZATION.md#physical-sources-for-typed-plans)
 
 Use `DefineTableRead` to apply explicit SELECT clauses to a full or partial mapped record. The source supplies the projection and its decoder.
