@@ -41,6 +41,9 @@ WHERE attrelid = pg_catalog.to_regclass($1) AND attname = $2 AND attnum > 0 AND 
 			return fmt.Errorf("physical column %s.%s differs from %s", col.Relation, col.Name, col.Type)
 		}
 	}
+	if err := checkShapeProof(ctx, tx, s); err != nil {
+		return err
+	}
 	if len(s.Result) == 0 {
 		return nil
 	}

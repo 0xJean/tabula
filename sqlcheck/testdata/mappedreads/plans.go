@@ -34,9 +34,16 @@ var out = q.DefineView(registry, q.ViewSpec[result]{Name: "entries"})
 var projection = q.Project(q.Output(out, "id", q.Int8()), id.Expr())
 var unlocked = q.DefineRowsWithForms(out, "unlocked", src, spec, q.ReadForms{First: q.OrderedFirst}, projection)
 var peer = layout.As("peer")
+var caption = q.MappedColumn[string](layout, "note").On(src.Rel())
+var brief, _ = q.TryDefineTableRead(src, "brief", q.SelectColumns(caption.Column()), q.Select().WithList(q.ReadListSpec{
+	Optional: filter.Optional, Orders: spec.Orders,
+	Pages: q.RowPages{Offset: true, MaxLimit: 3, MaxOffset: 6}, ExactCount: true,
+}))
 var peerID = q.MappedColumn[int64](layout, "id").On(peer.Rel())
 var joined, _ = q.TryDefineRead(out, "joined", q.Select(projection).From(src).InnerJoin(peer, q.Eq(peerID.Expr(), id.Expr())).
-	WithForms(q.ReadForms{Exact: true}))
+	WithForms(q.ReadForms{Exact: true}).WithList(q.ReadListSpec{
+	Orders: spec.Orders, Pages: q.RowPages{Offset: true, MaxLimit: 3, MaxOffset: 6}, ExactCount: true,
+}))
 
 // Definitions returns both owning descriptors for snapshot verification.
 func Definitions() ([]q.Definition, []q.ViewDefinition) {
@@ -51,4 +58,12 @@ func use(ctx context.Context, s q.Session[struct{}]) {
 	_, _, _ = unlocked.Bind(s).MaybeOne(ctx, q.RowChoice{Order: "offset"})
 	_, _ = unlocked.Bind(s).First(ctx, q.RowChoice{Order: "offset"})
 	_, _ = joined.Bind(s).One(ctx)
+	page := q.RowChoice{Page: q.OffsetPage, Limit: 1, Order: "offset"}
+	_, _ = brief.Bind(s).Find(ctx)
+	_, _ = brief.Bind(s).Count(ctx, nil)
+	_, _ = brief.Bind(s).Page(ctx, page)
+	_, _, _ = brief.Bind(s).List(ctx, page)
+	_, _ = joined.Bind(s).Count(ctx, nil)
+	_, _ = joined.Bind(s).Page(ctx, page)
+	_, _, _ = joined.Bind(s).List(ctx, page)
 }

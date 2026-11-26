@@ -2,6 +2,24 @@
 
 Start with the section for the version you are adopting. The integration guide lists the APIs and commands available in this checkout. [Integration guide](INTEGRATION.md)
 
+## From v0.4.2 to v0.4.3
+
+Named orders on a `RowsPlan` share one count. Put orders with different result cardinalities in separate plans. For example, an aggregate appearing only in one sort can turn an empty input into one result row. For paired data and count queries, use repeatable membership conditions or a transaction-stable expression. Keyset pages that use computed terms or explicit NULL placement record their catalog requirements in the same way as joined reads.
+
+`ReadSelect.WithList` adds separate `list.data` and `list.count` shapes. Existing `Find`, `One`, `MaybeOne`, `First` and `MaybeFirst` continue to use their fixed forms. Set `ExactCount` to enable `Count` and `List`; bind only summary inputs for a standalone `Count`, and the union of data and summary inputs for `List`. The default 256-shape budget includes fixed and bounded forms, optional filters, named orders, page modes and scope alternatives.
+
+Refresh snapshots and use the upgraded verifier when adding keyset or DISTINCT ON reads. Their additive `Keys` and `Comparisons` metadata verifies immediate primary keys, scanned inheritance/partition sets and compatible deterministic collations, including nested expression inputs. Older verifiers cannot establish these premises. Use keyed `StatementShape` and `ReadinessNeeds` literals for the additional fields. [Result key verification](AUTHORIZATION.md#result-key-verification)
+
+Use `DefineTableRead` to return a full or partial mapped record from an explicit single-source read. Reuse the same source occurrence in the selection and read clauses. Register and verify the resulting shape under the role that executes it.
+
+For a nullable array element, use a pointer slice such as `[]*int32` with `db:",array"` and `pgtype.ArrayOfNullable(pgtype.Int4())`. A nil element, an empty slice and a nil slice correspond to separate database values. The two driver column adapters support nullable elements of Go types bool, string, int16, int32, int64, uint32, float32 and float64, including named scalar types.
+
+Existing field-only declarations keep their SQL and statement keys. Use `GroupExpr` in `RowsSpec.GroupBy` to group by a computed value, and `AscExpr`/`DescExpr` for computed orders. `NullsFirst` and `NullsLast` apply independently of direction. `RowsPlan.CursorFrom` obtains boundaries from projected values; manual expression cursors use `AtExpr` or `NullAtExpr`. New keyset terms must be projected and repeatable.
+
+Use `FilterWhere` on an aggregate root, `CountDistinct` for a distinct non-NULL count, and `AggregateOrder` for string, array or JSON input ordering. `DistinctInputs` takes distinct argument tuples and restricts inner order terms to those arguments. A nullable array element needs an explicit `ArrayAggAs` result codec that preserves the element's NULL. Refresh snapshots and role readiness for newly declared shapes and native function requirements. [Examples and NULL behavior](COOKBOOK.md#computed-groups-and-aggregate-inputs)
+
+Scalar constructors compose through the existing `Expr`, `Project` and `Assign` signatures. Refresh snapshots and native function grants when adding them. Check exact PostgreSQL types even when two kinds share a Go representation, and use an unconstrained destination for `Cast`. Date formatting selects the native timestamptz overload. A `NullIf` array first operand containing VOLATILE expressions is rejected; statement-STABLE first operands remain legal. [Expression contracts and conversions](EXPRESSIONS.md)
+
 ## From v0.4.1 to v0.4.2
 
 For tables used exclusively by typed plans, replace `Define(reg, spec)` with `DefinePlanSource(reg, spec)`. Use `TryDefinePlanSource` when startup should return a declaration error. Its successful result is already registered. Supply a schema-qualified physical name and declare the scope. A tagged scope field selects `ByScopeColumn` by default.

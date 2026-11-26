@@ -90,7 +90,7 @@ func (src RowSource[T, S]) tableProjection(selection TableSelection) ([]int, []P
 			}
 		}
 		indexes[j] = i
-		project[j] = Projection{target: src.owner.entry, index: i, compatible: true, part: f,
+		project[j] = Projection{target: src.owner.entry, index: i, compatible: true, part: f, kind: f.kind,
 			field: ShapeField{Name: f.name, Type: f.kind.qualified(), Nullable: f.nullable}}
 	}
 	return indexes, project, nil

@@ -24,13 +24,18 @@ var (
 )
 
 // ArrayColumn selects pgx's native one-dimensional array codec. Its type map
-// handles both built-in and named Go slices and element types.
+// handles built-in and named Go slices, including pointer elements that
+// distinguish a SQL NULL from the scalar's zero value.
 func ArrayColumn(ft reflect.Type) (func(any) any, error) {
 	if ft.Kind() != reflect.Slice {
 		return nil, fmt.Errorf("array option requires a slice type, got %s", ft)
 	}
-	switch ft.Elem().Kind() {
-	case reflect.String, reflect.Int64, reflect.Int32, reflect.Float64, reflect.Bool:
+	elem := ft.Elem()
+	if elem.Kind() == reflect.Pointer {
+		elem = elem.Elem()
+	}
+	switch elem.Kind() {
+	case reflect.Bool, reflect.String, reflect.Int16, reflect.Int32, reflect.Int64, reflect.Uint32, reflect.Float32, reflect.Float64:
 		return func(p any) any { return p }, nil
 	default:
 		return nil, fmt.Errorf("unsupported array element type %s", ft.Elem())

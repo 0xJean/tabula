@@ -65,3 +65,9 @@ Tables declared with `DefinePlanSource` contribute only the privileges of their 
 - Disposable fixture logins have random in-memory passwords. PostgreSQL receives a salted SCRAM verifier. The lease is a dedicated maintenance session. Keep credentials out of test output, use trusted member roles, and scope database CONNECT grants to each test database. [Process login roles](docs/AUTHORIZATION.md#process-login-roles)
 - Fixture login labels are visible in the PostgreSQL catalog. Choose a public identifier for the label. Automatic clone cleanup checks the catalog ownership mark, the original maintenance lease and connections from every role. Reserve the maintenance database and ownership comments for trusted administrators. [Leased clones](docs/DESIGN-v0.3.9.md)
 - Grant manifests audit direct ACLs. Run trial revocations and RLS behavior probes on isolated test databases. Sequences and external function effects can outlive a transaction rollback. [Authorization verification model](docs/AUTHORIZATION.md)
+
+Joined keyset and DISTINCT ON declarations record their result-key premises in
+the statement snapshot. Run the upgraded readiness and statement verifier before
+admitting these plans, and after key or collation changes. Deferrable primary keys,
+unprotected inherited scans and nondeterministic ordering cannot establish a
+cursor boundary. [Result key verification](docs/AUTHORIZATION.md#result-key-verification)

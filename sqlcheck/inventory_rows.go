@@ -8,7 +8,7 @@ import (
 
 func rowDeclaration(name string) bool {
 	switch strings.TrimPrefix(name, "Try") {
-	case "DefineRows", "DefineRowsWithForms", "DefineTableRows", "DefineExists", "DefineRead", "DefineUpdateMany", "DefineDeleteMany":
+	case "DefineRows", "DefineRowsWithForms", "DefineTableRows", "DefineExists", "DefineRead", "DefineTableRead", "DefineUpdateMany", "DefineDeleteMany":
 		return true
 	}
 	return false
@@ -19,7 +19,7 @@ func rowExecutionMethod(recv, method string) bool {
 	case tabulaPkgPath + ".BoundRowsPlan":
 		return method == "Count" || method == "Exists" || method == "Find" || method == "List" || singleRowMethod(method)
 	case tabulaPkgPath + ".BoundReadPlan":
-		return method == "Find" || singleRowMethod(method)
+		return method == "Find" || method == "Page" || method == "List" || method == "Count" || singleRowMethod(method)
 	case tabulaPkgPath + ".BoundExistsPlan":
 		return method == "Exists"
 	case tabulaPkgPath + ".BoundMutationPlan":

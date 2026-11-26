@@ -8,7 +8,10 @@ import (
 )
 
 // RowsSpec declares the finite alternatives for a single-table read.
-// GroupBy lists the physical fields that determine each aggregate group.
+// GroupBy lists the fields or GroupExpr terms that determine each group.
+// Named orders share one exact count. Each order must preserve the result
+// cardinality, including the one-row result of an ungrouped aggregate on
+// empty input.
 type RowsSpec struct {
 	RowFilter
 	GroupBy []RowColumn
@@ -73,7 +76,7 @@ func compileRowsPlan[T, R, S any](owner *descriptor[T, S], indexes []int, name s
 	if owner == nil || src.owner == nil {
 		return nil, fmt.Errorf("tabula: a declared output and row source are required")
 	}
-	aggregate, err := checkRowGrouping(src.rowSource, project, spec.GroupBy)
+	aggregate, err := checkRowGrouping(src.rowSource, project, spec)
 	if err != nil {
 		return nil, err
 	}
@@ -112,8 +115,10 @@ func compileRowsPlan[T, R, S any](owner *descriptor[T, S], indexes []int, name s
 		names = append(names, "exists")
 	}
 	names = append(names, slices.Sorted(maps.Keys(forms))...)
+	expressionForms := spec.hasExpressionForms(project)
 	p.family, err = compileRowFamily(owner, name, []rowSource{src.rowSource}, spec.RowFilter, names,
 		func(c *typedCompiler, form string, predicates []Pred) (string, StatementShape, error) {
+			c.extendedForm = expressionForms
 			if form == "exists" {
 				return renderRowExists(c, src.rowSource, predicates)
 			}
@@ -125,34 +130,60 @@ func compileRowsPlan[T, R, S any](owner *descriptor[T, S], indexes []int, name s
 	return p, nil
 }
 
-func checkRowGrouping(src rowSource, project []Projection, groups []RowColumn) (bool, error) {
-	grouped := make(map[string]bool)
-	for _, g := range groups {
-		if g.ref == nil || g.ref.source != src.rel || grouped[g.ref.name] {
-			return false, fmt.Errorf("tabula: GROUP BY requires distinct fields of its source")
-		}
-		grouped[g.ref.name] = true
+// Count drops presentation expressions. Classify the declaration once so a
+// separately bound summary still exports the aggregate it executes, even if
+// the only new expression belongs to a projection or an optional filter.
+func (s RowsSpec) hasExpressionForms(project []Projection) bool {
+	if slices.ContainsFunc(s.GroupBy, func(g RowColumn) bool { return g.ref == nil }) ||
+		slices.ContainsFunc(project, func(p Projection) bool { return hasNewScalarOrAggregate(p.part) }) ||
+		hasNewScalarOrAggregate(s.Where.part) ||
+		slices.ContainsFunc(s.Optional, func(p RowPredicate) bool { return hasNewScalarOrAggregate(p.When.part) }) {
+		return true
 	}
-	aggregate := len(groups) > 0
-	var free []string
-	for _, p := range project {
-		err := checkRowExpr(p.part, func(node expressionPart) error {
-			switch f := node.(type) {
-			case rowAggregate:
-				aggregate = true
-			case *fieldRef:
-				free = append(free, f.name)
+	for _, order := range s.Orders {
+		for _, term := range order.Terms {
+			if term.field == nil || term.nulls != defaultNulls {
+				return true
 			}
-			return nil
-		})
-		if err != nil {
+		}
+	}
+	return false
+}
+
+func hasNewScalarOrAggregate(p expressionPart) bool {
+	switch p.(type) {
+	case scalarNode, aggregateCall:
+		return true
+	}
+	traits, ok := expressionStructure(p)
+	return ok && slices.ContainsFunc(traits.children, hasNewScalarOrAggregate)
+}
+
+func checkRowGrouping(src rowSource, project []Projection, spec RowsSpec) (bool, error) {
+	values := rowGroupOperands(spec.GroupBy)
+	if err := checkGroupKeys(values, map[*occurrence]bool{src.rel: true}); err != nil {
+		return false, err
+	}
+	if !spec.Lock.declared {
+		if err := checkRowCountStability(spec); err != nil {
 			return false, err
 		}
 	}
-	for _, name := range free {
-		if aggregate && !grouped[name] {
-			return false, fmt.Errorf("tabula: projection reads ungrouped field %q", name)
+	aggregate, err := groupingExpressions(project, nil, nil, values)
+	if err != nil {
+		return false, err
+	}
+	for i, order := range spec.Orders {
+		grouped, err := groupingExpressions(project, nil, order.Terms, values)
+		if err != nil {
+			return false, fmt.Errorf("tabula: ungrouped order or projection in %q: %w", order.Name, err)
 		}
+		// Count has no order choice. Every presentation of this result
+		// must agree on whether an empty input yields a scalar group.
+		if i > 0 && aggregate != grouped {
+			return false, fmt.Errorf("tabula: order %q changes the result cardinality", order.Name)
+		}
+		aggregate = grouped
 	}
 	return aggregate, nil
 }
@@ -163,6 +194,7 @@ func (p *RowsPlan[T, S]) render(c *typedCompiler, src rowSource, project []Proje
 	var selectSQL string
 	var fields []ShapeField
 	if count {
+		c.legacyAggregates = append(c.legacyAggregates, aggregateCall{fn: "count", star: true})
 		selectSQL = `pg_catalog.count(*) AS "count"`
 		fields = []ShapeField{{Name: "count", Type: Int8().id.qualified()}}
 	} else {
@@ -176,8 +208,11 @@ func (p *RowsPlan[T, S]) render(c *typedCompiler, src rowSource, project []Proje
 	if err != nil {
 		return "", StatementShape{}, err
 	}
-	if data.page == AfterPage {
-		after, err := data.order.afterSQL(c)
+	order := data.order
+	prove := (data.page == FirstPage || data.page == AfterPage) && order.needsResultProof(groups)
+	resultSeek := data.page == AfterPage && aggregate && complexRowOrder(data.order, groups)
+	if data.page == AfterPage && !resultSeek {
+		after, err := order.afterSQL(c, prove)
 		if err != nil {
 			return "", StatementShape{}, err
 		}
@@ -187,7 +222,7 @@ func (p *RowsPlan[T, S]) render(c *typedCompiler, src rowSource, project []Proje
 	if len(groups) > 0 {
 		parts := make([]string, len(groups))
 		for i, g := range groups {
-			part, err := g.ref.render(c)
+			part, err := g.groupOperand().part.render(c)
 			if err != nil {
 				return "", StatementShape{}, err
 			}
@@ -200,6 +235,19 @@ func (p *RowsPlan[T, S]) render(c *typedCompiler, src rowSource, project []Proje
 		// A scalar aggregate yields one row even for an empty input. A
 		// grouped aggregate yields one row per group, including NULL groups.
 		query = "SELECT " + selectSQL + " FROM (SELECT pg_catalog.count(*)" + from + `) AS "groups"`
+	}
+	if resultSeek {
+		resultOrder := projectedRowOrder(data.order, project, "rows")
+		after, err := resultOrder.afterSQL(c, true)
+		if err != nil {
+			return "", StatementShape{}, err
+		}
+		selected := make([]string, len(project))
+		for i, p := range project {
+			selected[i] = typedQuote("rows") + "." + typedQuote(p.field.Name)
+		}
+		query = "SELECT " + strings.Join(selected, ", ") + " FROM (" + query + ") AS \"rows\" WHERE " + after
+		data.order = resultOrder
 	}
 	if !count {
 		order, err := data.order.orderSQL(c)
@@ -217,6 +265,13 @@ func (p *RowsPlan[T, S]) render(c *typedCompiler, src rowSource, project []Proje
 		return "", StatementShape{}, err
 	}
 	meta.Result = fields
+	if prove {
+		selection := ReadSelect{project: project, group: rowGroupFields(groups)}
+		meta.Keys, meta.Comparisons, err = readResultProof(selection, []rowSource{src}, order.terms)
+		if err != nil {
+			return "", StatementShape{}, err
+		}
+	}
 	if p.lock.declared {
 		clause, err := p.lock.clause(c, &meta)
 		if err != nil {
@@ -243,21 +298,17 @@ func renderRowExists(c *typedCompiler, src rowSource, predicates []Pred) (string
 // Cursor validates a boundary against the specific plan, order, field types
 // and arity. Supply values in order, taken from the last row of the prior page.
 func (p *RowsPlan[T, S]) Cursor(order string, values ...CursorValue) (RowCursor, error) {
-	o := p.page.orders[order]
-	if !p.page.pages.Keyset || o == nil || len(values) != len(o.terms) {
-		return RowCursor{}, fmt.Errorf("tabula: unknown keyset order or incorrect cursor arity")
+	if p == nil || !p.page.pages.Keyset {
+		return RowCursor{}, fmt.Errorf("tabula: unknown keyset order")
 	}
-	bindings := make([]Binding, len(values))
-	for i, v := range values {
-		if v.err != nil {
-			return RowCursor{}, fmt.Errorf("tabula: encode cursor component %d: %w", i+1, v.err)
-		}
-		f := o.terms[i].field
-		if v.field == nil || v.field.source != f.source || v.field.name != f.name ||
-			!sameSQLType(v.field.kind, f.kind) || v.value == nil && !f.nullable {
-			return RowCursor{}, fmt.Errorf("tabula: incompatible cursor component %d", i+1)
-		}
-		bindings[i] = Binding{input: o.cursors[i], value: v.value}
+	return cursorForOrder(p.page.orders[order], values)
+}
+
+// CursorFrom extracts the projected ordering values from a decoded row, using
+// their declared input codecs. The boundary belongs to this plan and order.
+func (p *RowsPlan[T, S]) CursorFrom(order string, row T) (RowCursor, error) {
+	if p == nil || !p.page.pages.Keyset {
+		return RowCursor{}, fmt.Errorf("tabula: unknown keyset order")
 	}
-	return RowCursor{o, bindings}, nil
+	return cursorFromRow(p.owner, p.page.orders[order], row)
 }

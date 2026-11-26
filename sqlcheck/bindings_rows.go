@@ -67,7 +67,11 @@ func (site SQLSite) bindRowPlan(b SQLBinding, defs map[string][]tabula.Definitio
 	if site.Method == "List" {
 		foundData := false
 		for key := range selected {
-			if !matchesRowMethod(key, plan, "Find") {
+			isData := matchesRowMethod(key, plan, "Find")
+			if site.Receiver == tabulaPkgPath+".BoundReadPlan" {
+				isData = matchesReadList(key, plan, "Page")
+			}
+			if !isData {
 				continue
 			}
 			foundData = true
@@ -123,13 +127,18 @@ func (s *Statement) bindPolicyAccess(b SQLBinding) error {
 // Drop the data order and page. An order can itself be named "where".
 func pairedRowCount(key, plan string) string {
 	scope, rest, _ := strings.Cut(strings.TrimPrefix(key, plan+"."), ".")
+	count := plan + "." + scope + "."
+	if form, ok := strings.CutPrefix(rest, "list."); ok {
+		rest = form
+		count += "list."
+	}
 	tail := strings.TrimPrefix(rest, "data")
 	if order, ok := strings.CutPrefix(tail, ".sort."); ok {
 		_, tail, _ = strings.Cut(order, ".")
 	} else {
 		tail = strings.TrimPrefix(tail, ".")
 	}
-	count := plan + "." + scope + ".count"
+	count += "count"
 	if filters, ok := strings.CutPrefix(tail, "where."); ok {
 		return count + ".where." + filters
 	}
@@ -152,8 +161,8 @@ func matchesRowMethod(key, plan, method string) bool {
 		return form == "count"
 	case "Find":
 		return form == "data"
-	case "DefineRead":
-		return form == "data" || boundedRowForm(form)
+	case "DefineRead", "DefineTableRead":
+		return form == "data" || boundedRowForm(form) || matchesReadList(key, plan, "List")
 	case "Exists", "DefineExists":
 		return form == "exists"
 	case "DefineRows", "DefineRowsWithForms", "DefineTableRows":
@@ -191,6 +200,11 @@ func (r RoleStatements) Readiness(role string) (ReadinessNeeds, error) {
 				seenRoutine[routine] = true
 			}
 		}
+		for _, key := range s.Keys {
+			key.Columns = slices.Clone(key.Columns)
+			n.Keys = append(n.Keys, key)
+		}
+		n.Comparisons = append(n.Comparisons, s.Comparisons...)
 		privileges = append(privileges, s.Privileges...)
 		n.SchemaUsage = append(n.SchemaUsage, s.SchemaUsage...)
 		n.ForceRLS = append(n.ForceRLS, s.ForceRLS...)

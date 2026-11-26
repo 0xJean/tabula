@@ -22,7 +22,7 @@ func TestMappedReadInventory(t *testing.T) {
 	bind := make(map[string]SQLBinding)
 	for _, site := range inventory.Sites {
 		owner := "entries"
-		if site.QueryKey == "lookup" || site.QueryKey == "visible" {
+		if site.QueryKey == "lookup" || site.QueryKey == "visible" || site.QueryKey == "brief" {
 			owner = "public.items"
 		}
 		require.Equal(t, owner, site.Definition)
@@ -32,14 +32,22 @@ func TestMappedReadInventory(t *testing.T) {
 	work, err := inventory.BindRolesWithDefinitions(bind, defs, nil)
 	require.NoError(t, err)
 	want := map[string][]string{
-		"lookup/One":           {"single_first.sort.offset", "single_first.sort.offset.where.first"},
-		"lookup/MaybeFirst":    {"single_first.sort.offset", "single_first.sort.offset.where.first"},
-		"visible/DefineExists": {"exists"},
-		"visible/Exists":       {"exists"},
-		"unlocked/MaybeOne":    {"data.sort.offset", "data.sort.offset.where.first"},
-		"unlocked/First":       {"firstrow.sort.offset", "firstrow.sort.offset.where.first"},
-		"joined/TryDefineRead": {"data", "single"},
-		"joined/One":           {"single"},
+		"brief/TryDefineTableRead": {"data", "list.count", "list.count.where.first", "list.data.sort.offset.offset", "list.data.sort.offset.offset.where.first"},
+		"brief/List":               {"list.count", "list.count.where.first", "list.data.sort.offset.offset", "list.data.sort.offset.offset.where.first"},
+		"brief/Page":               {"list.data.sort.offset.offset", "list.data.sort.offset.offset.where.first"},
+		"brief/Count":              {"list.count", "list.count.where.first"},
+		"brief/Find":               {"data"},
+		"lookup/One":               {"single_first.sort.offset", "single_first.sort.offset.where.first"},
+		"lookup/MaybeFirst":        {"single_first.sort.offset", "single_first.sort.offset.where.first"},
+		"visible/DefineExists":     {"exists"},
+		"visible/Exists":           {"exists"},
+		"unlocked/MaybeOne":        {"data.sort.offset", "data.sort.offset.where.first"},
+		"unlocked/First":           {"firstrow.sort.offset", "firstrow.sort.offset.where.first"},
+		"joined/TryDefineRead":     {"data", "single", "list.count", "list.data.sort.offset.offset"},
+		"joined/Page":              {"list.data.sort.offset.offset"},
+		"joined/List":              {"list.count", "list.data.sort.offset.offset"},
+		"joined/Count":             {"list.count"},
+		"joined/One":               {"single"},
 	}
 	for role, forms := range want {
 		var got []string
@@ -60,6 +68,12 @@ func TestMappedReadInventory(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{`"public"."items"`}, needs.AnyColumnSelect)
 	require.Equal(t, needs.AnyColumnSelect, needs.ForceRLS)
+	needs, err = work.Readiness("brief/Count")
+	require.NoError(t, err)
+	require.Equal(t, map[string]bool{"id": true}, needs.Privileges.Columns[`"public"."items"`]["SELECT"])
+	needs, err = work.Readiness("brief/Page")
+	require.NoError(t, err)
+	require.Equal(t, map[string]bool{"id": true, "note": true}, needs.Privileges.Columns[`"public"."items"`]["SELECT"])
 }
 
 func TestExactShapeFallback(t *testing.T) {

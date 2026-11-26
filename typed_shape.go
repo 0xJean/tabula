@@ -63,6 +63,10 @@ type StatementShape struct {
 	AnyColumnUpdate []string
 	// Routines records the catalog contracts of called PostgreSQL functions.
 	Routines []RoutineRequirement
+	// Keys records the catalog primary-key premises of deterministic results.
+	Keys []KeyRequirement `json:",omitempty"`
+	// Comparisons records native ordering and deterministic collation premises.
+	Comparisons []ComparisonRequirement `json:",omitempty"`
 	// UnscopedOnly marks a shape that omits a declared column-scope predicate.
 	// It can be bound only to an unscoped session.
 	UnscopedOnly bool
@@ -109,6 +113,8 @@ func cloneShape(s StatementShape) StatementShape {
 	s.AnyColumnSelect = slices.Clone(s.AnyColumnSelect)
 	s.AnyColumnUpdate = slices.Clone(s.AnyColumnUpdate)
 	s.Routines = slices.Clone(s.Routines)
+	s.Keys = appendKeyRequirements(nil, s.Keys...)
+	s.Comparisons = slices.Clone(s.Comparisons)
 	return s
 }
 
@@ -265,6 +271,21 @@ func (c *typedCompiler) finishShape(key, query string, scopeType catalogType, me
 	// Add the physical scope and schema requirements for reads and writes alike.
 	meta.UnscopedOnly = false
 	schemas, forced := slices.Clone(meta.SchemaUsage), slices.Clone(meta.ForceRLS)
+	if c.extendedForm || len(c.functions) > 0 {
+		for _, a := range c.legacyAggregates {
+			signature := a.knownLegacySignature()
+			if signature == "" {
+				return nil, fmt.Errorf("tabula: shape %q requires a known pg_catalog.%s overload for %s", key, a.fn, a.args[0].kind.qualified())
+			}
+			c.requireNative(signature)
+		}
+	}
+	if len(c.functions) > 0 {
+		schemas = append(schemas, "pg_catalog")
+		for _, signature := range slices.Sorted(maps.Keys(c.functions)) {
+			meta.Privileges = append(meta.Privileges, DefinedPrivilege{Function: signature, Privilege: "EXECUTE"})
+		}
+	}
 	columnTypes := maps.Clone(c.reads)
 	for _, src := range c.from {
 		schemas = append(schemas, src.table.schema)

@@ -115,6 +115,15 @@ func ArrayOf[V any](element PGType[V]) PGType[[]V] {
 	return PGType[[]V]{id: kind, nullable: true}
 }
 
+// ArrayOfNullable declares a one-dimensional array with nullable elements.
+// A nil slice binds SQL NULL, an empty slice binds an empty array and a nil
+// element binds a SQL NULL within the array.
+func ArrayOfNullable[V any](element PGType[V]) PGType[[]*V] {
+	kind := ArrayOf(element).id
+	kind.goType = reflect.TypeFor[[]*V]()
+	return PGType[[]*V]{id: kind, nullable: true}
+}
+
 // Varchar declares PostgreSQL character varying with a column length in
 // characters. Verification checks the column modifier. The parameter uses
 // unbounded varchar so comparisons preserve the entire value and PostgreSQL

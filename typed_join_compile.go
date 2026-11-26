@@ -6,65 +6,31 @@ import (
 	"strings"
 )
 
-type occurrenceColumn struct {
-	source *occurrence
-	name   string
+func (q ReadSelect) checkGrouping(c *typedCompiler) ([]scalarOperand, bool, error) {
+	groups := make([]scalarOperand, len(q.group))
+	for i, group := range q.group {
+		if isNilBound(group) {
+			return nil, false, fmt.Errorf("tabula: GROUP BY requires a declared expression")
+		}
+		groups[i] = group.groupOperand()
+	}
+	if err := checkGroupKeys(groups, c.sources); err != nil {
+		return nil, false, err
+	}
+	aggregate, err := groupingExpressions(q.project, q.having, q.order, groups)
+	return groups, aggregate, err
 }
 
-func (q ReadSelect) checkGrouping(c *typedCompiler) ([]*fieldRef, bool, error) {
-	grouped := make(map[occurrenceColumn]bool)
-	fields := make([]*fieldRef, 0, len(q.group))
-	for _, group := range q.group {
-		if isNilBound(group) || group.groupField() == nil {
-			return nil, false, fmt.Errorf("tabula: GROUP BY requires a physical field")
-		}
-		f := group.groupField()
-		key := occurrenceColumn{f.source, f.name}
-		if _, ok := c.sources[f.source]; !ok || grouped[key] {
-			return nil, false, fmt.Errorf("tabula: duplicate or out-of-scope GROUP BY field %q", f.name)
-		}
-		grouped[key] = true
-		fields = append(fields, f)
-	}
-	aggregate := len(fields) != 0 || len(q.having) != 0
-	var free []*fieldRef
-	visit := func(node expressionPart) error {
-		switch n := node.(type) {
-		case rowAggregate:
-			aggregate = true
-		case *fieldRef:
-			free = append(free, n)
-		}
-		return nil
-	}
-	for _, p := range q.project {
-		if err := checkRowExpr(p.part, visit); err != nil {
-			return nil, false, err
-		}
-	}
-	for _, h := range q.having {
-		if err := checkRowExpr(h.part, visit); err != nil {
-			return nil, false, err
-		}
-	}
-	for _, term := range q.order {
-		if term.field == nil {
-			return nil, false, fmt.Errorf("tabula: ORDER BY requires a physical field")
-		}
-		free = append(free, term.field)
-	}
-	for _, f := range free {
-		if aggregate && !grouped[occurrenceColumn{f.source, f.name}] {
-			return nil, false, fmt.Errorf("tabula: ungrouped field %q on occurrence %q", f.name, f.source.alias)
-		}
-	}
-	return fields, aggregate, nil
-}
-
-func (q ReadSelect) render(c *typedCompiler, owner *registration, sources []rowSource, take *typedInput) (string, StatementShape, error) {
+func (q ReadSelect) render(c *typedCompiler, owner *registration, indexes []int, sources []rowSource, take *typedInput) (string, StatementShape, error) {
 	groups, aggregate, err := q.checkGrouping(c)
 	if err != nil {
 		return "", StatementShape{}, err
+	}
+	if q.distinct || len(q.distinctOn) > 0 || slices.ContainsFunc(groups, func(g scalarOperand) bool {
+		_, physical := g.part.(*fieldRef)
+		return !physical
+	}) {
+		c.extendedForm = true
 	}
 	outer := make(map[*occurrence]bool)
 	for i, join := range q.joins {
@@ -72,17 +38,39 @@ func (q ReadSelect) render(c *typedCompiler, owner *registration, sources []rowS
 			outer[sources[i+1].rel] = true
 		}
 	}
-	if q.lock.declared && (aggregate || outer[q.lock.target]) {
+	if q.lock.declared && (aggregate || q.distinct || len(q.distinctOn) > 0 || outer[q.lock.target]) {
 		return "", StatementShape{}, fmt.Errorf("tabula: row locks require ungrouped rows on a preserved occurrence")
 	}
-	selects, result, err := c.project(owner, q.project)
+	if err := q.checkDistinct(groups, aggregate, sources); err != nil {
+		return "", StatementShape{}, err
+	}
+	for _, p := range q.project {
+		if err := checkAggregateNulls(p.part, outer); err != nil {
+			return "", StatementShape{}, err
+		}
+	}
+	for _, having := range q.having {
+		if err := checkAggregateNulls(having.part, outer); err != nil {
+			return "", StatementShape{}, err
+		}
+	}
+	for _, order := range q.order {
+		if err := checkAggregateNulls(order.orderValue().part, outer); err != nil {
+			return "", StatementShape{}, err
+		}
+	}
+	prefix, err := q.distinctSQL(c)
+	if err != nil {
+		return "", StatementShape{}, err
+	}
+	selects, result, err := c.projectFields(owner, q.project, indexes)
 	if err != nil {
 		return "", StatementShape{}, err
 	}
 	if len(outer) > 0 {
 		for i, p := range q.project {
 			if nullExtended(p.part, outer) {
-				if !owner.def.Columns[i].Nullable {
+				if !owner.def.Columns[p.index].Nullable {
 					return "", StatementShape{}, fmt.Errorf("tabula: outer join requires a nullable output for %q", result[i].Name)
 				}
 				result[i].Nullable = true
@@ -93,11 +81,11 @@ func (q ReadSelect) render(c *typedCompiler, owner *registration, sources []rowS
 	if err != nil {
 		return "", StatementShape{}, err
 	}
-	query := "SELECT " + strings.Join(selects, ", ") + " FROM " + from + whereSQL(where)
+	query := "SELECT " + prefix + strings.Join(selects, ", ") + " FROM " + from + whereSQL(where)
 	if len(groups) > 0 {
 		terms := make([]string, len(groups))
 		for i, f := range groups {
-			terms[i], err = f.render(c)
+			terms[i], err = f.part.render(c)
 			if err != nil {
 				return "", StatementShape{}, err
 			}
@@ -155,6 +143,10 @@ func (q ReadSelect) fromSQL(c *typedCompiler, sources []rowSource) (string, []st
 			continue
 		}
 		err := checkRowExpr(join.on.part, func(node expressionPart) error {
+			traits, _ := expressionStructure(node)
+			if traits.aggregate {
+				return fmt.Errorf("tabula: aggregate in JOIN condition")
+			}
 			switch n := node.(type) {
 			case *fieldRef:
 				if !visible[n.source] {
@@ -207,6 +199,8 @@ func (q ReadSelect) fromSQL(c *typedCompiler, sources []rowSource) (string, []st
 func nullExtended(part expressionPart, outer map[*occurrence]bool) bool {
 	propagates := func(p Pred) bool { return nullExtended(p.part, outer) }
 	switch n := part.(type) {
+	case describedExpression:
+		return n.nullableAfterJoin(outer)
 	case *fieldRef:
 		return outer[n.source]
 	case comparison:

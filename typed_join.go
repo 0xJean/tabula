@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 )
 
 // ReadSource identifies a physical occurrence in an explicit SELECT. FromTable
@@ -28,16 +29,17 @@ func (r RowSource[T, S]) readSource() (rowSource, error) {
 	return r.rowSource, nil
 }
 
-// GroupField is a physical field used in a SELECT grouping. Pass field.Expr()
-// or field.Column(). Definitions check that every grouping belongs to the query.
-type GroupField interface{ groupField() *fieldRef }
+// GroupField is a sealed grouping expression. Pass field.Expr(), field.Column(),
+// or a computed expression. Definitions validate its type and occurrence scope.
+type GroupField interface{ groupOperand() scalarOperand }
 
-func (e Expr[V]) groupField() *fieldRef {
-	f, _ := e.part.(*fieldRef)
-	return f
+func (e Expr[V]) groupOperand() scalarOperand { return e.scalarOperand() }
+func (c RowColumn) groupOperand() scalarOperand {
+	if c.ref != nil {
+		return scalarOperand{c.ref, c.ref.kind, c.ref.nullable}
+	}
+	return c.expr
 }
-
-func (c RowColumn) groupField() *fieldRef { return c.ref }
 
 type readJoin struct {
 	kind   string
@@ -57,6 +59,11 @@ type ReadSelect struct {
 	lock          RowLock
 	unscoped      bool
 	forms         ReadForms
+	distinct      bool
+	distinctOn    []scalarOperand
+	clauseErr     error
+	list          *ReadListSpec
+	listRepeated  bool
 }
 
 // Select projects expressions into the declared output view in field order.
@@ -94,7 +101,7 @@ func (q ReadSelect) Where(terms ...Pred) ReadSelect {
 	return q
 }
 
-// GroupBy groups rows by the declared fields of their respective occurrences.
+// GroupBy groups rows by declared typed expressions.
 func (q ReadSelect) GroupBy(fields ...GroupField) ReadSelect {
 	q.group = slices.Concat(q.group, fields)
 	return q
@@ -106,7 +113,7 @@ func (q ReadSelect) Having(terms ...Pred) ReadSelect {
 	return q
 }
 
-// OrderBy declares the ordered physical fields of this result.
+// OrderBy declares the typed ordering expressions of this result.
 func (q ReadSelect) OrderBy(terms ...RowTerm) ReadSelect {
 	q.order = slices.Concat(q.order, terms)
 	return q
@@ -134,9 +141,11 @@ func (q ReadSelect) AllowUnscoped() ReadSelect {
 
 // ReadPlan owns the compiled scoped forms of an explicit SELECT.
 type ReadPlan[T, S any] struct {
-	view   *View[T, S]
-	family *rowFamily
-	single singleRead
+	owner   *descriptor[T, S]
+	indexes []int
+	family  *rowFamily
+	single  singleRead
+	list    *readListPlan
 }
 
 // DefineRead registers an explicit typed SELECT. It panics on a declaration error.
@@ -151,7 +160,14 @@ func DefineRead[T, S any](out *View[T, S], name string, query ReadSelect, observ
 // TryDefineRead registers every permitted scope variant together. No shape is
 // published when a declaration fails.
 func TryDefineRead[T, S any](out *View[T, S], name string, query ReadSelect, observe ...StatementOption) (*ReadPlan[T, S], error) {
-	if out == nil || isNilBound(query.from) {
+	if out == nil {
+		return nil, fmt.Errorf("tabula: DefineRead requires an output view")
+	}
+	return compileReadPlan(&out.descriptor, nil, name, query, observe)
+}
+
+func compileReadPlan[T, S any](owner *descriptor[T, S], indexes []int, name string, query ReadSelect, observe []StatementOption) (*ReadPlan[T, S], error) {
+	if owner == nil || isNilBound(query.from) {
 		return nil, fmt.Errorf("tabula: DefineRead requires a view and a FROM occurrence")
 	}
 	first, err := query.from.readSource()
@@ -181,34 +197,55 @@ func TryDefineRead[T, S any](out *View[T, S], name string, query ReadSelect, obs
 	if single.take != nil {
 		forms = append(forms, single.form())
 	}
-	family, err := compileRowFamily(&out.descriptor, name, sources, RowFilter{AllowUnscoped: query.unscoped, Observe: observe}, forms,
-		func(c *typedCompiler, form string, _ []Pred) (string, StatementShape, error) {
+	list, err := compileReadList(query, sources)
+	if err != nil {
+		return nil, err
+	}
+	spec := RowFilter{AllowUnscoped: query.unscoped, Observe: observe}
+	var reachable func([]shapeAlternative) bool
+	if list != nil {
+		spec.Optional, spec.Budget = query.list.Optional, query.list.Budget
+		forms = append(forms, list.forms...)
+		reachable = fixedReadChoices
+	}
+	family, err := compileRowFamilyChoices(owner, name, sources, spec, forms, reachable,
+		func(c *typedCompiler, form string, predicates []Pred) (string, StatementShape, error) {
+			if strings.HasPrefix(form, "list.") {
+				return list.render(c, owner.entry, indexes, query.Where(predicates...), sources, form)
+			}
 			var take *typedInput
 			if form != "data" {
 				take = single.take
 			}
-			return query.render(c, out.entry, sources, take)
+			text, meta, err := query.render(c, owner.entry, indexes, sources, take)
+			if err == nil && len(query.distinctOn) != 0 {
+				meta.Keys, meta.Comparisons, err = readWinnerProof(query, sources)
+			}
+			return text, meta, err
 		})
 	if err != nil {
 		return nil, err
 	}
-	return &ReadPlan[T, S]{out, family, single}, nil
+	return &ReadPlan[T, S]{owner: owner, indexes: slices.Clone(indexes), family: family, single: single, list: list}, nil
 }
 
 // BoundReadPlan runs an explicit SELECT through the registry-authorized session.
 type BoundReadPlan[T, S any] struct {
 	rowExecution[T, S]
 	single singleRead
+	list   *readListPlan
 }
 
 // Bind attaches the plan to a session from its registry.
 func (p *ReadPlan[T, S]) Bind(s Session[S]) *BoundReadPlan[T, S] {
-	if p == nil || p.view == nil {
+	if p == nil || p.owner == nil {
 		var b BoundReadPlan[T, S]
 		b.bindErr = ErrStatementAuthority
 		return &b
 	}
-	return &BoundReadPlan[T, S]{bindRowExecution(&p.view.descriptor, p.family, s), p.single}
+	execution := bindRowExecution(p.owner, p.family, s)
+	execution.indexes = p.indexes
+	return &BoundReadPlan[T, S]{execution, p.single, p.list}
 }
 
 // Find decodes all matching result rows. Each caller input must be bound once.

@@ -109,3 +109,9 @@ func CIDR() tabula.PGType[netip.Prefix] {
 // ArrayOf declares a one-dimensional PostgreSQL array of the given element
 // type. Its driver array adapter handles the elements.
 func ArrayOf[V any](element tabula.PGType[V]) tabula.PGType[[]V] { return tabula.ArrayOf(element) }
+
+// ArrayOfNullable declares a one-dimensional array of nullable scalar values.
+// A nil element round-trips independently of an empty or SQL NULL array.
+func ArrayOfNullable[V any](element tabula.PGType[V]) tabula.PGType[[]*V] {
+	return tabula.ArrayOfNullable(element)
+}

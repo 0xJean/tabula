@@ -147,3 +147,9 @@ A mapped column retains the descriptor's secret flag in every registered project
 - Default `ValuesNever` and `secret` columns never appear in output, checked by a test
   handler that fails on any argument value.
 - Record keys and types match section 3 (golden test).
+
+Explicit read lists report `plan.scope.list.data.sort.order` (with a page suffix)
+and `plan.scope.list.count`, followed by any enabled filter names. The paired
+calls have independent inputs and redaction metadata. A summary can omit
+projection-only secrets because it never receives those values. Cursor values
+and bindings never appear in statement keys or snapshots.

@@ -18,11 +18,11 @@ This reference belongs to the same revision as the code. Start with the [integra
 ```text
 package tabula // import "github.com/0xJean/tabula"
 
-Package tabula is a zero-dependency, descriptor-driven single-table SQL engine
-for PostgreSQL. A row struct carries lightweight `db` tags; Define validates
-the declaration once at package initialization, derives static parameterized
-statements and column privilege needs, and records them in a Registry for
-verification (PREPARE/EXPLAIN, schema checks, SQL snapshots).
+Package tabula declares PostgreSQL tables, statements and typed query plans
+using only the Go standard library. Define derives single-table operations
+from a row struct's `db` tags. Typed plans can join explicitly named tables,
+group results, and register ordered pages. A Registry records the SQL shapes and
+their grants for snapshots, catalog checks, PREPARE and EXPLAIN.
 
 Host applications inject their own scope type S (e.g. a tenant scope or
 struct{}), value converters, and error classification via RegistryConfig so this
@@ -299,6 +299,10 @@ func TryDefineRowsWithForms[T, R, S any](out *View[T, S], name string, src RowSo
     TryDefineRowsWithForms registers the data, summary and requested bounded
     forms together. A rejected declaration publishes no shapes.
 
+func TryDefineTableRead[T, S any](src RowSource[T, S], name string, columns TableSelection, query ReadSelect, observe ...StatementOption) (*ReadPlan[T, S], error)
+    TryDefineTableRead registers the complete table-backed read or returns a
+    declaration error. The source and selection already define FROM and SELECT.
+
 func TryDefineTableRows[T, S any](src RowSource[T, S], name string, spec RowsSpec, columns TableSelection, forms ...ReadForms) (*RowsPlan[T, S], error)
     TryDefineTableRows registers every shape of a table-backed read together.
     An invalid source, selection or plan leaves the registry untouched.
@@ -466,10 +470,15 @@ func (b *BoundMutationPlan[T, S]) UpdateMany(ctx context.Context, set string, fi
 
 type BoundReadPlan[T, S any] struct {
 	rowExecution[T, S]
+
 	// Has unexported fields.
 }
     BoundReadPlan runs an explicit SELECT through the registry-authorized
     session.
+
+func (b *BoundReadPlan[T, S]) Count(ctx context.Context, filters []string, values ...Binding) (int64, error)
+    Count returns the exact filtered unpaged result cardinality. Bind only
+    inputs retained by the summary. It requires WithList with ExactCount.
 
 func (b *BoundReadPlan[T, S]) Find(ctx context.Context, values ...Binding) ([]T, error)
     Find decodes all matching result rows. Each caller input must be bound once.
@@ -477,6 +486,12 @@ func (b *BoundReadPlan[T, S]) Find(ctx context.Context, values ...Binding) ([]T,
 func (b *BoundReadPlan[T, S]) First(ctx context.Context, values ...Binding) (T, error)
     First returns the first result under the declared first-row policy,
     or ErrNotFound on an empty result. PostgreSQL returns at most one row.
+
+func (b *BoundReadPlan[T, S]) List(ctx context.Context, choice RowChoice, values ...Binding) ([]T, int64, error)
+    List returns a page and exact unpaged cardinality, or no partial result
+    on failure. Both shapes validate before I/O and independently adapt the
+    original bindings. Choose a transaction snapshot when both reads must see
+    one state.
 
 func (b *BoundReadPlan[T, S]) MaybeFirst(ctx context.Context, values ...Binding) (T, bool, error)
     MaybeFirst returns the first result and true under the declared first-row
@@ -490,6 +505,9 @@ func (b *BoundReadPlan[T, S]) One(ctx context.Context, values ...Binding) (T, er
     One returns the only result row of the SELECT. It returns ErrNotFound on an
     empty result and ErrMultipleRows on a second match. An unlocked SELECT can
     reuse its data statement. WithForms can register a server limit of two.
+
+func (b *BoundReadPlan[T, S]) Page(ctx context.Context, choice RowChoice, values ...Binding) ([]T, error)
+    Page executes one registered list data shape. Find retains the fixed read.
 
 type BoundRoutinePlan[T, S any] struct {
 	// Has unexported fields.
@@ -509,9 +527,9 @@ type BoundRowsPlan[T, S any] struct {
     BoundRowsPlan executes registered statements on one authorized session.
 
 func (b *BoundRowsPlan[T, S]) Count(ctx context.Context, filters []string, values ...Binding) (int64, error)
-    Count counts unpaged result rows (groups for grouped queries). Supply only
-    the bindings used by the selected WHERE predicates. A locking plan returns
-    ErrOperationDenied.
+    Count counts unpaged result rows, including one row per group. Supply the
+    bindings used by the selected predicates and group keys. A locking plan
+    returns ErrOperationDenied.
 
 func (b *BoundRowsPlan[T, S]) Exists(ctx context.Context, filters []string, values ...Binding) (bool, error)
     Exists reports whether a visible row satisfies the selected filter. Declare
@@ -576,6 +594,30 @@ const (
 	// fragments, raw session methods and raw transaction access.
 	DenyLegacySQL
 )
+type CaseArm[V any] struct {
+	// Has unexported fields.
+}
+    CaseArm pairs a boolean condition with a result. SQL NULL conditions fall
+    through to the next arm. Construct arms with When.
+
+func When[V any](condition Pred, value Expr[V]) CaseArm[V]
+    When declares one typed CASE arm.
+
+type CaseExpr[V any] struct {
+	// Has unexported fields.
+}
+    CaseExpr is a CASE declaration awaiting its explicit fallback.
+
+func Case[V any](first CaseArm[V], rest ...CaseArm[V]) CaseExpr[V]
+    Case starts a conditional expression with at least one arm.
+
+func (c CaseExpr[V]) Else(value Expr[V]) Expr[V]
+    Else supplies the fallback. Every result arm must have its exact catalog
+    type.
+
+func (c CaseExpr[V]) ElseNull() Expr[V]
+    ElseNull supplies a typed SQL NULL fallback.
+
 type Column[T any] struct {
 	Name string
 	Addr func(*T) any
@@ -607,6 +649,15 @@ func ColumnType[V any](name string, kind PGType[V]) ColumnMapping
     ColumnType declares the exact PostgreSQL type and input codec of a column.
     Its Go type must match the field or the element of a pointer field.
 
+type ComparisonRequirement struct {
+	Relation, Column         string
+	WithRelation, WithColumn string `json:",omitempty"`
+}
+    ComparisonRequirement requires native comparison semantics and a
+    deterministic collation for a physical column used by a result order. When
+    WithRelation and WithColumn are set, both columns also require compatible
+    implicit collations within one expression.
+
 type CountMode int
     CountMode controls how Rows.List obtains the total row count.
 
@@ -627,8 +678,45 @@ type CursorValue struct {
 func At[V any](field Field[V], value V) CursorValue
     At supplies one cursor component using the field's input codec.
 
+func AtExpr[V any](expr Expr[V], value V) CursorValue
+    AtExpr supplies one cursor component using the expression's declared codec.
+    Its expression must match the corresponding projected order term.
+
 func NullAt[V any](field Field[V]) CursorValue
     NullAt supplies a SQL NULL boundary for a nullable order field.
+
+func NullAtExpr[V any](expr Expr[V]) CursorValue
+    NullAtExpr supplies a SQL NULL boundary for a nullable order expression.
+
+type DatePart uint8
+    DatePart is a closed EXTRACT or date_trunc unit. Each source type supports
+    only its native subset. An invalid unit fails when the plan is defined.
+
+const (
+	Microseconds DatePart = iota + 1
+	Milliseconds
+	Second
+	Minute
+	Hour
+	Day
+	Week
+	Month
+	Quarter
+	Year
+	Decade
+	Century
+	Millennium
+	Epoch
+	DOW
+	ISODOW
+	DOY
+	ISOYear
+	TimezoneSeconds
+	TimezoneHour
+	TimezoneMinute
+)
+    Native PostgreSQL date/time fields. TimezoneSeconds is the EXTRACT timezone
+    field; TimezoneHour and TimezoneMinute are its signed components.
 
 type DefinedColumn struct {
 	Name     string
@@ -667,6 +755,16 @@ type Definition struct {
 	StatementShapes map[string]StatementShape `json:",omitempty"`
 }
     Definition is one defined table as Registry.Defined lists it.
+
+type EncodeFormat uint8
+    EncodeFormat selects one of PostgreSQL's built-in byte encodings.
+
+const (
+	Hex EncodeFormat = iota + 1
+	Base64
+	Escape
+)
+    Formats supported by PostgreSQL 14 and later.
 
 type ErrorClass string
     ErrorClass is the fixed error classification string used in structured logs
@@ -715,15 +813,195 @@ type Expr[V any] struct {
 }
     Expr is a typed expression assembled from descriptor fields and inputs.
 
+func AggregateOrder[V any](aggregate Expr[V], first RowTerm, rest ...RowTerm) Expr[V]
+    AggregateOrder declares input order for string, array or JSON aggregation.
+    With DistinctInputs each ordering expression must also be an argument.
+
+func ArrayAgg[V any](element Expr[V]) Expr[[]V]
+    ArrayAgg collects non-NULL scalar elements using the declared array codec.
+    Nullable elements require ArrayAggAs with an array-of-nullable result type.
+
+func ArrayAggAs[R, V any](result PGType[R], element Expr[V]) Expr[R]
+    ArrayAggAs collects scalar elements into the exact declared array type. A
+    nullable input requires a result codec preserving individual NULL elements.
+    Empty input returns a NULL array, independently of a NULL array element.
+
+func ArrayCat[V any](a, b Expr[[]V]) Expr[[]V]
+    ArrayCat concatenates arrays. A non-null array is preserved when the other
+    operand is SQL NULL. The element types must match exactly.
+
+func ArrayExpr[V any](first Expr[V], rest ...Expr[V]) Expr[[]V]
+    ArrayExpr constructs a nonempty one-dimensional array. All elements must
+    have the same SQL type. SQL NULL elements are retained. Use an element-null
+    preserving output codec when decoding arrays that can contain NULLs.
+
+func ArrayExprAs[R, V any](result PGType[R], first Expr[V], rest ...Expr[V]) Expr[R]
+    ArrayExprAs constructs an array with an explicit result mapping. For
+    nullable elements use pgtype.ArrayOfNullable(element), which preserves NULLs
+    including those introduced by a LEFT JOIN. Every element must have the exact
+    SQL type of the declared array element; the array itself is always non-null.
+
+func ArrayRemove[A, V any](array Expr[A], element Expr[V]) Expr[A]
+    ArrayRemove removes every matching element using null-aware equality. A NULL
+    element removes NULL elements; only a NULL array makes the result NULL.
+
 func AvgOf[V, R any](f Expr[V], result PGType[R]) Expr[R]
     AvgOf averages a numeric field. PostgreSQL returns numeric for integer and
     numeric inputs and float8 for floating-point inputs. The result is nullable.
 
+func BTrim[V ~string](value Expr[V], characters ...Expr[string]) Expr[string]
+    BTrim trims spaces, or the supplied set of characters, from both ends.
+
+func BoolAnd(value Pred) Expr[bool]
+    BoolAnd reports whether every non-NULL input is true, with BoolOr's NULL
+    contract.
+
+func BoolOr(value Pred) Expr[bool]
+    BoolOr reports whether any non-NULL input is true. Empty or all-NULL input
+    yields NULL. It accepts FilterWhere and DistinctInputs.
+
+func ByteaCat(a, b Expr[[]byte]) Expr[[]byte]
+    ByteaCat concatenates byte strings, preserving SQL NULL.
+
+func Cardinality[A any](array Expr[A]) Expr[int32]
+    Cardinality returns the total element count, including zero for an empty
+    non-null array. A SQL NULL array yields SQL NULL.
+
+func Cast[To, From any](target PGType[To], value Expr[From]) Expr[To]
+    Cast selects a closed PostgreSQL conversion. It never changes the Go input
+    codec. Explicit targets must be unconstrained: use pgtype.Varchar() rather
+    than pgtype.Varchar(n), so a cast cannot silently truncate a bound value.
+
+func Coalesce[V any](first Expr[V], rest ...Expr[V]) Expr[V]
+    Coalesce returns the first non-NULL operand. All operands must have the same
+    PostgreSQL type. It is non-null when at least one operand is non-null.
+
+func Concat(first Scalar, rest ...Scalar) Expr[string]
+    Concat converts reviewed built-in values to text and skips SQL NULL values.
+    Its formatting can depend on session settings, so it is not a cursor key.
+
+func ConvertTo[V ~string](value Expr[V], encoding Expr[string]) Expr[[]byte]
+    ConvertTo encodes text using a bound PostgreSQL encoding name. The native
+    overload takes name, so the compiler explicitly casts the encoding operand.
+
 func CountAll() Expr[int64]
     CountAll counts all rows, including those with NULL values.
 
+func CountDistinct[V any](value Expr[V]) Expr[int64]
+    CountDistinct counts distinct non-NULL values using their native equality.
+
 func CountOf[V any](f Expr[V]) Expr[int64]
     CountOf counts non-null values of the input expression.
+
+func CurrentDate() Expr[time.Time]
+    CurrentDate returns CURRENT_DATE in the session time zone. It is
+    transaction-stable.
+
+func CurrentTimestamp() Expr[time.Time]
+    CurrentTimestamp returns CURRENT_TIMESTAMP, stable within the transaction.
+
+func DateTrunc[V any](unit DatePart, value Expr[V]) Expr[V]
+    DateTrunc truncates timestamp, timestamptz or interval, preserving its type.
+    The timestamptz overload observes the session time zone.
+
+func DateTruncAt(unit DatePart, value Expr[time.Time], zone Expr[string]) Expr[time.Time]
+    DateTruncAt truncates timestamptz in an explicit, bound time zone.
+
+func DistinctInputs[V any](aggregate Expr[V]) Expr[V]
+    DistinctInputs removes duplicate argument tuples before aggregation. It
+    requires comparable arguments and does not accept CountAll or JSON inputs.
+
+func Divide[V any](a, b Expr[V]) Expr[V]
+    Divide divides operands with native PostgreSQL semantics, including integer
+    division, division-by-zero errors and overflow.
+
+func DivideAs[R, A, B any](result PGType[R], a Expr[A], b Expr[B]) Expr[R]
+    DivideAs selects a checked native division overload and exact result type.
+
+func Encode(value Expr[[]byte], format EncodeFormat) Expr[string]
+    Encode renders bytea in the selected closed format. SQL NULL remains NULL.
+
+func Extract[R, V any](result PGType[R], unit DatePart, value Expr[V]) Expr[R]
+    Extract returns the selected numeric field. Declare the numeric result's Go
+    mapping explicitly, for example pgtype.Numeric[string]().
+
+func FilterWhere[V any](aggregate Expr[V], condition Pred) Expr[V]
+    FilterWhere applies SQL FILTER to one aggregate, including existing CountOf,
+    SumOf and AvgOf expressions. Filtering preserves the native empty-input
+    result.
+
+func GenRandomUUID() Expr[string]
+    GenRandomUUID generates a non-null UUID with its string Go representation.
+    It is volatile: use it in projections and assignments, never stable
+    ordering.
+
+func GenRandomUUIDAs[V any](result PGType[V]) Expr[V]
+    GenRandomUUIDAs generates a UUID using an explicitly declared result
+    mapping.
+
+func Greatest[V any](first Expr[V], rest ...Expr[V]) Expr[V]
+    Greatest returns the greatest non-NULL operand using native ordering.
+
+func JSONAgg[R, V any](result PGType[R], value Expr[V]) Expr[R]
+    JSONAgg collects typed values, including SQL NULL as JSON null, using the
+    declared json or jsonb result codec. Empty input returns SQL NULL.
+
+func JSONBAgg[R, V any](result PGType[R], value Expr[V]) Expr[R]
+    JSONBAgg is JSONAgg restricted to a declared pg_catalog.jsonb result.
+
+func JSONBCat[A, B any](a Expr[A], b Expr[B]) Expr[json.RawMessage]
+    JSONBCat concatenates JSONB using ||. The explicit result is a raw document,
+    because native concatenation can change an object's or scalar's shape.
+
+func JSONBDeleteAt[J any](document Expr[J], index Expr[int32]) Expr[json.RawMessage]
+    JSONBDeleteAt deletes an array element; negative indexes count from the end.
+
+func JSONBDeleteKey[J any, K ~string](document Expr[J], key Expr[K]) Expr[json.RawMessage]
+    JSONBDeleteKey deletes a top-level JSONB object key or string array element.
+
+func JSONBDeleteKeys[J any](document Expr[J], keys Expr[[]string]) Expr[json.RawMessage]
+    JSONBDeleteKeys deletes the supplied top-level keys or string array
+    elements.
+
+func JSONBDeletePath[J any](document Expr[J], path Expr[[]string]) Expr[json.RawMessage]
+    JSONBDeletePath deletes the value at a text-array path.
+
+func JSONBuildObject[R any](result PGType[R], pairs ...JSONMember) Expr[R]
+    JSONBuildObject selects json_build_object or jsonb_build_object from result.
+    JSON retains duplicate members; JSONB retains the last value for each key.
+    Up to 50 ordered pairs are accepted. Values use reviewed built-in types.
+
+func JSONGet[J any, K ~string](document Expr[J], key Expr[K]) Expr[json.RawMessage]
+    JSONGet extracts an object member as json/jsonb matching the input document.
+    Missing members yield SQL NULL; a JSON null member remains a JSON value.
+
+func JSONGetAt[J any](document Expr[J], index Expr[int32]) Expr[json.RawMessage]
+    JSONGetAt extracts an array element. Negative indexes count from the end.
+
+func JSONGetPath[J any](document Expr[J], path Expr[[]string]) Expr[json.RawMessage]
+    JSONGetPath traverses a text-array path, returning nullable json/jsonb.
+
+func JSONGetText[J any, K ~string](document Expr[J], key Expr[K]) Expr[string]
+    JSONGetText extracts an object member as text. JSON null becomes SQL NULL.
+
+func JSONGetTextAt[J any](document Expr[J], index Expr[int32]) Expr[string]
+    JSONGetTextAt extracts an array element as text; JSON null becomes SQL NULL.
+
+func JSONGetTextPath[J any](document Expr[J], path Expr[[]string]) Expr[string]
+    JSONGetTextPath traverses a text-array path, returning nullable text.
+
+func JSONTypeOf[J any](document Expr[J]) Expr[string]
+    JSONTypeOf returns the native JSON value kind. JSON null yields text "null";
+    SQL NULL remains SQL NULL. Both json and jsonb are accepted.
+
+func Least[V any](first Expr[V], rest ...Expr[V]) Expr[V]
+    Least returns the least non-NULL operand using native ordering.
+
+func Length[V ~string](value Expr[V]) Expr[int32]
+    Length counts characters, not bytes, and returns PostgreSQL int4.
+
+func Lower[V ~string](value Expr[V]) Expr[string]
+    Lower returns PostgreSQL text converted to lower case under its collation.
 
 func MaxOf[V any](f Expr[V]) Expr[V]
     MaxOf computes the maximum of a field, with the same NULL contract as MinOf.
@@ -733,10 +1011,76 @@ func MinOf[V any](f Expr[V]) Expr[V]
     NULL. PostgreSQL must provide the corresponding same-result-type min
     overload.
 
+func Minus[V any](a, b Expr[V]) Expr[V]
+    Minus subtracts operands only when PostgreSQL returns their declared type.
+
+func MinusAs[R, A, B any](result PGType[R], a Expr[A], b Expr[B]) Expr[R]
+    MinusAs selects a checked native subtraction overload and exact result type.
+
+func Now() Expr[time.Time]
+    Now returns the PostgreSQL transaction start instant, not a client clock.
+
+func NullIf[V any](a, b Expr[V]) Expr[V]
+    NullIf returns SQL NULL when its operands compare equal, or the first value.
+    Its operands require a reviewed built-in equality operator. An array-valued
+    first operand must not contain a volatile expression; scalar operands and a
+    volatile second array operand are evaluated once per row.
+
+func Plus[V any](a, b Expr[V]) Expr[V]
+    Plus adds operands only when PostgreSQL returns their declared type.
+
+func PlusAs[R, A, B any](result PGType[R], a Expr[A], b Expr[B]) Expr[R]
+    PlusAs selects a checked native addition overload and its exact result type.
+
+func RegexpReplace[V ~string](value Expr[V], pattern, replacement Expr[string], flags ...Expr[string]) Expr[string]
+    RegexpReplace replaces matches using the PostgreSQL 14 three/four-argument
+    overload. Pattern, replacement and optional flags are bound expressions.
+
+func SHA256(value Expr[[]byte]) Expr[[]byte]
+    SHA256 hashes bytea using PostgreSQL's core sha256(bytea) function.
+
+func StringAgg[A, B ~string](value Expr[A], delimiter Expr[B]) Expr[string]
+    StringAgg concatenates non-NULL text values with the bound text delimiter.
+    Empty or all-NULL input returns SQL NULL. Use AggregateOrder for input
+    order.
+
+func Substr[V ~string](value Expr[V], start Expr[int32], count ...Expr[int32]) Expr[string]
+    Substr selects characters with one-based int4 positions and an optional
+    count.
+
 func SumOf[V, R any](f Expr[V], result PGType[R]) Expr[R]
     SumOf sums a numeric field. Supply the exact PostgreSQL result type and its
     Go representation. For example, sum(int4) returns int8 and sum(int8) returns
     numeric. An empty or all-NULL group yields NULL.
+
+func TextCat[A, B ~string](a Expr[A], b Expr[B]) Expr[string]
+    TextCat concatenates two text operands strictly: either SQL NULL yields
+    NULL.
+
+func Times[V any](a, b Expr[V]) Expr[V]
+    Times multiplies operands only when PostgreSQL returns their declared type.
+
+func TimesAs[R, A, B any](result PGType[R], a Expr[A], b Expr[B]) Expr[R]
+    TimesAs selects a checked native multiplication overload and exact result
+    type.
+
+func Timezone[V any](zone Expr[string], value Expr[V]) Expr[V]
+    Timezone converts timestamp to timestamptz and timestamptz to timestamp.
+    The native timetz overload preserves timetz and depends on the current date.
+
+func ToChar[V any](value Expr[V], format Expr[string]) Expr[string]
+    ToChar formats a native temporal or numeric value. A date selects the native
+    timestamptz overload, preserving session-zone TZ and OF fields. Formatting
+    observes session/locale settings and cannot establish a repeatable page key.
+
+func Trim[V ~string](value Expr[V]) Expr[string]
+    Trim removes spaces from both ends, using PostgreSQL's btrim(text).
+
+func TypedNull[V any](kind PGType[V]) Expr[V]
+    TypedNull declares a SQL NULL with an exact catalog type, without an input.
+
+func Upper[V ~string](value Expr[V]) Expr[string]
+    Upper returns PostgreSQL text converted to upper case under its collation.
 
 type Field[V any] struct {
 	// Has unexported fields.
@@ -822,9 +1166,18 @@ func FormalOf[R, V any](r *Routine[R], name string, kind PGType[V]) Formal[V]
 type GroupField interface {
 	// Has unexported methods.
 }
-    GroupField is a physical field used in a SELECT grouping. Pass field.Expr()
-    or field.Column(). Definitions check that every grouping belongs to the
-    query.
+    GroupField is a sealed grouping expression. Pass field.Expr(),
+    field.Column(), or a computed expression. Definitions validate its type and
+    occurrence scope.
+
+type JSONMember struct {
+	// Has unexported fields.
+}
+    JSONMember retains a text key and a heterogeneous value for JSONBuildObject.
+
+func JSONPair[K ~string, V any](key Expr[K], value Expr[V]) JSONMember
+    JSONPair declares an object member. A SQL NULL key causes the native
+    database error; a SQL NULL value becomes JSON null.
 
 type JSONValue struct {
 	// Has unexported fields.
@@ -834,6 +1187,15 @@ type JSONValue struct {
 func (v *JSONValue) Scan(src any) error
 
 func (v *JSONValue) Value() (driver.Value, error)
+
+type KeyRequirement struct {
+	Relation string
+	Columns  []string
+}
+    KeyRequirement records a complete immediate primary key used to prove a
+    result order. Relation is a quoted, qualified scanned relation, including
+    its descendants. Catalog verification rejects ordinary inheritance and
+    accepts a valid parent-wide primary key on a partitioned relation.
 
 type KeysetListing struct {
 	// SortColumn optionally specifies a primary sort column (must be declared
@@ -1070,6 +1432,11 @@ func ArrayOf[V any](element PGType[V]) PGType[[]V]
     RegistryConfig.ArrayArg, or the driver's native slice binding when it is
     nil. The array codec is responsible for encoding its elements.
 
+func ArrayOfNullable[V any](element PGType[V]) PGType[[]*V]
+    ArrayOfNullable declares a one-dimensional array with nullable elements.
+    A nil slice binds SQL NULL, an empty slice binds an empty array and a nil
+    element binds a SQL NULL within the array.
+
 func Bool() PGType[bool]
     Bool declares PostgreSQL boolean.
 
@@ -1105,8 +1472,9 @@ func (t PGType[V]) WithEncoder(encode func(V) (any, error)) PGType[V]
     unless RegistryConfig.ScopeID supplies the session's scope argument.
 
 type Pred = Expr[bool]
-    Pred is a PostgreSQL boolean expression. A nullable predicate follows SQL
-    three-valued logic when it is used in WHERE.
+    Pred is an Expr[bool] and can be passed directly to Project. A nullable
+    predicate projects SQL UNKNOWN as NULL and follows three-valued logic in
+    WHERE.
 
 func And(first, second Pred, rest ...Pred) Pred
     And combines two or more typed predicates in declaration order.
@@ -1114,6 +1482,16 @@ func And(first, second Pred, rest ...Pred) Pred
 func Any[V any](value Expr[V], array Expr[[]V]) Pred
     Any tests equality with any element of a PostgreSQL array declared with
     ArrayOf. An empty array yields false and a NULL array yields NULL.
+
+func ArrayContainedBy[A any](a, b Expr[A]) Pred
+    ArrayContainedBy tests whether every element in a occurs in b.
+
+func ArrayContains[A any](a, b Expr[A]) Pred
+    ArrayContains tests containment; duplicate elements do not change
+    membership.
+
+func ArrayOverlaps[A any](a, b Expr[A]) Pred
+    ArrayOverlaps tests whether arrays have at least one element in common.
 
 func Eq[V any](left, right Expr[V]) Pred
     Eq compares two expressions of the same PostgreSQL type.
@@ -1141,6 +1519,15 @@ func IsNotDistinct[V any](left, right Expr[V]) Pred
 func IsNull[V any](v Expr[V]) Pred
     IsNull tests SQL NULL and always returns a non-null boolean.
 
+func JSONContainedBy[A, B any](a Expr[A], b Expr[B]) Pred
+    JSONContainedBy tests JSONB containment with the native <@ operator.
+
+func JSONContains[A, B any](a Expr[A], b Expr[B]) Pred
+    JSONContains tests JSONB containment with the native @> operator.
+
+func JSONHasKey[J any, K ~string](document Expr[J], key Expr[K]) Pred
+    JSONHasKey tests for a top-level JSONB key or string array element.
+
 func Le[V any](a, b Expr[V]) Pred
     Le compares two expressions using PostgreSQL less-than-or-equal semantics.
 
@@ -1157,8 +1544,29 @@ func Ne[V any](a, b Expr[V]) Pred
 func Not(p Pred) Pred
     Not negates a PostgreSQL boolean, preserving SQL NULL.
 
+func NotEqualAll[V, A any](value Expr[V], array Expr[A]) Pred
+    NotEqualAll uses native <> ALL: an empty array yields true, a match yields
+    false, and otherwise NULL arrays/elements can yield SQL NULL. Its array
+    representation may preserve nullable elements; the catalog element type must
+    still match the scalar exactly.
+
 func Or(first, second Pred, rest ...Pred) Pred
     Or combines predicates in declaration order with SQL three-valued logic.
+
+func RegexpIMatch[A, B ~string](value Expr[A], pattern Expr[B]) Pred
+    RegexpIMatch applies the native case-insensitive ~* operator.
+
+func RegexpMatch[A, B ~string](value Expr[A], pattern Expr[B]) Pred
+    RegexpMatch applies the native case-sensitive ~ operator.
+
+func RegexpNotIMatch[A, B ~string](value Expr[A], pattern Expr[B]) Pred
+    RegexpNotIMatch applies the native case-insensitive !~* operator.
+
+func RegexpNotMatch[A, B ~string](value Expr[A], pattern Expr[B]) Pred
+    RegexpNotMatch applies the native case-sensitive !~ operator.
+
+func StartsWith[A, B ~string](value Expr[A], prefix Expr[B]) Pred
+    StartsWith tests a text prefix, preserving SQL NULL.
 
 type Projection struct {
 	// Has unexported fields.
@@ -1362,6 +1770,17 @@ type ReadForms struct {
     ReadForms registers a bounded read for exact or first-row selection.
     Exact and First share one shape per eligible filter, order and scope.
 
+type ReadListSpec struct {
+	Optional   []RowPredicate
+	Orders     []RowOrder
+	Pages      RowPages
+	ExactCount bool
+	Budget     int
+}
+    ReadListSpec adds a finite list family to an explicit read. Budget covers
+    every fixed, bounded and list shape, across all filters and scopes. Zero
+    selects 256. ExactCount enables Count and paired List calls.
+
 type ReadPlan[T, S any] struct {
 	// Has unexported fields.
 }
@@ -1371,8 +1790,21 @@ func DefineRead[T, S any](out *View[T, S], name string, query ReadSelect, observ
     DefineRead registers an explicit typed SELECT. It panics on a declaration
     error.
 
+func DefineTableRead[T, S any](src RowSource[T, S], name string, columns TableSelection, query ReadSelect, observe ...StatementOption) *ReadPlan[T, S]
+    DefineTableRead applies SELECT clauses to fields of a single mapped source.
+    The selection supplies the result fields and their decoders. Pass a query
+    starting with Select() and supply clauses such as Where and OrderBy.
+
 func (p *ReadPlan[T, S]) Bind(s Session[S]) *BoundReadPlan[T, S]
     Bind attaches the plan to a session from its registry.
+
+func (p *ReadPlan[T, S]) Cursor(order string, terms ...CursorValue) (RowCursor, error)
+    Cursor checks manually encoded projected order values against this plan.
+    Include every term in declaration order, including nullable join keys.
+
+func (p *ReadPlan[T, S]) CursorFrom(order string, row T) (RowCursor, error)
+    CursorFrom obtains the boundary from the decoded projected values of row.
+    It uses the compiled descriptor indexes, including partial table selections.
 
 type ReadSelect struct {
 	// Has unexported fields.
@@ -1390,11 +1822,21 @@ func (q ReadSelect) AllowUnscoped() ReadSelect
 func (q ReadSelect) CrossJoin(right ReadSource) ReadSelect
     CrossJoin returns the product of the visible rows of both sides.
 
+func (q ReadSelect) Distinct() ReadSelect
+    Distinct removes duplicates of the complete projection. ORDER BY must use
+    projected expressions. It cannot be combined with DistinctOn or row locks.
+
+func (q ReadSelect) DistinctOn(first Scalar, rest ...Scalar) ReadSelect
+    DistinctOn selects one representative per expression tuple. OrderBy must
+    start with those keys and establish a stable total winner order in each
+    group. Joined winners conservatively require every occurrence's complete
+    key.
+
 func (q ReadSelect) From(source ReadSource) ReadSelect
     From names the first physical occurrence.
 
 func (q ReadSelect) GroupBy(fields ...GroupField) ReadSelect
-    GroupBy groups rows by the declared fields of their respective occurrences.
+    GroupBy groups rows by declared typed expressions.
 
 func (q ReadSelect) Having(terms ...Pred) ReadSelect
     Having filters aggregate groups after grouping.
@@ -1411,7 +1853,7 @@ func (q ReadSelect) Lock(lock RowLock) ReadSelect
     Lock applies a row lock to one eligible occurrence of an ungrouped read.
 
 func (q ReadSelect) OrderBy(terms ...RowTerm) ReadSelect
-    OrderBy declares the ordered physical fields of this result.
+    OrderBy declares the typed ordering expressions of this result.
 
 func (q ReadSelect) Where(terms ...Pred) ReadSelect
     Where restricts rows before grouping. Multiple terms are combined with AND.
@@ -1419,6 +1861,11 @@ func (q ReadSelect) Where(terms ...Pred) ReadSelect
 func (q ReadSelect) WithForms(forms ReadForms) ReadSelect
     WithForms selects the permitted bounded reads. OrderedFirst requires OrderBy
     and UnorderedFirst requires an unordered SELECT.
+
+func (q ReadSelect) WithList(spec ReadListSpec) ReadSelect
+    WithList adds separately selectable pages and optional exact summaries.
+    Find and the bounded helpers retain the original fixed query. A repeated
+    WithList, duplicate option name or exceeded budget fails at definition.
 
 type ReadSource interface {
 	// Has unexported methods.
@@ -1653,6 +2100,10 @@ type RowColumn struct {
     RowColumn identifies a typed descriptor field in a GROUP BY or source
     declaration.
 
+func GroupExpr[V any](value Expr[V]) RowColumn
+    GroupExpr retains a computed expression for RowsSpec.GroupBy. It cannot be
+    used as a physical column in a selection, source policy or write target.
+
 type RowCursor struct {
 	// Has unexported fields.
 }
@@ -1745,14 +2196,27 @@ func (src RowSource[T, S]) Rel() Rel[T]
 type RowTerm struct {
 	// Has unexported fields.
 }
-    RowTerm orders one physical field. PostgreSQL orders NULLs last for
-    ascending terms and first for descending terms.
+    RowTerm orders one declared typed expression. PostgreSQL orders NULLs last
+    for ascending terms and first for descending terms.
 
 func Asc[V any](f Field[V]) RowTerm
     Asc orders a field from least to greatest.
 
+func AscExpr[V any](value Expr[V]) RowTerm
+    AscExpr orders a typed expression from least to greatest.
+
 func Desc[V any](f Field[V]) RowTerm
     Desc orders a field from greatest to least.
+
+func DescExpr[V any](value Expr[V]) RowTerm
+    DescExpr orders a typed expression from greatest to least.
+
+func (t RowTerm) NullsFirst() RowTerm
+    NullsFirst places SQL NULL before non-NULL values, independently of
+    direction.
+
+func (t RowTerm) NullsLast() RowTerm
+    NullsLast places SQL NULL after non-NULL values, independently of direction.
 
 type RowVersion struct {
 	// Has unexported fields.
@@ -1950,6 +2414,10 @@ func (p *RowsPlan[T, S]) Cursor(order string, values ...CursorValue) (RowCursor,
     and arity. Supply values in order, taken from the last row of the prior
     page.
 
+func (p *RowsPlan[T, S]) CursorFrom(order string, row T) (RowCursor, error)
+    CursorFrom extracts the projected ordering values from a decoded row, using
+    their declared input codecs. The boundary belongs to this plan and order.
+
 type RowsSpec struct {
 	RowFilter
 	GroupBy []RowColumn
@@ -1963,7 +2431,9 @@ type RowsSpec struct {
 	WithExists bool
 }
     RowsSpec declares the finite alternatives for a single-table read. GroupBy
-    lists the physical fields that determine each aggregate group.
+    lists the fields or GroupExpr terms that determine each group. Named orders
+    share one exact count. Each order must preserve the result cardinality,
+    including the one-row result of an ungrouped aggregate on empty input.
 
 type SQLAuthority struct {
 	// Has unexported fields.
@@ -2000,6 +2470,12 @@ func (f *SQLFiles) Lookup(name string) (string, bool)
 
 func (f *SQLFiles) Names() []string
     Names returns all loaded relative file names in sorted order.
+
+type Scalar interface {
+	// Has unexported methods.
+}
+    Scalar is a declared typed expression in a heterogeneous argument list.
+    Its PostgreSQL type, input codec and relation identity stay attached to it.
 
 type ScalarAggregates struct {
 	Max, Min, Sum, Avg []string
@@ -2217,6 +2693,10 @@ type StatementShape struct {
 	AnyColumnUpdate []string
 	// Routines records the catalog contracts of called PostgreSQL functions.
 	Routines []RoutineRequirement
+	// Keys records the catalog primary-key premises of deterministic results.
+	Keys []KeyRequirement `json:",omitempty"`
+	// Comparisons records native ordering and deterministic collation premises.
+	Comparisons []ComparisonRequirement `json:",omitempty"`
 	// UnscopedOnly marks a shape that omits a declared column-scope predicate.
 	// It can be bound only to an unscoped session.
 	UnscopedOnly bool
@@ -2593,6 +3073,10 @@ func ArrayOf[V any](element tabula.PGType[V]) tabula.PGType[[]V]
     ArrayOf declares a one-dimensional PostgreSQL array of the given element
     type. Its driver array adapter handles the elements.
 
+func ArrayOfNullable[V any](element tabula.PGType[V]) tabula.PGType[[]*V]
+    ArrayOfNullable declares a one-dimensional array of nullable scalar values.
+    A nil element round-trips independently of an empty or SQL NULL array.
+
 func BPChar() tabula.PGType[string]
     BPChar declares PostgreSQL's blank-padded character catalog type.
 
@@ -2693,8 +3177,9 @@ savepoints, binary COPY, and read-only Direct pools.
 FUNCTIONS
 
 func ArrayColumn(ft reflect.Type) (func(any) any, error)
-    ArrayColumn selects pgx's native one-dimensional array codec. Its type map
-    handles both built-in and named Go slices and element types.
+    ArrayColumn selects pgx's native one-dimensional array codec. Its type
+    map handles built-in and named Go slices, including pointer elements that
+    distinguish a SQL NULL from the scalar's zero value.
 
 func CopyFrom[T, K, S any](ctx context.Context, sess *Session[S], tbl *tabula.Table[T, K, S], rows []T) (int64, error)
     CopyFrom bulk-inserts rows into tbl using PostgreSQL's binary COPY protocol
@@ -3184,8 +3669,9 @@ func Array(v any) any
     Array wraps a Go slice for PostgreSQL "= ANY($n)" binding via lib/pq.
 
 func ArrayColumn(ft reflect.Type) (func(any) any, error)
-    ArrayColumn resolves one-dimensional string, int32, int64, float64 and bool
-    slices. Named slice and element types retain their Go types when scanned.
+    ArrayColumn resolves one-dimensional bool, string, int16, int32, int64,
+    uint32, float32 and float64 slices, including slices of scalar pointers.
+    Named types and NULL elements retain their identities when scanned.
 
 func Int64Array[E ~int64](p *[]E) any
     Int64Array addresses a bigint[] column, including named int64 elements.
@@ -3490,8 +3976,8 @@ type MissingRequirement struct {
 }
     MissingRequirement identifies one unmet capability. Column is set for a
     named column grant or its owned sequence. Kind is ROLE, SCHEMA, TABLE,
-    COLUMN, SEQUENCE or FUNCTION. A missing role produces only the ROLE/EXISTS
-    finding.
+    COLUMN, SEQUENCE, FUNCTION, KEY or COMPARISON. A missing role produces only
+    the ROLE/EXISTS finding.
 
 func CheckReadiness(ctx context.Context, db *sql.DB, role string, needs ...ReadinessNeeds) ([]MissingRequirement, error)
     CheckReadiness checks the union of all needs for role in one catalog query.
@@ -3578,11 +4064,13 @@ type RLSMatrix struct {
 type ReadinessNeeds struct {
 	Privileges      PrivilegeNeeds
 	SchemaUsage     []string
-	AnyColumnSelect []string                    // SELECT on at least one column of each relation
-	AnyColumnUpdate []string                    // UPDATE on at least one column of each locked relation
-	Routines        []tabula.RoutineRequirement // exact function catalog contracts
-	ForceRLS        []string                    // both ENABLE and FORCE ROW LEVEL SECURITY
-	SequenceUsage   []string                    // named sequences in addition to column-owned sequences
+	AnyColumnSelect []string                       // SELECT on at least one column of each relation
+	AnyColumnUpdate []string                       // UPDATE on at least one column of each locked relation
+	Routines        []tabula.RoutineRequirement    // exact function catalog contracts
+	ForceRLS        []string                       // both ENABLE and FORCE ROW LEVEL SECURITY
+	SequenceUsage   []string                       // named sequences in addition to column-owned sequences
+	Keys            []tabula.KeyRequirement        // immediate primary-key premises
+	Comparisons     []tabula.ComparisonRequirement // native ordering and deterministic collations
 }
     ReadinessNeeds describes minimum capabilities for one role. Privileges
     accepts the result of CollectPrivilegeNeeds. Relations and function

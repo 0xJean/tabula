@@ -156,7 +156,7 @@ func (b *rowExecution[T, S]) find(ctx context.Context, call AuthorizedStatement)
 	return rows, nil
 }
 
-func (b *BoundRowsPlan[T, S]) count(ctx context.Context, call AuthorizedStatement) (int64, error) {
+func (b *rowExecution[T, S]) count(ctx context.Context, call AuthorizedStatement) (int64, error) {
 	var total int64
 	_, err := b.run(ctx, "count", call, func(ctx context.Context) (int64, error) {
 		return -1, b.driver.ScanAuthorized(ctx, call, &total)
@@ -173,9 +173,9 @@ func (b *BoundRowsPlan[T, S]) Find(ctx context.Context, choice RowChoice, values
 	return b.find(ctx, call)
 }
 
-// Count counts unpaged result rows (groups for grouped queries). Supply only
-// the bindings used by the selected WHERE predicates. A locking plan returns
-// ErrOperationDenied.
+// Count counts unpaged result rows, including one row per group. Supply the
+// bindings used by the selected predicates and group keys. A locking plan
+// returns ErrOperationDenied.
 func (b *BoundRowsPlan[T, S]) Count(ctx context.Context, filters []string, values ...Binding) (int64, error) {
 	if err := b.checkSummary(); err != nil {
 		return 0, err

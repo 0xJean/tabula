@@ -158,6 +158,18 @@ The compiler derives schema and RLS requirements from the physical sources for r
 
 The driver boundary consists of `SQLAuthority`, `AuthorizedStatement` and `AuthorizedSession`. At startup a registry supplies a verification credential. Its driver presents a call, its own session pointer and the intended method to `SQLAuthority.Open`. The successful result contains the registered SQL, its observation key, ordered arguments, redaction mask and effects. A shape referencing a secret column conservatively marks every argument for redaction. Execution still uses the driver's normal statement guards, transaction checks and observation settings.
 
+## Expressions and result pagination in v0.4.3
+
+Each typed operation identifies a PostgreSQL overload, its operands, result type, nullability and stability. The compiler traverses the same expression tree in a projection, predicate, assignment value, group key or order term. The role needs `SELECT` on the columns it reads and `UPDATE` on the columns it assigns. For example, setting `rank` from a parameter reads only the predicate columns. Incrementing `rank` also reads its previous value. Role verification checks the function or operator privileges required by the registered statement.
+
+`NullIf(a,b)` permits a volatile scalar on either side. When `a` produces an array, its value must be stable within the statement so that the returned array is the one that was compared. A volatile expression in that first array operand causes a definition error. An array column on the left can be compared with a volatile array expression on the right.
+
+The data page and its exact count have separate statement keys and bind independently from the original inputs. An exact count measures the filtered result after grouping or duplicate elimination and before the cursor, limit and offset. A count can therefore differ from both the number of physical source rows and the number of rows on the current page. Run both statements under a shared transaction snapshot when they must describe exactly the same database state.
+
+A keyset page needs an order that determines a position in the result. For a join that preserves duplicates, the complete primary keys of the participating occurrences can establish that order. Connected verification checks physical keys, inheritance and comparison semantics. A grouped result can instead use its full group tuple, and a distinct result can use the comparable projected tuple. Computed cursor terms need projected values. The verifier must also account for NULL extension on the right side of a left join.
+
+With `DISTINCT ON`, PostgreSQL first chooses a representative for each group according to the declared winner order. Cursor comparison belongs outside that operation. Moving it inside can remove the winning row and cause the same group to appear on the next page with a different representative. A volatile expression or an order with unresolved ties cannot establish which row wins across pages.
+
 ## Release sequence and acceptance
 
 | Version | PostgreSQL capabilities |
@@ -165,8 +177,7 @@ The driver boundary consists of `SQLAuthority`, `AuthorizedStatement` and `Autho
 | v0.4.0 | Single-table typed relations, columns, bound slots, comparisons including `IsDistinct` and `IsNotDistinct`, boolean predicates and grouping. Registered Find, List, Count, opt-in `WithExists`, scalar and grouped aggregates, and affected-count UpdateMany/DeleteMany. Finite assignments, orders and page variants. `RowsSpec.Lock` on filtered and ordered data pages, transaction advisory locks and standalone function calls. Registry snapshots, per-role authorization and verified RLS-only scoping. |
 | v0.4.1 | Explicit inner, left and cross joins, including self-joins, with per-occurrence scope and privilege checks. Typed list and array membership (`In`, `Any`) and pattern matching (`Like`, `ILike`). |
 | v0.4.2 | Physical sources, reusable column mappings, full and partial table-shaped reads, standalone existence checks, exact and first-row reads, and PostgreSQL input types. Each registered shape supplies the grants for its SQL. |
-| Expression patch | Arithmetic, `Coalesce`, conditional `Case` expressions, explicit expression `Cast`, aggregate `FilterWhere` and `COUNT(DISTINCT ...)`. |
-| Write patch | Predicate-based `UpdateMany` with a write-authorized `RETURNING` stream. |
-| Further releases | Correlated and derived subqueries, LATERAL, set operations, read-only and recursive CTEs, windows, typed write sources, conflict handling and modifying CTEs. |
+| v0.4.3 | Typed scalar expressions and assignment values, PostgreSQL text, time, JSON, array and binary functions, expression group and order terms, filtered and ordered aggregates, DISTINCT and DISTINCT ON, and paginated joined reads with exact counts and catalog-verified keysets. |
+| Planned advanced reads and writes | Derived and correlated subqueries, LATERAL, set operations, read-only and recursive CTEs, windows and per-occurrence row locks. Typed inserts, updates and deletes, including joined write sources, conflict handling, write-authorized RETURNING streams and modifying CTEs. |
 
 The read and mutation compilers share projection types, relation identity, deterministic binding, effect declarations and shape registration. A modifying CTE consumes a mutation with a declared RETURNING shape. Each release requires SQL snapshots, ordered parameter/type assertions and definition-error tests. On both drivers, verify row visibility, nulls, affected rows, ordering, locks and errors against PostgreSQL 14–17. Include repeated sort values, an outer join with an out-of-scope match, invoker and definer roles, missing grants and writes embedded in reads.

@@ -252,7 +252,9 @@ Use a read-role connection URL and application-owned SQL. Both Direct adapters a
 
 Use `netip.Addr` for a host address and `netip.Prefix` for CIDR networks or inet values with a subnet mask. An SQL NULL maps to an invalid address or prefix, or to nil for pointer fields. Scanning a subnet into a host address returns an error so the prefix length is preserved.
 
-Set `RegistryConfig.ArrayColumn` to `pqdriver.ArrayColumn` or `pgxdriver.ArrayColumn` for one-dimensional string, int32, int64, float64 and bool slices, including named element types. A nil slice represents SQL NULL and a non-nil empty slice represents an empty PostgreSQL array.
+Set `RegistryConfig.ArrayColumn` to `pqdriver.ArrayColumn` or `pgxdriver.ArrayColumn` for one-dimensional bool, string, int16, int32, int64, uint32, float32 and float64 slices, including named element types. A nil slice represents SQL NULL and a non-nil empty slice represents an empty PostgreSQL array.
+
+Use a pointer for each element when individual array entries may be NULL. For example, declare a field `Ranks []*int32` with the tag `db:",array"` and map it with `ColumnType("ranks", pg.ArrayOfNullable(pg.Int4()))`. The PostgreSQL value `ARRAY[0,NULL]` decodes to a pointer to zero followed by a nil pointer. An input declared with the same mapping preserves these distinctions across executions.
 
 ## 14. Composed view queries and aggregates
 
@@ -393,7 +395,7 @@ Project `CountAll`, `CountOf`, `MinOf`, `MaxOf`, `SumOf` or `AvgOf` to read
 aggregate results through the view. Supply the PostgreSQL result type to
 `SumOf` and `AvgOf`, for example `SumOf(rank.Expr(), Int8())` for an integer field.
 A non-count aggregate needs a nullable destination. Put each free projected
-field in `RowsSpec.GroupBy` when projecting an aggregate. An ungrouped scalar
+field or computed group key in `RowsSpec.GroupBy` when projecting an aggregate. An ungrouped scalar
 aggregate has one result row even on an empty input. Grouped counts count
 groups before the page bounds.
 
@@ -409,6 +411,12 @@ affected, err := change.Bind(session).UpdateMany(ctx, "rank", nil,
 ```
 
 Every mutation requires a fixed typed predicate. Optional predicates narrow it.
+`Assign` also accepts composed scalar values such as
+`Case(When(IsNull(source.Expr()), next.Expr())).Else(source.Expr())`,
+`Plus(source.Expr(), delta.Expr())`, JSONB edits, array removal, `Now()` and
+`GenRandomUUID()`. The target requires UPDATE; only fields actually read by the
+value or predicates require SELECT. [Scalar expressions](EXPRESSIONS.md)
+
 For a versioned table, supply `MutationSpec.Version` with
 `ExpectVersion(revision, expected)`. Updates compare and advance the version,
 and deletes compare it. A stale version can therefore yield zero affected
@@ -424,6 +432,8 @@ contributes its own shape. `TryDefineRows`, `TryDefineUpdateMany` and
 `TryDefineDeleteMany` return declaration errors before publishing the family.
 
 ### Mapped table reads
+
+Use `DefineTableRead(src, "labels", SelectColumns(label.Column()), Select().OrderBy(Asc(label)))` to apply explicit SELECT clauses to the table's Go type. The source supplies FROM and the selected column decoders in projection order.
 
 Map the physical descriptor once, then name an occurrence for each operand. A field resolves against the same table registration each time. Declare a shared catalog default for a named Go type or override a single column when constructing the layout.
 
@@ -478,6 +488,68 @@ Use `pg.JSONB[V]()` or `pg.JSON[V]()` for JSON input. A Go string encodes as a J
 `BindValue` applies the slot's encoder once. Reuse the resulting binding for the data page, count, existence check or another session using the same slot. Built-in arrays and bytes preserve their input buffers. A custom `WithEncoder` function owns the stability of the value it returns. Keep its result independent of later changes to the caller's objects.
 
 A column mapping selects its PostgreSQL type and input encoder. Results use the table field's scan target. For a `time` or `timetz` result, a field scanner can accept `time.Time` from lib/pq and clock text from pgx, including PostgreSQL's `24:00` boundary. An interval field can use `sql.NullString` to receive interval text with either driver.
+
+## Computed groups and aggregate inputs
+
+Use the same expression for a projected group key and its grouping declaration.
+`GroupExpr` stores an expression in the existing `RowsSpec.GroupBy` slice.
+`ReadSelect.GroupBy` accepts expressions directly. Expressions built from group
+keys are also legal; a field inside a computed key is not independently grouped.
+
+```go
+missing := tabula.IsNull(label.Expr())
+hits := tabula.FilterWhere(tabula.CountDistinct(id.Expr()),
+    tabula.Ge(rank.Expr(), floor.Expr()))
+query := tabula.Select(
+    tabula.Project(outMissing, missing),
+    tabula.Project(outCount, hits),
+).From(source).GroupBy(missing).OrderBy(tabula.AscExpr(missing))
+report := tabula.DefineRead(summary, "counts", query)
+rows, err := report.Bind(session).Find(ctx, tabula.BindValue(floor, int32(3)))
+```
+
+The `missing` predicate projects directly into a Go `bool`. For a comparison that can yield SQL UNKNOWN, use a nullable output such as `*bool`. PostgreSQL requires `SELECT` on the columns read by either predicate.
+
+The equivalent single-table grouping is `[]tabula.RowColumn{tabula.GroupExpr(missing)}`.
+`AscExpr` and `DescExpr` accept computed expressions in either read form. Call
+`NullsFirst` or `NullsLast` on a term to override PostgreSQL's direction-dependent
+default. An ordered aggregate consumes its own terms independently of the result
+order:
+
+```go
+names := tabula.AggregateOrder(
+    tabula.StringAgg(label.Expr(), separator.Expr()),
+    tabula.Desc(rank).NullsLast(), tabula.Asc(id),
+)
+matchingNames := tabula.FilterWhere(names, tabula.Ge(rank.Expr(), floor.Expr()))
+```
+
+`DistinctInputs` removes duplicate argument tuples. When combined with an input
+order, every order expression must match an aggregate argument. `CountDistinct`
+ignores NULL. `BoolOr` and `BoolAnd` ignore NULL inputs and return NULL if none
+remain. String aggregation skips NULL values; JSON aggregation retains them as
+JSON null. `JSONAgg(result,value)` selects json or jsonb from the declared result
+type; `JSONBAgg` specifically requires jsonb. All non-count aggregates return SQL
+NULL on empty input. Use nullable destinations accordingly.
+
+`ArrayAgg` requires a supported scalar input and array codec. If the input can be
+NULL, including through a left join, use `ArrayAggAs` with a declared array type
+whose element representation preserves SQL NULL. A NULL aggregate result and an
+array containing a NULL element are different values. A filter does not change
+the declared element nullability.
+
+`ReadSelect.Distinct()` removes duplicate complete projections; its order terms
+must be projected. `DistinctOn(key,...)` chooses one representative per key tuple.
+Its fixed `OrderBy` starts with those keys and includes a complete, repeatable
+winner key. For joined rows include the keys of every occurrence, including both
+aliases of a self join. Neither distinct form accepts row locks.
+
+On a `RowsPlan`, call `CursorFrom(order,lastRow)` to encode the ordering values
+from a decoded result. It respects reordered and partial table projections.
+`AtExpr(expression,value)` and `NullAtExpr(expression)` supply manual boundaries.
+Every keyset term must be projected and repeatable; clocks or volatile values
+cannot determine a stable page boundary. Computed group seeks apply to the grouped
+result, after aggregate evaluation.
 
 ## Explicit joins
 
@@ -554,3 +626,80 @@ row, err := lookup.Bind(session).One(ctx, q.BindValue(key, int64(7)))
 ```
 
 Use `RoutineSet` and `All` for a set of values. Declare `Nullable` and a nullable view column for results that can be SQL NULL. The default function effect requires write authorization. A write call returning one or many results runs under the session's `Returning` policy. A command allowlist for writes rejects its outer `SELECT`. Verify each overload under its executing role. [Role readiness](AUTHORIZATION.md#check-a-role-at-startup)
+
+## Finite lists on explicit reads
+
+Add `WithList` to a `ReadSelect` used by `DefineRead` or `DefineTableRead`.
+The existing fixed query and bounded helpers retain their own keys. For the
+explicit join above, declare both occurrence keys in the list order:
+
+```go
+query := q.Select(
+    q.Project(q.Output(out, "group_id", q.Int8()), groupID.Expr()),
+    q.Project(q.Output(out, "job_id", q.Int8()), jobID.Expr()),
+).From(left).LeftJoin(right, q.Eq(jobGroup.Expr(), groupID.Expr())).
+    WithList(q.ReadListSpec{
+        Optional: []q.RowPredicate{{Name: "selected", When: q.Any(groupID.Expr(), keys.Expr())}},
+        Orders: []q.RowOrder{{Name: "ids", Terms: []q.RowTerm{
+            q.Asc(groupID), q.Asc(jobID).NullsLast(),
+        }}},
+        Pages: q.RowPages{Offset: true, Keyset: true, MaxLimit: 50, MaxOffset: 500},
+        ExactCount: true,
+    })
+plan := q.DefineRead(out, "group_job_pages", query)
+choice := q.RowChoice{Order: "ids", Filters: []string{"selected"}, Page: q.FirstPage, Limit: 20}
+page, total, err := plan.Bind(session).List(ctx, choice, q.BindValue(keys, []int64{1, 3}))
+if err != nil {
+    return err
+}
+if len(page) != 0 {
+    cursor, err := plan.CursorFrom("ids", page[len(page)-1])
+    if err != nil {
+        return err
+    }
+    choice.Page, choice.After = q.AfterPage, cursor
+}
+_ = total
+```
+
+`Page` executes only the data statement. `Count` executes the exact unpaged
+summary and requires only its retained bindings. `List` validates both shapes,
+including original binding identities, before I/O; each driver adapter receives
+its own canonical values. An error returns no partial page or total. The two
+queries and successive pages share a snapshot only when the caller selects an
+appropriate transaction isolation level. Keep scope, filters and bound values
+consistent while traversing a cursor.
+
+A plain joined count omits projection-only expressions. Grouped counts preserve
+GROUP BY and HAVING, and a scalar aggregate still has one result on empty input.
+Whole-result DISTINCT retains the projected values; DISTINCT ON counts all key
+groups, including NULL, without needing the winner's presentation columns.
+Counts omit presentation order, cursor and bounds. An optional predicate on the
+right side remains a WHERE filter and may deliberately remove unmatched rows;
+intrinsic scope and live-row conditions stay inside the left join's ON clause.
+
+Keyset terms must be projected, comparable and repeatable. A bag join needs all
+occurrence keys, a grouped result needs its whole group tuple, and a DISTINCT
+result needs the entire comparable projection. DISTINCT ON uses its group keys
+only after a deterministic winner order has been established. The generated
+seek is outside grouping and distinct selection. Scalar aggregates have no
+keyset continuation. Order-sensitive aggregate cursor expressions must order
+every varying input value, including a varying string delimiter; unresolved
+ties and inexact floating SUM/AVG results cannot establish a boundary. MIN/MAX
+and array aggregates also reject varying inputs whose equal values can retain
+different observable representations, such as numeric scales and floating
+signed zero. These restrictions apply to cursor and winner proofs, including
+nested expressions; ordinary aggregate projections remain legal. Mixed
+directions and explicit NULL placement work for both manual `Cursor` components
+and `CursorFrom`, including partial table projections.
+
+PostgreSQL groups `1.0::numeric` and `1.00::numeric` together. Either scale
+can appear in the output. A cursor ordered by the numeric group key treats
+both values equally. To order distinct spellings across pages, include the
+text conversion itself in the group key.
+
+Offset pages require a named order but do not prove unique boundaries. Eligible
+locking reads can use data pages; exact counts and paired lists require an
+unlocked plan. Every declared key counts toward the plan's budget, including its
+fixed data and bounded forms. Two optional filters, two orders, three page modes
+and an exact count require 28 list shapes per scope plus the fixed forms.

@@ -14,8 +14,8 @@ type Expr[V any] struct {
 	nullable bool
 }
 
-// Pred is a PostgreSQL boolean expression. A nullable predicate follows SQL
-// three-valued logic when it is used in WHERE.
+// Pred is an Expr[bool] and can be passed directly to Project. A nullable
+// predicate projects SQL UNKNOWN as NULL and follows three-valued logic in WHERE.
 type Pred = Expr[bool]
 
 type expressionPart interface {
@@ -30,6 +30,20 @@ type typedCompiler struct {
 	selectCols map[physicalName]map[string]bool
 	hasSecret  bool
 	scopeType  catalogType
+	functions  map[string]bool
+	// New SQL forms include native aggregates in their grant inventory.
+	// Legacy-only forms retain their original snapshots.
+	extendedForm     bool
+	legacyAggregates []aggregateCall
+}
+
+// requireNative records the exact pg_proc identity selected by a closed
+// expression overload, including polymorphic identities when applicable.
+func (c *typedCompiler) requireNative(signature string) {
+	if c.functions == nil {
+		c.functions = make(map[string]bool)
+	}
+	c.functions[signature] = true
 }
 
 func newTypedCompiler(scoped bool, sources ...*occurrence) (*typedCompiler, error) {
