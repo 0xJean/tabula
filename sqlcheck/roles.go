@@ -23,6 +23,8 @@ type Statement struct {
 	SQL      string
 	Access   []PolicyAccess `json:",omitempty"`
 	NoAccess bool           `json:",omitempty"`
+	// Shape carries per-statement types and readiness requirements exported by a typed plan.
+	Shape *tabula.StatementShape `json:",omitempty"`
 }
 
 // RoleStatements maps each execution role to its own named probes.
@@ -35,10 +37,7 @@ func (r RoleStatements) AddDefinitions(role string, defs ...tabula.Definition) {
 	slices.SortFunc(sorted, func(a, b tabula.Definition) int { return strings.Compare(a.Name, b.Name) })
 	for _, d := range sorted {
 		for _, k := range slices.Sorted(maps.Keys(d.Statements)) {
-			r[role] = append(r[role], Statement{
-				Name: d.Name + "/" + k,
-				SQL:  d.Statements[k],
-			})
+			r[role] = append(r[role], definitionStatement(d, k, d.Name+"/"+k))
 		}
 	}
 }
@@ -106,7 +105,7 @@ func VerifyRoleStatements(ctx context.Context, db *sql.DB, work RoleStatements) 
 	var findings []string
 	for role, stmts := range work {
 		for _, s := range stmts {
-			if err := PrepareStatement(ctx, tx, s.SQL, role); err != nil {
+			if err := prepareShape(ctx, tx, s.SQL, role, s.Shape); err != nil {
 				findings = append(findings, fmt.Sprintf("%s/%s: %v", role, s.Name, err))
 			}
 		}

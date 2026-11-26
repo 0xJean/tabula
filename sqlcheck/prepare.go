@@ -20,7 +20,11 @@ import (
 // executing the statement. Runtime function and sequence use needs execution probes.
 // Row-level security policies are not evaluated. Everything is undone through
 // a savepoint, so tx stays usable for the next statement.
-func PrepareStatement(ctx context.Context, tx *sql.Tx, query, role string) (err error) {
+func PrepareStatement(ctx context.Context, tx *sql.Tx, query, role string) error {
+	return prepareShape(ctx, tx, query, role, nil)
+}
+
+func prepareShape(ctx context.Context, tx *sql.Tx, query, role string, shape *tabula.StatementShape) (err error) {
 	if _, ok := pgstmt.DML(query); !ok {
 		return errors.New("expected one preparable data statement")
 	}
@@ -55,6 +59,11 @@ func PrepareStatement(ctx context.Context, tx *sql.Tx, query, role string) (err 
 		`SELECT cardinality(parameter_types) FROM pg_catalog.pg_prepared_statements WHERE name = $1`, name).Scan(&params); err != nil {
 		return err
 	}
+	if shape != nil {
+		if err := checkShapeTypes(ctx, tx, name, query, params, shape); err != nil {
+			return err
+		}
+	}
 	explain := "EXPLAIN EXECUTE " + name
 	if params > 0 {
 		explain += `(` + strings.TrimSuffix(strings.Repeat("NULL,", params), ",") + `)`
@@ -82,7 +91,11 @@ func VerifyStatements(ctx context.Context, db *sql.DB, defs []tabula.Definition,
 	var failures []string
 	for _, d := range defs {
 		for key, query := range d.Statements {
-			if err := PrepareStatement(ctx, tx, query, role); err != nil {
+			var shape *tabula.StatementShape
+			if s, ok := d.StatementShapes[key]; ok {
+				shape = &s
+			}
+			if err := prepareShape(ctx, tx, query, role, shape); err != nil {
 				failures = append(failures, fmt.Sprintf("%s %s: %v", d.Name, key, err))
 			}
 		}

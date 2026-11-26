@@ -14,6 +14,8 @@ Typed SQL now spells out each slot's catalog type, including a column-scoped par
 
 Create each strict registry with `Deny: tabula.DenyLegacySQL`. Pass `reg.SQLAuthority()` to its runner or Direct pool during startup. First migrate string predicates, raw statements and dynamically selected columns to registered plans. Regenerate the role's SQL snapshot after switching because the fixed count, list and grouping statements now include the actual scoped and unscoped live-row variants. The zero capability keeps existing registrations and executions available. Use keyed literals for extended option structs. [Registered execution](AUTHORIZATION.md#registered-execution)
 
+Move one single-table operation at a time to a named row plan. Declare the inputs, optional predicates, assignment sets and allowed pages at startup, then bind the plan to an `AuthorizedSession`. Use `RowsFrom(table, rel)` for global or RLS-enforced relations. For a nonstandard scope or soft-delete Go type, pass its `FieldOf(...).Column()` to declare the exact catalog type. Regenerate the snapshot, run source inventory with the new role assignments and verify the bound statements on the migration-built database. Use keyed `sqlcheck.Statement` and `SQLBinding` literals to accommodate their additional fields. [Row plan examples](COOKBOOK.md#registered-single-table-reads-and-writes)
+
 ## From v0.3.10 to v0.3.11
 
 Existing keyed `TableSpec` declarations continue to use `WriteDefault`, including the `ReadOnly` and `AllowDelete` flags. The signatures of `Define`, `TryDefine` and bound methods are unchanged. Convert positional `TableSpec` literals to keyed fields before upgrading because the struct gains two fields.

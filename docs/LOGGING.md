@@ -33,6 +33,8 @@ reg := tabula.NewRegistry(tabula.RegistryConfig[Scope]{
 })
 ```
 
+A typed row plan reports the registered definition and shape key for each execution. A page and its exact count have separate keys. `RowFilter.Observe` accepts `Quiet()` and `Secret()`. A shape that reads or assigns a secret field redacts its bind values, including the scope and cursor parameters.
+
 ## 2. Switches
 
 | `Level` | What is written |

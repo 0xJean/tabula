@@ -20,8 +20,10 @@ type SQLBinding struct {
 	NoAccess   bool `json:",omitempty"`
 	Variants   []Statement
 	Definition string `json:",omitempty"`
-	Prefix     string `json:",omitempty"`
-	Skip       bool
+	// Plan identifies a registered typed family when the source handle is indirect.
+	Plan   string `json:",omitempty"`
+	Prefix string `json:",omitempty"`
+	Skip   bool
 }
 
 // BindRoles produces a workload from the collected SQL. Missing and stale
@@ -59,7 +61,7 @@ func (inv SQLInventory) BindRolesWithDefinitions(
 		}
 		seen[site.ID] = true
 		if b.Skip {
-			if strings.TrimSpace(site.Exception) == "" || len(b.Roles)+len(b.Access)+len(b.Variants) != 0 || b.NoAccess || b.Definition != "" || b.Prefix != "" {
+			if strings.TrimSpace(site.Exception) == "" || len(b.Roles)+len(b.Access)+len(b.Variants) != 0 || b.NoAccess || b.Definition != "" || b.Plan != "" || b.Prefix != "" {
 				return nil, fmt.Errorf("%s: skipped site requires a reviewed exception and no workload", site.ID)
 			}
 			continue
@@ -90,6 +92,12 @@ func (site SQLSite) bindStatements(b SQLBinding, byName map[string][]tabula.Defi
 	if b.NoAccess && len(b.Access) > 0 {
 		return nil, fmt.Errorf("cannot combine NoAccess with Access")
 	}
+	if site.Kind == "typed_rows" {
+		return site.bindRowPlan(b, byName)
+	}
+	if b.Plan != "" {
+		return nil, fmt.Errorf("binding Plan requires a typed row plan")
+	}
 	registered := site.Kind == "composed_query" || site.Kind == "aggregate"
 	if site.Dynamic && (strings.TrimSpace(site.Exception) == "" || len(b.Variants) == 0) {
 		return nil, fmt.Errorf("dynamic site needs reviewed variants")
@@ -101,7 +109,7 @@ func (site SQLSite) bindStatements(b SQLBinding, byName map[string][]tabula.Defi
 		if len(b.Access) > 0 || b.NoAccess {
 			return nil, fmt.Errorf("supply Access or NoAccess on each variant when using Variants")
 		}
-		if b.Definition != "" || b.Prefix != "" {
+		if b.Definition != "" || b.Plan != "" || b.Prefix != "" {
 			return nil, fmt.Errorf("manual variants cannot also select a definition or prefix")
 		}
 		stmts := slices.Clone(b.Variants)
@@ -152,7 +160,7 @@ func (site SQLSite) expand(d tabula.Definition, b SQLBinding) ([]Statement, erro
 		for key, query := range d.StatementQueries {
 			// Composed variants have a dotted suffix. Scalar registrations can
 			// share an owner string with a user-chosen composed query key.
-			if query != site.QueryKey || query == "" || !strings.HasPrefix(key, query+".") {
+			if _, typed := d.StatementShapes[key]; typed || query != site.QueryKey || query == "" || !strings.HasPrefix(key, query+".") {
 				continue
 			}
 			if strings.HasPrefix(key, b.Prefix) || key == exact {
@@ -165,6 +173,9 @@ func (site SQLSite) expand(d tabula.Definition, b SQLBinding) ([]Statement, erro
 		slices.Sort(keys)
 	case site.QueryKey == "exists":
 		keys = []string{"exists"}
+		if d.StatementQueries["unscoped_exists"] == "exists" {
+			keys = append(keys, "unscoped_exists")
+		}
 	default:
 		op, column, ok := strings.Cut(site.QueryKey, ":")
 		if !ok || column == "" {
