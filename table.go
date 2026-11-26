@@ -108,9 +108,11 @@ type column[T any] struct {
 	secret    bool
 	goType    reflect.Type
 	nullable  bool
-	target    func(*T) any
-	field     func(*T) any
-	wrap      func(any) any
+	// JSON and array codecs require an explicit catalog type for typed plans.
+	needsColumnType bool
+	target          func(*T) any
+	field           func(*T) any
+	wrap            func(any) any
 }
 
 // Definition is one defined table as Registry.Defined lists it.
@@ -324,7 +326,8 @@ func (t *Table[T, K, S]) tagged(f reflect.StructField, index []int, tag string, 
 	return t.add(column[T]{
 		name: name, fieldName: f.Name, role: r, once: options["once"], secret: options["secret"], field: field,
 		goType: f.Type, nullable: networkType(f.Type) || f.Type.Kind() == reflect.Pointer || options["zero"] || options["array"],
-		target: func(row *T) any { return wrap(field(row)) }, wrap: wrap,
+		needsColumnType: options["json"] || options["array"],
+		target:          func(row *T) any { return wrap(field(row)) }, wrap: wrap,
 	}, fail)
 }
 

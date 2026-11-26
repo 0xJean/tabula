@@ -33,6 +33,8 @@ type RowPages struct {
 	MaxLimit, MaxOffset     int64
 }
 
+func (p RowPages) includesUnpaged() bool { return p.Unpaged || !p.Offset && !p.Keyset }
+
 // RowPage selects a registered page form.
 type RowPage uint8
 
@@ -61,14 +63,13 @@ type RowChoice struct {
 type CursorValue struct {
 	field *fieldRef
 	value any
+	err   error
 }
 
 // At supplies one cursor component using the field's input codec.
 func At[V any](field Field[V], value V) CursorValue {
-	if field.kind.encode != nil {
-		return CursorValue{field.ref, field.kind.encode(value)}
-	}
-	return CursorValue{field.ref, value}
+	b := field.kind.id.bind(nil, value)
+	return CursorValue{field: field.ref, value: b.value, err: b.err}
 }
 
 // NullAt supplies a SQL NULL boundary for a nullable order field.
@@ -116,7 +117,7 @@ func newRowOrder(order RowOrder, src rowSource, groups []RowColumn, aggregate, k
 			}) {
 				return nil, fmt.Errorf("tabula: keyset order field %q must be projected", f.name)
 			}
-			o.cursors = append(o.cursors, &typedInput{"@after." + f.name, f.kind})
+			o.cursors = append(o.cursors, &typedInput{name: "@after." + f.name, kind: f.kind})
 		}
 	}
 	if keyset {
@@ -183,14 +184,19 @@ func (o *rowOrdering) afterSQL(c *typedCompiler) (string, error) {
 type rowDataForm struct {
 	order *rowOrdering
 	page  RowPage
+	take  *typedInput
+}
+
+func orderedForm(form, order string) string {
+	if order != "" {
+		return form + ".sort." + order
+	}
+	return form
 }
 
 func dataForm(order string, page RowPage) string {
 	// A runtime request only uses this label as a lookup key.
-	form := "data"
-	if order != "" {
-		form += ".sort." + order
-	}
+	form := orderedForm("data", order)
 	switch page {
 	case Unpaged:
 		return form
@@ -211,7 +217,14 @@ type rowPagePlan struct {
 	limit, offset Slot[int64]
 }
 
-func (p *rowPagePlan) forms() (map[string]rowDataForm, error) {
+func (p *rowPagePlan) checkOrder(name string) error {
+	if (name == "") != (len(p.orders) == 0) || name != "" && p.orders[name] == nil {
+		return fmt.Errorf("tabula: unregistered row order %q", name)
+	}
+	return nil
+}
+
+func (p *rowPagePlan) forms(single singleRead) (map[string]rowDataForm, error) {
 	if p.pages.MaxLimit < 0 || p.pages.MaxOffset < 0 ||
 		(p.pages.Offset || p.pages.Keyset) != (p.pages.MaxLimit > 0) || !p.pages.Offset && p.pages.MaxOffset != 0 {
 		return nil, fmt.Errorf("tabula: paged plans need a positive maximum limit and valid offset bounds")
@@ -226,8 +239,11 @@ func (p *rowPagePlan) forms() (map[string]rowDataForm, error) {
 		orders = []string{""}
 	}
 	for _, name := range orders {
-		add := func(page RowPage) { forms[dataForm(name, page)] = rowDataForm{p.orders[name], page} }
-		if p.pages.Unpaged || !p.pages.Offset && !p.pages.Keyset {
+		add := func(page RowPage) { forms[dataForm(name, page)] = rowDataForm{order: p.orders[name], page: page} }
+		if single.take != nil {
+			forms[orderedForm(single.form(), name)] = rowDataForm{order: p.orders[name], take: single.take}
+		}
+		if p.pages.includesUnpaged() {
 			add(Unpaged)
 		}
 		if p.pages.Offset {
@@ -241,16 +257,16 @@ func (p *rowPagePlan) forms() (map[string]rowDataForm, error) {
 	return forms, nil
 }
 
-func (p rowPagePlan) pageSQL(c *typedCompiler, page RowPage) (string, error) {
-	if page == Unpaged {
-		return "", nil
+func (p rowPagePlan) pageSQL(c *typedCompiler, data rowDataForm) (string, error) {
+	if data.page == Unpaged {
+		return renderSingleLimit(c, data.take)
 	}
 	limit, err := p.limit.input.render(c)
 	if err != nil {
 		return "", err
 	}
 	clause := " LIMIT " + limit
-	if page == OffsetPage {
+	if data.page == OffsetPage {
 		offset, err := p.offset.input.render(c)
 		if err != nil {
 			return "", err

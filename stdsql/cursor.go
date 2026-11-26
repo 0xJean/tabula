@@ -3,6 +3,7 @@ package stdsql
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"sync"
 	"sync/atomic"
 
@@ -68,9 +69,23 @@ func (m *statementLock) each(rows *sql.Rows, decode func(func(...any) error) err
 			return tabula.ErrSessionClosed
 		}
 		if err != nil {
-			return err
+			return callbackReadError(rows, err)
 		}
 		c.count++
 	}
 	return wrapReadOnlyErr(rows.Err())
+}
+
+// An unbounded exact read stops on its second row. Closing the cursor can
+// receive a later PostgreSQL error for the same query.
+func callbackReadError(rows *sql.Rows, err error) error {
+	if errors.Is(err, tabula.ErrMultipleRows) {
+		if closeErr := rows.Close(); closeErr != nil {
+			return wrapReadOnlyErr(closeErr)
+		}
+		if final := rows.Err(); final != nil {
+			return wrapReadOnlyErr(final)
+		}
+	}
+	return err
 }

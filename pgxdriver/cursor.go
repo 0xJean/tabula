@@ -2,6 +2,7 @@ package pgxdriver
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 
@@ -69,9 +70,21 @@ func (m *statementLock) each(rows pgx.Rows, decode func(func(...any) error) erro
 			return tabula.ErrSessionClosed
 		}
 		if err != nil {
-			return err
+			return callbackReadError(rows, err)
 		}
 		c.count++
 	}
 	return directReadError(rows.Err())
+}
+
+// An unbounded exact read stops on its second row. Closing the cursor can
+// receive a later PostgreSQL error for the same query.
+func callbackReadError(rows pgx.Rows, err error) error {
+	if errors.Is(err, tabula.ErrMultipleRows) {
+		rows.Close()
+		if final := rows.Err(); final != nil {
+			return directReadError(final)
+		}
+	}
+	return err
 }

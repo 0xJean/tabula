@@ -55,16 +55,31 @@ func (t catalogType) qualified() string {
 }
 
 func (c *typedCompiler) project(owner *registration, projections []Projection) ([]string, []ShapeField, error) {
-	if owner == nil || len(projections) == 0 || len(projections) != len(owner.def.Columns) {
-		return nil, nil, fmt.Errorf("tabula: projection must cover the output view")
+	return c.projectFields(owner, projections, nil)
+}
+
+func (c *typedCompiler) projectFields(owner *registration, projections []Projection, indexes []int) ([]string, []ShapeField, error) {
+	if owner == nil || len(projections) == 0 {
+		return nil, nil, fmt.Errorf("tabula: a registered output and at least one projected field are required")
+	}
+	width := len(owner.def.Columns)
+	if indexes != nil {
+		width = len(indexes)
+	}
+	if len(projections) != width {
+		return nil, nil, fmt.Errorf("tabula: expected %d projected fields, got %d", width, len(projections))
 	}
 	selects := make([]string, len(projections))
 	fields := make([]ShapeField, len(projections))
 	for i, projection := range projections {
-		if projection.target != owner || projection.index != i || !projection.compatible || projection.part == nil {
+		index := i
+		if indexes != nil {
+			index = indexes[i]
+		}
+		if index < 0 || index >= len(owner.def.Columns) || projection.target != owner || projection.index != index || !projection.compatible || projection.part == nil {
 			return nil, nil, fmt.Errorf("tabula: incompatible projection for output %q at position %d", projection.field.Name, i+1)
 		}
-		c.hasSecret = c.hasSecret || owner.def.Columns[i].Secret
+		c.hasSecret = c.hasSecret || owner.def.Columns[index].Secret
 		part, err := projection.part.render(c)
 		if err != nil {
 			return nil, nil, err

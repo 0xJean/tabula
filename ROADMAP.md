@@ -85,7 +85,7 @@ Design record: [docs/DESIGN-v0.3.1.md](docs/DESIGN-v0.3.1.md).
 
 Tabula v0.4.0 registers single-table reads, aggregates and conditional writes. Each permitted predicate, ordering and page variant has SQL that can be prepared and explained under its assigned role. A registry can require this execution path for selected runners and read-only pools.
 
-The same registry records row locks, transaction advisory locks and calls to declared PostgreSQL functions. Tabula v0.4.1 registers explicit inner, left, cross and self-joins, fixed-list and array membership, and string pattern matches. In v0.4.2 a physical source can derive all its grants from typed plans. Further patches extend expressions, aggregates and multi-table list pagination. [Release sequence](docs/DESIGN-v0.4.md#release-sequence-and-acceptance)
+The same registry records row locks, transaction advisory locks and calls to declared PostgreSQL functions. Tabula v0.4.1 registers explicit inner, left, cross and self-joins, fixed-list and array membership, and string pattern matches. In v0.4.2 a physical source can derive all its grants from typed plans. Reusable table mappings support narrow reads and self-joins. Exact-cardinality, first-row and existence queries register their own bounded forms when requested. Further patches extend expressions, aggregates and multi-table list pagination. [Release sequence](docs/DESIGN-v0.4.md#release-sequence-and-acceptance)
 
 ## v1.0 — stability and ecosystem adapters
 

@@ -138,6 +138,8 @@ behavior directly:
    `TagStatements` opt-in when `pg_stat_statements` cardinality per query shape is tightly
    budgeted.
 
+A mapped column retains the descriptor's secret flag in every registered projection or predicate. The boolean existence check and the data and count statements of a list keep their own observation keys. `ConstraintName(err)` reads a structured diagnostic on demand. Default trace events, metrics and logs omit the constraint name. Enabling raw trace diagnostics can expose it in the database error message.
+
 ## 7. Tests the library keeps
 
 - Logging off: no call reaches the handler.

@@ -2,11 +2,15 @@ package tabula
 
 import "fmt"
 
+func (kind catalogType) compatibleColumn(other catalogType) bool {
+	return sameSQLType(kind, other) && (kind.varcharLength == 0 || other.varcharLength == 0 || kind.varcharLength == other.varcharLength)
+}
+
 // Keep the strongest compatible declaration of a physical column. Slots use
 // the base catalog type independently of optional column modifiers.
 func (col physicalColumn) record(types map[physicalColumn]catalogType, kind catalogType) error {
 	if prior, ok := types[col]; ok {
-		if !sameSQLType(prior, kind) || prior.varcharLength != 0 && kind.varcharLength != 0 && prior.varcharLength != kind.varcharLength {
+		if !prior.compatibleColumn(kind) {
 			return fmt.Errorf("tabula: conflicting PostgreSQL types for %s.%s", col.table.sql(), typedQuote(col.name))
 		}
 		if kind.varcharLength == 0 {

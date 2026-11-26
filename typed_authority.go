@@ -2,6 +2,7 @@ package tabula
 
 import (
 	"context"
+	"fmt"
 	"slices"
 )
 
@@ -150,13 +151,25 @@ func (r *Registry[S]) bindCall(shape *compiledShape, s Session[S], method CallMe
 		if s.Unscoped() {
 			return AuthorizedStatement{}, ErrStatementAuthority
 		}
-		scope = r.scopeValue(s.Scope())
+		kind := shape.layout.scopeType
+		if r.scopeID != nil {
+			scope = kind.snapshot(r.scopeID(s.Scope()))
+		} else {
+			b := kind.bindScope(s.Scope())
+			if b.err != nil {
+				return AuthorizedStatement{}, fmt.Errorf("tabula: encode scope: %w", b.err)
+			}
+			scope = b.value
+		}
 	}
 	args, err := shape.layout.bind(scope, values)
 	if err != nil {
 		return AuthorizedStatement{}, err
 	}
 	if r.arrayArgFn != nil {
+		if shape.layout.scoped && shape.layout.scopeType.element != nil {
+			args[0] = r.arrayArgFn(args[0])
+		}
 		for _, slot := range shape.layout.order {
 			if slot.kind.element != nil {
 				i := shape.layout.positions[slot]

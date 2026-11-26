@@ -14,17 +14,19 @@ type RowsSpec struct {
 	GroupBy []RowColumn
 	Orders  []RowOrder
 	Pages   RowPages
-	// Lock applies to every data page. A locking plan supports Find only
-	// and requires an ungrouped, non-aggregate projection.
+	// Lock applies to every data page and bounded single-row form. It
+	// requires an ungrouped, non-aggregate projection and excludes summaries.
 	Lock RowLock
 	// WithExists registers a boolean existence check for each filter and
 	// scope choice of an unlocked, non-aggregate plan.
 	WithExists bool
 }
 
-// RowsPlan owns the registered read shapes for one output view.
+// RowsPlan owns the registered read shapes for one result descriptor.
 type RowsPlan[T, S any] struct {
-	view       *View[T, S]
+	owner      *descriptor[T, S]
+	indexes    []int
+	single     singleRead
 	family     *rowFamily
 	page       rowPagePlan
 	lock       RowLock
@@ -43,7 +45,32 @@ func DefineRows[T, R, S any](out *View[T, S], name string, src RowSource[R, S], 
 // TryDefineRows registers the complete read plan or returns an error without
 // publishing any shape. The projection covers the view in descriptor order.
 func TryDefineRows[T, R, S any](out *View[T, S], name string, src RowSource[R, S], spec RowsSpec, project ...Projection) (*RowsPlan[T, S], error) {
-	if out == nil || src.owner == nil {
+	return TryDefineRowsWithForms(out, name, src, spec, ReadForms{}, project...)
+}
+
+// DefineRowsWithForms registers a single-table read with the declared bounded
+// single-row forms. It panics on a declaration error.
+func DefineRowsWithForms[T, R, S any](out *View[T, S], name string, src RowSource[R, S], spec RowsSpec, forms ReadForms, project ...Projection) *RowsPlan[T, S] {
+	p, err := TryDefineRowsWithForms(out, name, src, spec, forms, project...)
+	if err != nil {
+		panic(err)
+	}
+	return p
+}
+
+// TryDefineRowsWithForms registers the data, summary and requested bounded
+// forms together. A rejected declaration publishes no shapes.
+func TryDefineRowsWithForms[T, R, S any](out *View[T, S], name string, src RowSource[R, S], spec RowsSpec, forms ReadForms, project ...Projection) (*RowsPlan[T, S], error) {
+	if out == nil {
+		return nil, fmt.Errorf("tabula: a declared output and row source are required")
+	}
+	return compileRowsPlan(&out.descriptor, nil, name, src, spec, forms, project)
+}
+
+func compileRowsPlan[T, R, S any](owner *descriptor[T, S], indexes []int, name string, src RowSource[R, S],
+	spec RowsSpec, policy ReadForms, project []Projection,
+) (*RowsPlan[T, S], error) {
+	if owner == nil || src.owner == nil {
 		return nil, fmt.Errorf("tabula: a declared output and row source are required")
 	}
 	aggregate, err := checkRowGrouping(src.rowSource, project, spec.GroupBy)
@@ -57,7 +84,11 @@ func TryDefineRows[T, R, S any](out *View[T, S], name string, src RowSource[R, S
 	if spec.WithExists && (aggregate || locked) {
 		return nil, fmt.Errorf("tabula: WithExists requires an unlocked, non-aggregate plan")
 	}
-	p := &RowsPlan[T, S]{view: out, lock: spec.Lock, withExists: spec.WithExists,
+	single, err := newSingleRead(policy, len(spec.Orders) > 0, !locked && spec.Pages.includesUnpaged())
+	if err != nil {
+		return nil, err
+	}
+	p := &RowsPlan[T, S]{owner: owner, indexes: slices.Clone(indexes), single: single, lock: spec.Lock, withExists: spec.WithExists,
 		page: rowPagePlan{pages: spec.Pages, orders: make(map[string]*rowOrdering)}}
 	for _, order := range spec.Orders {
 		if p.page.orders[order.Name] != nil {
@@ -69,7 +100,7 @@ func TryDefineRows[T, R, S any](out *View[T, S], name string, src RowSource[R, S
 		}
 		p.page.orders[o.name] = o
 	}
-	forms, err := p.page.forms()
+	forms, err := p.page.forms(single)
 	if err != nil {
 		return nil, err
 	}
@@ -81,7 +112,7 @@ func TryDefineRows[T, R, S any](out *View[T, S], name string, src RowSource[R, S
 		names = append(names, "exists")
 	}
 	names = append(names, slices.Sorted(maps.Keys(forms))...)
-	p.family, err = compileRowFamily(&out.descriptor, name, []rowSource{src.rowSource}, spec.RowFilter, names,
+	p.family, err = compileRowFamily(owner, name, []rowSource{src.rowSource}, spec.RowFilter, names,
 		func(c *typedCompiler, form string, predicates []Pred) (string, StatementShape, error) {
 			if form == "exists" {
 				return renderRowExists(c, src.rowSource, predicates)
@@ -135,7 +166,7 @@ func (p *RowsPlan[T, S]) render(c *typedCompiler, src rowSource, project []Proje
 		selectSQL = `pg_catalog.count(*) AS "count"`
 		fields = []ShapeField{{Name: "count", Type: Int8().id.qualified()}}
 	} else {
-		columns, result, err := c.project(p.view.entry, project)
+		columns, result, err := c.projectFields(p.owner.entry, project, p.indexes)
 		if err != nil {
 			return "", StatementShape{}, err
 		}
@@ -175,7 +206,7 @@ func (p *RowsPlan[T, S]) render(c *typedCompiler, src rowSource, project []Proje
 		if err != nil {
 			return "", StatementShape{}, err
 		}
-		page, err := p.page.pageSQL(c, data.page)
+		page, err := p.page.pageSQL(c, data)
 		if err != nil {
 			return "", StatementShape{}, err
 		}
@@ -218,12 +249,15 @@ func (p *RowsPlan[T, S]) Cursor(order string, values ...CursorValue) (RowCursor,
 	}
 	bindings := make([]Binding, len(values))
 	for i, v := range values {
+		if v.err != nil {
+			return RowCursor{}, fmt.Errorf("tabula: encode cursor component %d: %w", i+1, v.err)
+		}
 		f := o.terms[i].field
 		if v.field == nil || v.field.source != f.source || v.field.name != f.name ||
 			!sameSQLType(v.field.kind, f.kind) || v.value == nil && !f.nullable {
 			return RowCursor{}, fmt.Errorf("tabula: incompatible cursor component %d", i+1)
 		}
-		bindings[i] = Binding{o.cursors[i], v.value}
+		bindings[i] = Binding{input: o.cursors[i], value: v.value}
 	}
 	return RowCursor{o, bindings}, nil
 }

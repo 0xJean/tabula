@@ -26,7 +26,7 @@ The [v0.4 design](docs/DESIGN-v0.4.md) describes typed predicates, per-shape ver
 
 `DefineRows`, `DefineUpdateMany` and `DefineDeleteMany` register the exact statements a single-table plan can execute. The inventory expands those statements for each assigned PostgreSQL role. [Registered row plans](docs/COOKBOOK.md#registered-single-table-reads-and-writes)
 
-Use `DefinePlanSource` for a physical table accessed exclusively through typed plans. A narrow projection can read two columns of a wide table. A conditional update can write a column on which the role has only `UPDATE`. [Minimum grants for typed plans](docs/AUTHORIZATION.md#physical-sources-for-typed-plans)
+Use `DefinePlanSource` for a physical table accessed exclusively through typed plans. Call `MapTable(items).As("i")` to reuse its fields in reads, writes and joins. `DefineTableRows` returns rows of the table's Go type and `DefineExists` registers a standalone boolean query. A narrow read needs grants on its referenced columns. A conditional update can write a column on which the role has only `UPDATE`. [Mapped table example](docs/COOKBOOK.md#mapped-table-reads) and [minimum grants](docs/AUTHORIZATION.md#physical-sources-for-typed-plans)
 
 Set `RowsSpec.Lock` on a filtered or ordered page, or enable `WithExists` on an unlocked plan for a boolean result. Registered transaction advisory locks and PostgreSQL functions also use `plan.Bind(session)`. Each statement identifies its result, session requirements and minimum grants. [Lock and routine examples](docs/COOKBOOK.md#registered-locks-and-functions)
 
@@ -112,6 +112,7 @@ Run `scripts/workspace.sh` from the Tabula repository root to use all local modu
 | Package | Role | Dependencies |
 | --- | --- | --- |
 | `tabula` | Engine: registry, tables, views, composed queries, aggregates, embedded SQL files, sealed sessions, capabilities, errors, logging, tracing/metrics interfaces | standard library only |
+| `tabula/pgtype` | PostgreSQL catalog types and input encoders for typed fields and parameters | standard library only |
 | `tabula/stdsql` | Role-bound `*sql.DB` / `*sql.Tx` `Runner`, `Shared`, `RawSession`, `ScopePolicy`, `Savepoint`, read-only `Direct` pool | standard library only |
 | `tabula/sqlcheck` | Descriptor and catalog snapshots, source SQL & security call-site inventory, role workloads, grant minimization, login-role hygiene and RLS checks | standard library only |
 | `tabula/pqdriver` | `lib/pq` array converters | `github.com/lib/pq` |

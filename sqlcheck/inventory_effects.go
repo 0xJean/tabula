@@ -39,8 +39,11 @@ func typedPlanSiteKind(receiver, method string) string {
 	return ""
 }
 
-func (site SQLSite) matchesTypedShape(key, plan string, shape tabula.StatementShape) bool {
+func (site SQLSite) matchesTypedShape(key, plan string, shape tabula.StatementShape, d tabula.Definition) bool {
 	if site.Kind == "typed_rows" {
+		if singleRowMethod(site.Method) {
+			return matchesSingleRow(key, plan, site.Method, shape, d)
+		}
 		return matchesRowMethod(key, plan, site.Method)
 	}
 	switch effectPlanReceiver(site.Receiver, site.Method) {

@@ -6,9 +6,13 @@ Start with the section for the version you are adopting. The integration guide l
 
 For tables used exclusively by typed plans, replace `Define(reg, spec)` with `DefinePlanSource(reg, spec)`. Use `TryDefinePlanSource` when startup should return a declaration error. Its successful result is already registered. Supply a schema-qualified physical name and declare the scope. A tagged scope field selects `ByScopeColumn` by default.
 
-Move descriptor-wide ordering, grouping and aggregates onto the relevant plans. Regenerate the statement snapshot and bind the selected plans to their roles. Mutation statements belong to the source table. Read statements, including joins, belong to their output view. A source used only for projections has no SQL section of its own. Continue using `Define` for tables with callers of `table.Bind(session)` CRUD methods. [Minimum-grant example](AUTHORIZATION.md#physical-sources-for-typed-plans)
+Move descriptor-wide ordering, grouping and aggregates onto the relevant plans. Regenerate the statement snapshot and bind the selected plans to their roles. Table-shaped reads, standalone existence checks and mutations belong to their physical table. View projections and joins belong to their output view. A physical source referenced only from a view can have an empty statement section. Continue using `Define` for tables with callers of `table.Bind(session)` CRUD methods. [Minimum-grant example](AUTHORIZATION.md#physical-sources-for-typed-plans)
 
 For a table made entirely of primary-key columns, declare a plan source and set `RowsSpec.Lock` on the read plan. Its SQL snapshot contains the locking read and avoids a fixed update with an empty assignment list.
+
+Existing view projections and unpaged, unlocked data reads can use `One` and `MaybeOne` on their registered data SQL. Enable `ReadForms{Exact: true}` to limit exact reads to two server rows. For a server limit of one, declare `OrderedFirst` with an order or explicitly choose `UnorderedFirst` for an unordered query. `First` and `MaybeFirst` share that shape. A locking exact read requires the explicit bounded form and can acquire two row locks. Refresh snapshots and role checks when opting into new shapes.
+
+Use keyed `RegistryConfig` literals when upgrading positional struct literals. `DefaultTypes` applies only within its registry. A `ColumnType` override on a particular layout takes precedence. These declarations select catalog identities and input encoders. Keep the field's scanner or registered converter for decoding custom values. The `pgtype` package supplies common catalog declarations including `pgtype.Varchar()`, `pgtype.Varchar(n)` and `pgtype.JSONB[V]()`. [Mapped table reads](COOKBOOK.md#mapped-table-reads)
 
 ## From v0.4.0 to v0.4.1
 

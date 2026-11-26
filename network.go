@@ -6,6 +6,8 @@ import (
 	"net/netip"
 	"reflect"
 	"strings"
+
+	"github.com/0xJean/tabula/internal/pgvalue"
 )
 
 type network interface{ netip.Addr | netip.Prefix }
@@ -86,18 +88,5 @@ func (v networkValue[T]) Value() (driver.Value, error) {
 	if p == nil {
 		return nil, nil
 	}
-	switch n := any(*p).(type) {
-	case netip.Addr:
-		if n.Zone() != "" {
-			return nil, fmt.Errorf("tabula: PostgreSQL inet cannot store an IPv6 zone")
-		}
-		if n.IsValid() {
-			return n.String(), nil
-		}
-	case netip.Prefix:
-		if n.IsValid() {
-			return n.String(), nil
-		}
-	}
-	return nil, nil
+	return pgvalue.Network(*p)
 }

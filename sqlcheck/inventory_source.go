@@ -184,7 +184,8 @@ func (s inventorySource) definitionName(expr ast.Expr) string {
 		case *ast.SelectorExpr:
 			if sel := s.info.Selections[callee]; sel != nil {
 				_, declared := methodReceiverNames(sel)
-				if declared == tabulaPkgPath+".Table" && callee.Sel.Name == "Bind" {
+				if declared == tabulaPkgPath+".Table" && callee.Sel.Name == "Bind" ||
+					declared == tabulaPkgPath+".TableLayout" && callee.Sel.Name == "As" {
 					return s.definitionName(methodReceiver(callee, sel, e))
 				}
 				return ""
@@ -195,14 +196,18 @@ func (s inventorySource) definitionName(expr ast.Expr) string {
 		if !ok || fn.Pkg() == nil || fn.Pkg().Path() != tabulaPkgPath {
 			return ""
 		}
-		if fn.Name() == "RowsFrom" && len(e.Args) >= 2 {
+		switch fn.Name() {
+		case "RowsFrom", "MapTable", "TryMapTable":
+			if len(e.Args) == 0 {
+				return ""
+			}
 			return s.definitionName(e.Args[0])
 		}
 		if len(e.Args) != 2 {
 			return ""
 		}
 		switch fn.Name() {
-		case "Define", "DefineView", "DefinePlanSource", "TryDefinePlanSource":
+		case "Define", "TryDefine", "DefineView", "DefinePlanSource", "TryDefinePlanSource":
 		default:
 			return ""
 		}

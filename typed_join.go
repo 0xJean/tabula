@@ -56,6 +56,7 @@ type ReadSelect struct {
 	order         []RowTerm
 	lock          RowLock
 	unscoped      bool
+	forms         ReadForms
 }
 
 // Select projects expressions into the declared output view in field order.
@@ -111,6 +112,13 @@ func (q ReadSelect) OrderBy(terms ...RowTerm) ReadSelect {
 	return q
 }
 
+// WithForms selects the permitted bounded reads. OrderedFirst requires
+// OrderBy and UnorderedFirst requires an unordered SELECT.
+func (q ReadSelect) WithForms(forms ReadForms) ReadSelect {
+	q.forms = forms
+	return q
+}
+
 // Lock applies a row lock to one eligible occurrence of an ungrouped read.
 func (q ReadSelect) Lock(lock RowLock) ReadSelect {
 	q.lock = lock
@@ -128,6 +136,7 @@ func (q ReadSelect) AllowUnscoped() ReadSelect {
 type ReadPlan[T, S any] struct {
 	view   *View[T, S]
 	family *rowFamily
+	single singleRead
 }
 
 // DefineRead registers an explicit typed SELECT. It panics on a declaration error.
@@ -160,22 +169,37 @@ func TryDefineRead[T, S any](out *View[T, S], name string, query ReadSelect, obs
 		}
 		if live := right.liveValue.input; live != nil {
 			// Every occurrence can carry its own private soft-delete value.
-			right.liveValue.input = &typedInput{"@live." + strconv.Itoa(i+1), live.kind}
+			right.liveValue.input = &typedInput{name: "@live." + strconv.Itoa(i+1), kind: live.kind}
 		}
 		sources = append(sources, right)
 	}
-	family, err := compileRowFamily(&out.descriptor, name, sources, RowFilter{AllowUnscoped: query.unscoped, Observe: observe}, []string{"data"},
-		func(c *typedCompiler, _ string, _ []Pred) (string, StatementShape, error) {
-			return query.render(c, out.entry, sources)
+	single, err := newSingleRead(query.forms, len(query.order) > 0, !query.lock.declared)
+	if err != nil {
+		return nil, err
+	}
+	forms := []string{"data"}
+	if single.take != nil {
+		forms = append(forms, single.form())
+	}
+	family, err := compileRowFamily(&out.descriptor, name, sources, RowFilter{AllowUnscoped: query.unscoped, Observe: observe}, forms,
+		func(c *typedCompiler, form string, _ []Pred) (string, StatementShape, error) {
+			var take *typedInput
+			if form != "data" {
+				take = single.take
+			}
+			return query.render(c, out.entry, sources, take)
 		})
 	if err != nil {
 		return nil, err
 	}
-	return &ReadPlan[T, S]{out, family}, nil
+	return &ReadPlan[T, S]{out, family, single}, nil
 }
 
 // BoundReadPlan runs an explicit SELECT through the registry-authorized session.
-type BoundReadPlan[T, S any] struct{ rowExecution[T, S] }
+type BoundReadPlan[T, S any] struct {
+	rowExecution[T, S]
+	single singleRead
+}
 
 // Bind attaches the plan to a session from its registry.
 func (p *ReadPlan[T, S]) Bind(s Session[S]) *BoundReadPlan[T, S] {
@@ -184,7 +208,7 @@ func (p *ReadPlan[T, S]) Bind(s Session[S]) *BoundReadPlan[T, S] {
 		b.bindErr = ErrStatementAuthority
 		return &b
 	}
-	return &BoundReadPlan[T, S]{bindRowExecution(&p.view.descriptor, p.family, s)}
+	return &BoundReadPlan[T, S]{bindRowExecution(&p.view.descriptor, p.family, s), p.single}
 }
 
 // Find decodes all matching result rows. Each caller input must be bound once.

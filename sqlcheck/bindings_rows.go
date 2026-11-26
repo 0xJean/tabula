@@ -59,7 +59,7 @@ func (site SQLSite) bindRowPlan(b SQLBinding, defs map[string][]tabula.Definitio
 		if prefix != "" && key != prefix && !strings.HasPrefix(key, prefix+".") {
 			continue
 		}
-		if !site.matchesTypedShape(key, plan, shape) {
+		if !site.matchesTypedShape(key, plan, shape, d) {
 			continue
 		}
 		selected[key] = true
@@ -147,20 +147,22 @@ func matchesRowMethod(key, plan, method string) bool {
 	}
 	_, rest, _ = strings.Cut(rest, ".")
 	form, _, _ := strings.Cut(rest, ".")
-	switch method {
+	switch strings.TrimPrefix(method, "Try") {
 	case "Count":
 		return form == "count"
-	case "Find", "DefineRead", "TryDefineRead":
+	case "Find":
 		return form == "data"
-	case "Exists":
+	case "DefineRead":
+		return form == "data" || boundedRowForm(form)
+	case "Exists", "DefineExists":
 		return form == "exists"
-	case "DefineRows", "TryDefineRows":
-		return form == "count" || form == "data" || form == "exists"
+	case "DefineRows", "DefineRowsWithForms", "DefineTableRows":
+		return form == "count" || form == "data" || form == "exists" || boundedRowForm(form)
 	case "List":
 		return form == "count" || form == "data"
-	case "UpdateMany", "DefineUpdateMany", "TryDefineUpdateMany":
+	case "UpdateMany", "DefineUpdateMany":
 		return form == "set"
-	case "DeleteMany", "DefineDeleteMany", "TryDefineDeleteMany":
+	case "DeleteMany", "DefineDeleteMany":
 		return form == "delete"
 	default:
 		return false

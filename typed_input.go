@@ -14,8 +14,8 @@ import (
 // PGType pairs a Go value type with an exact PostgreSQL catalog type.
 // Its zero value cannot be used to declare a column or parameter.
 type PGType[V any] struct {
+	_        [0]func(V) // keep distinct Go representations non-convertible
 	id       catalogType
-	encode   func(V) any
 	nullable bool
 }
 
@@ -27,7 +27,12 @@ type catalogType struct {
 	goType        reflect.Type
 	varcharLength int32
 	element       *catalogType
+	encoder       *inputEncoder
 }
+
+// Identity belongs to the declaration. Closures with the same program
+// counter may capture different values.
+type inputEncoder struct{ encode func(any) (any, error) }
 
 // PostgreSQL identifiers are quoted one component at a time. Reject names
 // the server would truncate, even when two such inputs would print differently.
@@ -56,7 +61,32 @@ func CatalogType[V any](schema, name string, encode func(V) any) PGType[V] {
 	default:
 		nullable = nullable || typ != reflect.TypeFor[time.Time]()
 	}
-	return PGType[V]{id: catalogType{schema: schema, name: name, goType: typ}, encode: encode, nullable: nullable}
+	t := PGType[V]{id: catalogType{schema: schema, name: name, goType: typ}, nullable: nullable}
+	if encode != nil {
+		return t.WithEncoder(func(v V) (any, error) { return encode(v), nil })
+	}
+	return t
+}
+
+// WithEncoder returns this catalog type with a replacement input encoder.
+// BindValue runs the encoder once. A binding retains its error until an
+// operation uses it. The encoder owns the stability of custom values it
+// returns. Field decoding continues to use the descriptor's scanner. Joined
+// scope columns sharing a parameter must reuse the same encoder declaration
+// unless RegistryConfig.ScopeID supplies the session's scope argument.
+func (t PGType[V]) WithEncoder(encode func(V) (any, error)) PGType[V] {
+	if t.id.goType == nil || encode == nil {
+		panic("tabula.PGType.WithEncoder: a declared type and an encoder are required")
+	}
+	t.id.encoder = &inputEncoder{encode: func(value any) (any, error) {
+		if value == nil {
+			var zero V
+			return encode(zero)
+		}
+		return encode(value.(V))
+	}}
+	t.nullable = true
+	return t
 }
 
 // Bool declares PostgreSQL boolean.
@@ -109,8 +139,9 @@ type Slot[V any] struct {
 }
 
 type typedInput struct {
-	name string
-	kind catalogType
+	name   string
+	kind   catalogType
+	secret bool
 }
 
 // Input declares one named input at definition time.
@@ -118,21 +149,22 @@ func Input[V any](name string, kind PGType[V]) Slot[V] {
 	if !typedIdent(name) || kind.id.goType == nil {
 		panic("tabula.Input: a named input and a PostgreSQL type are required")
 	}
-	return Slot[V]{input: &typedInput{name, kind.id}, kind: kind}
+	return Slot[V]{input: &typedInput{name: name, kind: kind.id}, kind: kind}
 }
 
-// Binding supplies the value of one Slot to an execution.
+// Binding supplies the canonical value of one Slot. It can be reused across
+// statements and sessions. Byte and array inputs snapshot their slice
+// containers. Custom encoders own the stability of other returned values.
 type Binding struct {
 	input *typedInput
 	value any
+	err   error
 }
 
-// BindValue pairs an input with a value of its declared Go type.
+// BindValue pairs an input with a value of its declared Go type, running its
+// encoder once. An encoding error is reported before a statement uses it.
 func BindValue[V any](slot Slot[V], value V) Binding {
-	if slot.kind.encode != nil {
-		return Binding{slot.input, slot.kind.encode(value)}
-	}
-	return Binding{slot.input, value}
+	return slot.kind.id.bind(slot.input, value)
 }
 
 // parameterLayout is built in emitted SQL order and frozen with a shape.
@@ -140,6 +172,7 @@ func BindValue[V any](slot Slot[V], value V) Binding {
 // to the scope slot and can never be supplied by a caller binding.
 type parameterLayout struct {
 	scoped    bool
+	scopeType catalogType
 	positions map[*typedInput]int
 	names     map[string]*typedInput
 	order     []*typedInput
@@ -173,7 +206,7 @@ func (l *parameterLayout) parameter(input *typedInput) (string, error) {
 }
 
 func (l *parameterLayout) frozen() *parameterLayout {
-	return &parameterLayout{scoped: l.scoped, positions: maps.Clone(l.positions), order: slices.Clone(l.order)}
+	return &parameterLayout{scoped: l.scoped, scopeType: l.scopeType, positions: maps.Clone(l.positions), order: slices.Clone(l.order)}
 }
 
 func (l *parameterLayout) bind(scope any, bindings []Binding) ([]any, error) {
@@ -194,8 +227,11 @@ func (l *parameterLayout) bind(scope any, bindings []Binding) ([]any, error) {
 		if seen[index] {
 			return nil, fmt.Errorf("tabula: duplicate binding for %q", b.input.name)
 		}
+		if b.err != nil {
+			return nil, fmt.Errorf("tabula: encode input %q: %w", b.input.name, b.err)
+		}
 		seen[index] = true
-		args[index] = b.value
+		args[index] = b.input.kind.snapshot(b.value)
 	}
 	for _, input := range l.order {
 		if !seen[l.positions[input]] {
