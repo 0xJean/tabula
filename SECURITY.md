@@ -14,6 +14,8 @@ Send the following details to the maintainers. [Report a vulnerability](https://
 
 `DenyLegacySQL` rejects SQL text and raw transaction entry on a runner carrying the registry's credential. A statement must originate from a registered shape and match the driver method and receiving session. Public observation metadata and SQL snapshots grant no execution authority. Configure PostgreSQL privileges and row policies for the same role. [Registered execution](docs/AUTHORIZATION.md#registered-execution)
 
+Explicit joined reads apply each occurrence's declared scope and live-row policy. A column-scoped right operand of a left join receives its scope predicate in `ON`. Each `ByRLS` source contributes its physical relation to the role's ENABLE/FORCE checks. An unscoped form of a column-scoped query requires an explicit declaration and an unscoped session.
+
 ## Security Design Guarantees
 
 - Registered physical row locks require writable transactions. Advisory locks require explicit transactions. Direct rejects both lock effects and function calls declared writable. Read declarations require a reviewed function body and a matching catalog contract. The executing role, server transaction mode and session guards apply to the call. [Role verification](docs/AUTHORIZATION.md#check-a-role-at-startup)

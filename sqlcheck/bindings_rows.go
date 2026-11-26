@@ -150,7 +150,7 @@ func matchesRowMethod(key, plan, method string) bool {
 	switch method {
 	case "Count":
 		return form == "count"
-	case "Find":
+	case "Find", "DefineRead", "TryDefineRead":
 		return form == "data"
 	case "Exists":
 		return form == "exists"

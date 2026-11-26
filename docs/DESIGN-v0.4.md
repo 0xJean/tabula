@@ -2,11 +2,11 @@
 
 **Design for the v0.4 series.** A caller should be able to express a whole data statement in Go, including an explicit join, and inspect the exact PostgreSQL statement that will run. A query owns its result shape, inputs, permitted alternatives and authorization metadata. The registry and session execute it. Common use cases include multitable reads, grouped reports, work selection with row locks, coordination with transaction advisory locks, and writes to append-only audit tables.
 
-This proposes one change to the design principles. A caller may specify both sides, the kind and the predicate of a join as typed operands. Tabula may render that join. Relations in struct tags, automatic path selection, preloading, lazy loading and DDL generation remain outside the proposal. The implementation updates the join rule in the contributor guide, design principles, README and roadmap together. [Current design](DESIGN.md) · [Contributor constraints](../AGENTS.md)
+A caller specifies both sides, the kind and the predicate of an inner or left join as typed operands. A cross join explicitly requests the product of its visible sources. The compiler renders the declared tree. The design excludes relations in struct tags, automatic path selection, preloading, lazy loading and DDL generation. [Current design](DESIGN.md) · [Contributor constraints](../AGENTS.md)
 
 ## An explicit join from declaration to execution
 
-The v0.4.0 foundation supports single-table operations. This example illustrates the same types extended by the subsequent explicit-join release. The proposed public types and constructors live in the root module. In the sketches, `q` aliases `github.com/0xJean/tabula`. `groups` and `jobs` are existing table descriptors with a scope column. `summaries` is an existing `View[Summary, S]` with two non-null `int64` result fields. The caller wants groups with at least a given number of jobs, including empty groups when the minimum is zero.
+The v0.4.1 join API extends the single-table types introduced in v0.4.0. In the examples, `q` aliases `github.com/0xJean/tabula`. `groups` and `jobs` are table descriptors with a scope column. `summaries` is a `View[Summary, ScopeID]` with two non-null `int64` fields. The query returns groups with at least a given number of jobs, including empty groups when the minimum is zero.
 
 ```go
 g := q.FromTable(groups, "g", q.ByScopeColumn())
@@ -16,33 +16,36 @@ jobID := q.FieldOf(j, "id", q.Int8())
 jobGroup := q.FieldOf(j, "group_id", q.Int8())
 minimum := q.Input("minimum", q.Int8())
 jobCount := q.CountOf(jobID.Expr())
+scopeType := q.CatalogType[ScopeID]("pg_catalog", "int8", nil)
+left := q.RowsFrom(groups, g, q.FieldOf(g, "scope_id", scopeType).Column())
+right := q.RowsFrom(jobs, j, q.FieldOf(j, "scope_id", scopeType).Column())
 
 query := q.DefineRead(summaries, "groups_by_size",
     q.Select(
         q.Project(q.Output(summaries, "group_id", q.Int8()), groupID.Expr()),
         q.Project(q.Output(summaries, "job_count", q.Int8()), jobCount),
-    ).From(g).
-        LeftJoin(j, q.Eq(groupID.Expr(), jobGroup.Expr())).
+    ).From(left).
+        LeftJoin(right, q.Eq(groupID.Expr(), jobGroup.Expr())).
         GroupBy(groupID.Expr()).
         Having(q.Ge(jobCount, minimum.Expr())).
-        OrderBy(q.Asc(groupID.Expr())),
+        OrderBy(q.Asc(groupID)),
 )
 
 // In a runner callback.
 rows, err := query.Bind(session).Find(ctx, q.BindValue(minimum, int64(2)))
 ```
 
-In this snapshot both scope columns are PostgreSQL `bigint`. The verified session supplies `$1` and `minimum` supplies `$2`. Counting the right-hand ID gives zero for an unmatched group. Moving the right-hand scope condition to the outer `WHERE` would lose that group.
+In this snapshot both scope columns use the named Go type `ScopeID` and PostgreSQL `bigint`. The verified session supplies `$1` and `minimum` supplies `$2`. Counting the right-hand ID gives zero for an unmatched group. Moving the right-hand scope condition to the outer `WHERE` would lose that group.
 
 ```sql
-SELECT "g"."id" AS "group_id", count("j"."id") AS "job_count"
+SELECT "g"."id" AS "group_id", pg_catalog.count("j"."id") AS "job_count"
 FROM "app"."groups" AS "g"
 LEFT JOIN "app"."jobs" AS "j"
   ON ("g"."id" = "j"."group_id") AND ("j"."scope_id" = CAST($1 AS "pg_catalog"."int8"))
 WHERE ("g"."scope_id" = CAST($1 AS "pg_catalog"."int8"))
 GROUP BY "g"."id"
-HAVING (count("j"."id") >= CAST($2 AS "pg_catalog"."int8"))
-ORDER BY "g"."id" ASC
+HAVING (pg_catalog.count("j"."id") >= CAST($2 AS "pg_catalog"."int8"))
+ORDER BY "g"."id" ASC NULLS LAST
 ```
 
 When the database exclusively enforces row scope, declare the physical table with the RLS strategy. For example, `j := q.FromTable(jobs, "j", q.ByRLS())` can use an explicit request key as its only parameter. The registered SQL for that declaration is:
@@ -95,7 +98,7 @@ ranked := q.NamedRows("ranked", rankedJobsView)
 idOut := q.Output(rankedJobsView, "job_id", q.Int8())
 posOut := q.Output(rankedJobsView, "position", q.Int8())
 rank := q.Over(q.RowNumber(), q.Window().
-    PartitionBy(jobGroup.Expr()).OrderBy(q.Asc(jobID.Expr())))
+    PartitionBy(jobGroup.Expr()).OrderBy(q.Asc(jobID)))
 body := q.Select(q.Project(idOut, jobID.Expr()), q.Project(posOut, rank)).From(j)
 r := q.FromNamed(ranked, "r")
 first := q.Input("first", q.Int8())

@@ -81,7 +81,7 @@ func TryDefineRows[T, R, S any](out *View[T, S], name string, src RowSource[R, S
 		names = append(names, "exists")
 	}
 	names = append(names, slices.Sorted(maps.Keys(forms))...)
-	p.family, err = compileRowFamily(&out.descriptor, name, src.rowSource, spec.RowFilter, names,
+	p.family, err = compileRowFamily(&out.descriptor, name, []rowSource{src.rowSource}, spec.RowFilter, names,
 		func(c *typedCompiler, form string, predicates []Pred) (string, StatementShape, error) {
 			if form == "exists" {
 				return renderRowExists(c, src.rowSource, predicates)

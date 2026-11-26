@@ -37,6 +37,8 @@ An absent role returns one role finding. Absent objects and missing grants appea
 
 ## Registered execution
 
+For a `DefineRead` plan, the inventory records each physical relation and the columns used in its projections, joins, filters, groups and ordering. Two aliases of the same table contribute one combined grant set. A source that contributes rows without a referenced column requires SELECT on any column. Every `ByRLS` relation retains its own ENABLE/FORCE requirement. Include unmatched outer rows and missing grants when exercising the plan under its assigned role. [Explicit joins](COOKBOOK.md#explicit-joins)
+
 Enable `DenyLegacySQL` on a registry and pass its verification credential to each runner serving the corresponding role.
 
 ```go

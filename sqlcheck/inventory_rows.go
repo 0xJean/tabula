@@ -8,7 +8,7 @@ import (
 
 func rowDeclaration(name string) bool {
 	switch name {
-	case "DefineRows", "TryDefineRows", "DefineUpdateMany", "TryDefineUpdateMany", "DefineDeleteMany", "TryDefineDeleteMany":
+	case "DefineRows", "TryDefineRows", "DefineRead", "TryDefineRead", "DefineUpdateMany", "TryDefineUpdateMany", "DefineDeleteMany", "TryDefineDeleteMany":
 		return true
 	}
 	return false
@@ -18,6 +18,8 @@ func rowExecutionMethod(recv, method string) bool {
 	switch recv {
 	case tabulaPkgPath + ".BoundRowsPlan":
 		return method == "Count" || method == "Exists" || method == "Find" || method == "List"
+	case tabulaPkgPath + ".BoundReadPlan":
+		return method == "Find"
 	case tabulaPkgPath + ".BoundMutationPlan":
 		return method == "UpdateMany" || method == "DeleteMany"
 	}
@@ -59,7 +61,7 @@ func (s inventorySource) rowPlan(expr ast.Expr, depth int) (definition, key stri
 			if sel := s.info.Selections[selector]; sel != nil {
 				_, recv := methodReceiverNames(sel)
 				switch recv {
-				case tabulaPkgPath + ".RowsPlan", tabulaPkgPath + ".MutationPlan", tabulaPkgPath + ".RoutinePlan", tabulaPkgPath + ".AdvisoryLockPlan":
+				case tabulaPkgPath + ".RowsPlan", tabulaPkgPath + ".ReadPlan", tabulaPkgPath + ".MutationPlan", tabulaPkgPath + ".RoutinePlan", tabulaPkgPath + ".AdvisoryLockPlan":
 					return s.rowPlan(methodReceiver(selector, sel, e), depth+1)
 				}
 			}

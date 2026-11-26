@@ -164,6 +164,16 @@ func numericAggregate[V, R any](fn string, f Expr[V], result PGType[R]) Expr[R] 
 // projection cannot read an ungrouped field through a comparison.
 func checkRowExpr(p expressionPart, visit func(expressionPart) error) error {
 	switch v := p.(type) {
+	case membership:
+		if err := checkRowExpr(v.value, visit); err != nil {
+			return err
+		}
+		for _, member := range v.members {
+			if err := checkRowExpr(member, visit); err != nil {
+				return err
+			}
+		}
+		return nil
 	case comparison:
 		if err := checkRowExpr(v.left, visit); err != nil {
 			return err
