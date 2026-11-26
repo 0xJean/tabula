@@ -3,7 +3,7 @@ module github.com/0xJean/tabula/benchmarks
 go 1.26.0
 
 require (
-	github.com/0xJean/tabula v0.3.11
+	github.com/0xJean/tabula v0.4.0
 	github.com/jackc/pgx/v5 v5.13.0
 	github.com/jmoiron/sqlx v1.4.0
 	gorm.io/driver/postgres v1.6.3
