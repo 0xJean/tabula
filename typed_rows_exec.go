@@ -188,9 +188,9 @@ func (b *BoundRowsPlan[T, S]) Exists(ctx context.Context, filters []string, valu
 	return found && err == nil, err
 }
 
-// List returns a data page and the exact count before pagination. Both
-// registered calls and all bindings are validated before the first execution.
-// A locking plan returns ErrOperationDenied.
+// List returns a data page and the exact count before pagination. The two
+// statements bind the inputs they need from the supplied values. Both are
+// validated before the first execution. A locking plan returns ErrOperationDenied.
 func (b *BoundRowsPlan[T, S]) List(ctx context.Context, choice RowChoice, values ...Binding) ([]T, int64, error) {
 	if err := b.checkSummary(); err != nil {
 		return nil, 0, err
@@ -204,13 +204,14 @@ func (b *BoundRowsPlan[T, S]) List(ctx context.Context, choice RowChoice, values
 		return nil, 0, err
 	}
 	countValues := make([]Binding, 0, len(count.layout.order))
-	for _, in := range count.layout.order {
-		position, ok := data.shape.layout.positions[in]
-		if !ok {
-			return nil, 0, fmt.Errorf("tabula: count input %q missing from data shape", in.name)
+	// data.args already contains driver values. Start from the original
+	// bindings so each statement's array adapter receives the Go slice.
+	for _, value := range values {
+		if _, used := count.layout.positions[value.input]; used {
+			countValues = append(countValues, value)
 		}
-		countValues = append(countValues, Binding{in, data.args[position]})
 	}
+	countValues = append(countValues, b.family.live...)
 	call, err := b.bindShape(count, CallScan, countValues)
 	if err != nil {
 		return nil, 0, err

@@ -417,9 +417,10 @@ func (b *BoundRowsPlan[T, S]) Find(ctx context.Context, choice RowChoice, values
     Find returns the selected data page. It executes one registered statement.
 
 func (b *BoundRowsPlan[T, S]) List(ctx context.Context, choice RowChoice, values ...Binding) ([]T, int64, error)
-    List returns a data page and the exact count before pagination. Both
-    registered calls and all bindings are validated before the first execution.
-    A locking plan returns ErrOperationDenied.
+    List returns a data page and the exact count before pagination.
+    The two statements bind the inputs they need from the supplied values.
+    Both are validated before the first execution. A locking plan returns
+    ErrOperationDenied.
 
 type CallMethod uint8
     CallMethod is the driver operation authorized for one execution.

@@ -6,7 +6,7 @@ Start with the section for the version you are adopting. The integration guide l
 
 Declare one `FromTable` occurrence per alias. Pass it to `Select(...).From(...)` or a join, or use `RowsFrom` to specify a custom catalog type for a scope or soft-delete column. Declare a nullable view field for a projected column on the right of a left join. Bind the resulting `DefineRead` plan to a session and execute `Find`. Rebuild the role snapshot and run readiness and statement verification for the new shapes. [Explicit joins](COOKBOOK.md#explicit-joins)
 
-Use `In(column, first, rest...)` when the number of operands is known at declaration. For a list of any length, use `Any(column, slot.Expr())` with an `ArrayOf` slot. Configure the registry's `ArrayArg` for the driver when it needs an array codec. `Like` and `ILike` preserve PostgreSQL pattern syntax, including wildcards in a bound pattern.
+Use `In(column, first, rest...)` when the number of operands is known at declaration. For a list of any length, use `Any(column, slot.Expr())` with an `ArrayOf` slot. Configure the registry's `ArrayArg` for the driver when it needs an array codec. Pass the Go slice once to `RowsPlan.Bind(session).List` for both the data page and the exact count. `Like` and `ILike` preserve PostgreSQL pattern syntax, including wildcards in a bound pattern.
 
 ## Typed relation declarations in v0.4
 
