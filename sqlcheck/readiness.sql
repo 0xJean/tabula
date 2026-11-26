@@ -3,7 +3,8 @@ WITH target AS (
 ), requested AS (
     SELECT DISTINCT * FROM pg_catalog.jsonb_to_recordset($2::jsonb) AS need(
         "Kind" text, "Object" text, "Column" text, "Privilege" text,
-        "Schema" text, "Name" text, "Args" jsonb, "Routine" jsonb
+        "Schema" text, "Name" text, "Args" jsonb, "Routine" jsonb, "KeyColumns" jsonb,
+        "WithSchema" text, "WithName" text, "WithColumn" text
     )
 ), missing AS (
     SELECT 'ROLE' AS kind, $1::text AS object, '' AS col, 'EXISTS' AS privilege
@@ -15,6 +16,10 @@ WITH target AS (
     LEFT JOIN pg_catalog.pg_class c ON c.relnamespace = n.oid AND c.relname::text = q."Name"
     LEFT JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid AND a.attname::text = q."Column"
         AND a.attnum > 0 AND NOT a.attisdropped
+    LEFT JOIN pg_catalog.pg_namespace pn ON pn.nspname::text = q."WithSchema"
+    LEFT JOIN pg_catalog.pg_class pc ON pc.relnamespace = pn.oid AND pc.relname::text = q."WithName"
+    LEFT JOIN pg_catalog.pg_attribute pa ON pa.attrelid = pc.oid AND pa.attname::text = q."WithColumn"
+        AND pa.attnum > 0 AND NOT pa.attisdropped
     WHERE (CASE
         WHEN q."Kind" = 'SCHEMA' THEN pg_catalog.has_schema_privilege(r.oid, n.oid, 'USAGE')
         WHEN q."Kind" = 'FUNCTION' THEN EXISTS (
@@ -38,6 +43,52 @@ WITH target AS (
                       )
                 END
         )
+        WHEN q."Kind" = 'KEY' THEN c.relkind IN ('r', 'p')
+            AND (c.relkind = 'p' OR NOT EXISTS (
+                SELECT FROM pg_catalog.pg_inherits h WHERE h.inhparent = c.oid
+            )) AND EXISTS (
+                SELECT FROM pg_catalog.pg_constraint k
+                JOIN pg_catalog.pg_index ix ON ix.indexrelid = k.conindid
+                JOIN pg_catalog.pg_class idx ON idx.oid = ix.indexrelid
+                JOIN pg_catalog.pg_am am ON am.oid = idx.relam
+                WHERE k.conrelid = c.oid AND k.contype = 'p' AND k.convalidated
+                  AND NOT k.condeferrable AND NOT k.condeferred
+                  AND ix.indisprimary AND ix.indisunique AND ix.indimmediate
+                  AND ix.indisvalid AND ix.indisready AND ix.indpred IS NULL AND ix.indexprs IS NULL
+                  AND am.amname = 'btree'
+                  AND ARRAY(SELECT att.attname::text FROM pg_catalog.unnest(k.conkey) key(attnum)
+                    JOIN pg_catalog.pg_attribute att ON att.attrelid = c.oid AND att.attnum = key.attnum
+                    WHERE att.attnotnull AND NOT att.attisdropped ORDER BY att.attname::text COLLATE "C")
+                    = ARRAY(SELECT col FROM pg_catalog.jsonb_array_elements_text(q."KeyColumns") cols(col) ORDER BY col COLLATE "C")
+                  AND NOT EXISTS (
+                    SELECT FROM ROWS FROM (pg_catalog.unnest(ix.indclass::oid[]), pg_catalog.unnest(ix.indcollation::oid[]), pg_catalog.unnest(ix.indkey::smallint[])) WITH ORDINALITY AS key(opclass, collid, attnum, pos)
+                    JOIN pg_catalog.pg_opclass oc ON oc.oid = key.opclass
+                    JOIN pg_catalog.pg_namespace ns ON ns.oid = oc.opcnamespace
+                    JOIN pg_catalog.pg_attribute att ON att.attrelid = c.oid AND att.attnum = key.attnum
+                    LEFT JOIN pg_catalog.pg_collation coll ON coll.oid = key.collid
+                    WHERE key.pos <= ix.indnkeyatts AND (ns.nspname <> 'pg_catalog' OR NOT oc.opcdefault
+                      OR key.collid <> att.attcollation OR NOT coalesce(coll.collisdeterministic, true))
+                  )
+            )
+        WHEN q."Kind" = 'COMPARISON' THEN a.attnum IS NOT NULL
+            AND (a.attcollation = 0 OR EXISTS (
+                SELECT FROM pg_catalog.pg_collation coll WHERE coll.oid = a.attcollation AND coll.collisdeterministic
+            ))
+            AND EXISTS (
+                SELECT FROM pg_catalog.pg_type typ JOIN pg_catalog.pg_namespace ns ON ns.oid = typ.typnamespace
+                WHERE typ.oid = a.atttypid AND ns.nspname = 'pg_catalog'
+            )
+            AND (q."WithColumn" = '' OR pa.attnum IS NOT NULL
+                AND (pa.attcollation = 0 OR EXISTS (
+                    SELECT FROM pg_catalog.pg_collation coll WHERE coll.oid = pa.attcollation AND coll.collisdeterministic
+                ))
+                AND EXISTS (
+                    SELECT FROM pg_catalog.pg_type typ JOIN pg_catalog.pg_namespace ns ON ns.oid = typ.typnamespace
+                    WHERE typ.oid = pa.atttypid AND ns.nspname = 'pg_catalog'
+                )
+                AND (a.attcollation = pa.attcollation
+                    OR a.attcollation IN (0, 'pg_catalog.default'::pg_catalog.regcollation)
+                    OR pa.attcollation IN (0, 'pg_catalog.default'::pg_catalog.regcollation)))
         WHEN q."Kind" = 'SEQUENCE' AND q."Column" = '' THEN
             CASE WHEN c.relkind = 'S' THEN pg_catalog.has_sequence_privilege(r.oid, c.oid, 'USAGE') END
         WHEN q."Kind" = 'SEQUENCE' THEN EXISTS (

@@ -200,6 +200,11 @@ func (r RoleStatements) Readiness(role string) (ReadinessNeeds, error) {
 				seenRoutine[routine] = true
 			}
 		}
+		for _, key := range s.Keys {
+			key.Columns = slices.Clone(key.Columns)
+			n.Keys = append(n.Keys, key)
+		}
+		n.Comparisons = append(n.Comparisons, s.Comparisons...)
 		privileges = append(privileges, s.Privileges...)
 		n.SchemaUsage = append(n.SchemaUsage, s.SchemaUsage...)
 		n.ForceRLS = append(n.ForceRLS, s.ForceRLS...)

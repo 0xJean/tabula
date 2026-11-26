@@ -31,6 +31,10 @@ type typedCompiler struct {
 	hasSecret  bool
 	scopeType  catalogType
 	functions  map[string]bool
+	// New SQL forms include native aggregates in their grant inventory.
+	// Legacy-only forms retain their original snapshots.
+	extendedForm     bool
+	legacyAggregates []aggregateCall
 }
 
 // requireNative records the exact pg_proc identity selected by a closed

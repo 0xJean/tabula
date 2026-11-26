@@ -411,6 +411,12 @@ affected, err := change.Bind(session).UpdateMany(ctx, "rank", nil,
 ```
 
 Every mutation requires a fixed typed predicate. Optional predicates narrow it.
+`Assign` also accepts composed scalar values such as
+`Case(When(IsNull(source.Expr()), next.Expr())).Else(source.Expr())`,
+`Plus(source.Expr(), delta.Expr())`, JSONB edits, array removal, `Now()` and
+`GenRandomUUID()`. The target requires UPDATE; only fields actually read by the
+value or predicates require SELECT. [Scalar expressions](EXPRESSIONS.md)
+
 For a versioned table, supply `MutationSpec.Version` with
 `ExpectVersion(revision, expected)`. Updates compare and advance the version,
 and deletes compare it. A stale version can therefore yield zero affected
@@ -620,3 +626,80 @@ row, err := lookup.Bind(session).One(ctx, q.BindValue(key, int64(7)))
 ```
 
 Use `RoutineSet` and `All` for a set of values. Declare `Nullable` and a nullable view column for results that can be SQL NULL. The default function effect requires write authorization. A write call returning one or many results runs under the session's `Returning` policy. A command allowlist for writes rejects its outer `SELECT`. Verify each overload under its executing role. [Role readiness](AUTHORIZATION.md#check-a-role-at-startup)
+
+## Finite lists on explicit reads
+
+Add `WithList` to a `ReadSelect` used by `DefineRead` or `DefineTableRead`.
+The existing fixed query and bounded helpers retain their own keys. For the
+explicit join above, declare both occurrence keys in the list order:
+
+```go
+query := q.Select(
+    q.Project(q.Output(out, "group_id", q.Int8()), groupID.Expr()),
+    q.Project(q.Output(out, "job_id", q.Int8()), jobID.Expr()),
+).From(left).LeftJoin(right, q.Eq(jobGroup.Expr(), groupID.Expr())).
+    WithList(q.ReadListSpec{
+        Optional: []q.RowPredicate{{Name: "selected", When: q.Any(groupID.Expr(), keys.Expr())}},
+        Orders: []q.RowOrder{{Name: "ids", Terms: []q.RowTerm{
+            q.Asc(groupID), q.Asc(jobID).NullsLast(),
+        }}},
+        Pages: q.RowPages{Offset: true, Keyset: true, MaxLimit: 50, MaxOffset: 500},
+        ExactCount: true,
+    })
+plan := q.DefineRead(out, "group_job_pages", query)
+choice := q.RowChoice{Order: "ids", Filters: []string{"selected"}, Page: q.FirstPage, Limit: 20}
+page, total, err := plan.Bind(session).List(ctx, choice, q.BindValue(keys, []int64{1, 3}))
+if err != nil {
+    return err
+}
+if len(page) != 0 {
+    cursor, err := plan.CursorFrom("ids", page[len(page)-1])
+    if err != nil {
+        return err
+    }
+    choice.Page, choice.After = q.AfterPage, cursor
+}
+_ = total
+```
+
+`Page` executes only the data statement. `Count` executes the exact unpaged
+summary and requires only its retained bindings. `List` validates both shapes,
+including original binding identities, before I/O; each driver adapter receives
+its own canonical values. An error returns no partial page or total. The two
+queries and successive pages share a snapshot only when the caller selects an
+appropriate transaction isolation level. Keep scope, filters and bound values
+consistent while traversing a cursor.
+
+A plain joined count omits projection-only expressions. Grouped counts preserve
+GROUP BY and HAVING, and a scalar aggregate still has one result on empty input.
+Whole-result DISTINCT retains the projected values; DISTINCT ON counts all key
+groups, including NULL, without needing the winner's presentation columns.
+Counts omit presentation order, cursor and bounds. An optional predicate on the
+right side remains a WHERE filter and may deliberately remove unmatched rows;
+intrinsic scope and live-row conditions stay inside the left join's ON clause.
+
+Keyset terms must be projected, comparable and repeatable. A bag join needs all
+occurrence keys, a grouped result needs its whole group tuple, and a DISTINCT
+result needs the entire comparable projection. DISTINCT ON uses its group keys
+only after a deterministic winner order has been established. The generated
+seek is outside grouping and distinct selection. Scalar aggregates have no
+keyset continuation. Order-sensitive aggregate cursor expressions must order
+every varying input value, including a varying string delimiter; unresolved
+ties and inexact floating SUM/AVG results cannot establish a boundary. MIN/MAX
+and array aggregates also reject varying inputs whose equal values can retain
+different observable representations, such as numeric scales and floating
+signed zero. These restrictions apply to cursor and winner proofs, including
+nested expressions; ordinary aggregate projections remain legal. Mixed
+directions and explicit NULL placement work for both manual `Cursor` components
+and `CursorFrom`, including partial table projections.
+
+PostgreSQL groups `1.0::numeric` and `1.00::numeric` together. Either scale
+can appear in the output. A cursor ordered by the numeric group key treats
+both values equally. To order distinct spellings across pages, include the
+text conversion itself in the group key.
+
+Offset pages require a named order but do not prove unique boundaries. Eligible
+locking reads can use data pages; exact counts and paired lists require an
+unlocked plan. Every declared key counts toward the plan's budget, including its
+fixed data and bounded forms. Two optional filters, two orders, three page modes
+and an exact count require 28 list shapes per scope plus the fixed forms.

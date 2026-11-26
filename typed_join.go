@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 )
 
 // ReadSource identifies a physical occurrence in an explicit SELECT. FromTable
@@ -61,6 +62,8 @@ type ReadSelect struct {
 	distinct      bool
 	distinctOn    []scalarOperand
 	clauseErr     error
+	list          *ReadListSpec
+	listRepeated  bool
 }
 
 // Select projects expressions into the declared output view in field order.
@@ -142,6 +145,7 @@ type ReadPlan[T, S any] struct {
 	indexes []int
 	family  *rowFamily
 	single  singleRead
+	list    *readListPlan
 }
 
 // DefineRead registers an explicit typed SELECT. It panics on a declaration error.
@@ -193,24 +197,43 @@ func compileReadPlan[T, S any](owner *descriptor[T, S], indexes []int, name stri
 	if single.take != nil {
 		forms = append(forms, single.form())
 	}
-	family, err := compileRowFamily(owner, name, sources, RowFilter{AllowUnscoped: query.unscoped, Observe: observe}, forms,
-		func(c *typedCompiler, form string, _ []Pred) (string, StatementShape, error) {
+	list, err := compileReadList(query, sources)
+	if err != nil {
+		return nil, err
+	}
+	spec := RowFilter{AllowUnscoped: query.unscoped, Observe: observe}
+	var reachable func([]shapeAlternative) bool
+	if list != nil {
+		spec.Optional, spec.Budget = query.list.Optional, query.list.Budget
+		forms = append(forms, list.forms...)
+		reachable = fixedReadChoices
+	}
+	family, err := compileRowFamilyChoices(owner, name, sources, spec, forms, reachable,
+		func(c *typedCompiler, form string, predicates []Pred) (string, StatementShape, error) {
+			if strings.HasPrefix(form, "list.") {
+				return list.render(c, owner.entry, indexes, query.Where(predicates...), sources, form)
+			}
 			var take *typedInput
 			if form != "data" {
 				take = single.take
 			}
-			return query.render(c, owner.entry, indexes, sources, take)
+			text, meta, err := query.render(c, owner.entry, indexes, sources, take)
+			if err == nil && len(query.distinctOn) != 0 {
+				meta.Keys, meta.Comparisons, err = readWinnerProof(query, sources)
+			}
+			return text, meta, err
 		})
 	if err != nil {
 		return nil, err
 	}
-	return &ReadPlan[T, S]{owner: owner, indexes: indexes, family: family, single: single}, nil
+	return &ReadPlan[T, S]{owner: owner, indexes: slices.Clone(indexes), family: family, single: single, list: list}, nil
 }
 
 // BoundReadPlan runs an explicit SELECT through the registry-authorized session.
 type BoundReadPlan[T, S any] struct {
 	rowExecution[T, S]
 	single singleRead
+	list   *readListPlan
 }
 
 // Bind attaches the plan to a session from its registry.
@@ -222,7 +245,7 @@ func (p *ReadPlan[T, S]) Bind(s Session[S]) *BoundReadPlan[T, S] {
 	}
 	execution := bindRowExecution(p.owner, p.family, s)
 	execution.indexes = p.indexes
-	return &BoundReadPlan[T, S]{execution, p.single}
+	return &BoundReadPlan[T, S]{execution, p.single, p.list}
 }
 
 // Find decodes all matching result rows. Each caller input must be bound once.

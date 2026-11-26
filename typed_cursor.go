@@ -36,6 +36,7 @@ func prepareOrderCursor(o *rowOrdering, projection []Projection, outer map[*occu
 	o.cursors = nil
 	o.projectionIndexes = nil
 	o.nullable = nil
+	names := make(map[string]bool, len(o.terms))
 	for i, term := range o.terms {
 		v := term.orderValue()
 		if !repeatableExpression(v.part) {
@@ -55,13 +56,11 @@ func prepareOrderCursor(o *rowOrdering, projection []Projection, outer map[*occu
 		if f, ok := v.part.(*fieldRef); ok {
 			name = "@after." + f.name
 		}
-		// Aliases can expose the same physical name in a joined order.
-		for _, prior := range o.cursors {
-			if prior.name == name {
-				name += "." + strconv.Itoa(i+1)
-				break
-			}
+		// A quoted field name may already contain a generated suffix.
+		for names[name] {
+			name += "." + strconv.Itoa(i+1)
 		}
+		names[name] = true
 		o.cursors = append(o.cursors, &typedInput{name: name, kind: v.kind})
 		o.projectionIndexes = append(o.projectionIndexes, index)
 		o.nullable = append(o.nullable, v.nullableWith(outer))

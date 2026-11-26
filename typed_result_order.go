@@ -39,3 +39,24 @@ func complexRowOrder(o *rowOrdering, groups []RowColumn) bool {
 	}
 	return slices.ContainsFunc(o.terms, func(t RowTerm) bool { return t.field == nil })
 }
+
+func (o *rowOrdering) needsResultProof(groups []RowColumn) bool {
+	return complexRowOrder(o, groups) || slices.ContainsFunc(o.terms, func(t RowTerm) bool { return t.nulls != defaultNulls })
+}
+
+func rowGroupFields(groups []RowColumn) []GroupField {
+	fields := make([]GroupField, len(groups))
+	for i, group := range groups {
+		fields[i] = group
+	}
+	return fields
+}
+
+// Unlocked row plans register an exact count for every filter choice.
+func checkRowCountStability(spec RowsSpec) error {
+	q := ReadSelect{group: rowGroupFields(spec.GroupBy), list: &ReadListSpec{Optional: spec.Optional}}
+	if spec.Where.part != nil {
+		q.where = []Pred{spec.Where}
+	}
+	return q.checkCountStability()
+}

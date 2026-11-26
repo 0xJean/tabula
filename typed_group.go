@@ -27,11 +27,12 @@ func resultComparable(t catalogType) bool {
 	return false
 }
 
-// Existing physical custom mappings remain catalog-verified. New expression
-// comparisons use the closed native family above.
+// A physical grouping or field order may use any mapped catalog type.
+// PostgreSQL verifies its operators during PREPARE. Computed values use
+// the closed native comparison family.
 func groupOrderComparable(v scalarOperand) bool {
-	if f, ok := v.part.(*fieldRef); ok && f != nil && f.kind.goType != nil && f.kind.schema != "pg_catalog" {
-		return true
+	if f, ok := v.part.(*fieldRef); ok {
+		return f != nil && f.kind.goType != nil
 	}
 	return resultComparable(v.kind)
 }
@@ -132,4 +133,57 @@ func rowGroupOperands(groups []RowColumn) []scalarOperand {
 		values[i] = group.groupOperand()
 	}
 	return values
+}
+
+// PostgreSQL may retain either of two equal group keys, such as numerics
+// with different scales. Native order compares them equally. A scalar
+// operating on the group's chosen representation can distinguish them.
+func checkGroupedOrderValues(groups []GroupField, order []RowTerm) error {
+	if len(groups) == 0 {
+		return nil
+	}
+	keys := make([]scalarOperand, len(groups))
+	for i, g := range groups {
+		if isNilBound(g) {
+			return fmt.Errorf("tabula: invalid grouped result key")
+		}
+		keys[i] = g.groupOperand()
+	}
+	for _, term := range order {
+		if !stableGroupValue(term.orderValue().part, keys, false) {
+			return fmt.Errorf("tabula: computed order cannot depend on the representation of equal GROUP BY values")
+		}
+	}
+	return nil
+}
+
+func stableGroupValue(part expressionPart, keys []scalarOperand, exact bool) bool {
+	for _, key := range keys {
+		if sameExpression(part, key.part) {
+			_, fixed := key.part.(*typedInput)
+			return !exact || fixed || readOrderDeterminesValue(key.kind)
+		}
+	}
+	traits, ok := expressionStructure(part)
+	if !ok {
+		return false
+	}
+	if traits.aggregate {
+		return true // aggregate arguments read the original input rows
+	}
+	// Native comparisons and NULL tests consume the comparison class. A
+	// format, conversion or other scalar can observe the representative.
+	exact = true
+	switch v := part.(type) {
+	case rowNull, membership:
+		exact = false
+	case comparison:
+		exact = v.op == "LIKE" || v.op == "ILIKE"
+	}
+	for _, child := range traits.children {
+		if !stableGroupValue(child, keys, exact) {
+			return false
+		}
+	}
+	return true
 }

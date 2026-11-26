@@ -3,11 +3,14 @@
 All notable changes are listed here. The project follows semantic versioning; before
 v1.0 a minor version may contain breaking changes.
 
-## v0.4.3 — unreleased
+## v0.4.3 — 2026-11-27
 
+- Typed scalar expressions cover conditionals, arithmetic, casts, text, regular expressions, time, JSON, arrays, encoding, hashing and UUID generation. Use them in projections, predicates and conditional updates. Assignment targets require UPDATE. Evaluating a value or predicate requires SELECT on the columns it reads. [Scalar expressions](docs/EXPRESSIONS.md)
 - Typed grouping and ordering accept computed expressions and explicit NULL placement. `RowsPlan.CursorFrom` reads projected ordering values, including reordered table selections; `AtExpr` and `NullAtExpr` supply manual expression boundaries.
 - Aggregates support `FilterWhere`, `CountDistinct`, `DistinctInputs`, ordered string/array/JSON/JSONB inputs and `BoolOr`/`BoolAnd`. `ArrayAggAs` checks the declared element type and requires a codec preserving NULL elements for nullable inputs. [Aggregate inputs](docs/COOKBOOK.md#computed-groups-and-aggregate-inputs)
 - `ReadSelect.Distinct` and `DistinctOn` work with single sources and joins. Representative selection requires a repeatable winner order with the complete result key; invalid grouping, modifiers, types and locking combinations fail before registration.
+- Explicit reads add `ReadListSpec`, `WithList`, `Page`, `List`, `Count`, `Cursor` and `CursorFrom`. List and fixed forms share a registration budget; exact counts retain grouped and distinct cardinality with independent minimum grants and bindings. Joined cursors use the complete projected result key and seek after representative selection. Catalog readiness and role snapshots retain immediate primary-key and deterministic comparison premises. [Joined lists](docs/COOKBOOK.md#finite-lists-on-explicit-reads)
+
 - `DefineTableRead` and `TryDefineTableRead` apply SELECT clauses to a mapped table selection and reuse its existing result decoders. [Mapped table reads](docs/COOKBOOK.md#mapped-table-reads)
 - `pgtype.ArrayOfNullable` and both driver array-column adapters preserve SQL NULL elements in a one-dimensional array of scalar pointers. A typed binding copies those scalar values. Array columns also accept ordinary `[]int16`, `[]uint32` and `[]float32` for non-NULL elements. [PostgreSQL arrays](docs/COOKBOOK.md#13-postgresql-network-addresses-and-arrays)
 

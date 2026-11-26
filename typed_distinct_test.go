@@ -76,7 +76,14 @@ func TestComputedOrderCursorMapping(t *testing.T) {
 	decoded, err = plan.CursorFrom("key", row)
 	require.NoError(t, err)
 	require.Equal(t, manual, decoded)
-	require.Contains(t, table.Definition().Statements["page.global.data.sort.key.after"], `"i"."label" IS NULL AND CAST($1 AS "pg_catalog"."text") IS NOT NULL`)
+	def := table.Definition()
+	for _, key := range []string{"page.global.data.sort.key.first", "page.global.data.sort.key.after"} {
+		meta := def.StatementShapes[key]
+		require.Equal(t, []KeyRequirement{{Relation: `"public"."items"`, Columns: []string{"id"}}}, meta.Keys)
+		require.Len(t, meta.Comparisons, 2)
+	}
+	require.Empty(t, def.StatementShapes["page.global.count"].Keys)
+	require.Contains(t, def.Statements["page.global.data.sort.key.after"], `"i"."label" OPERATOR(pg_catalog.<) CAST($1 AS "pg_catalog"."text")`)
 	_, err = plan.CursorFrom("unknown", row)
 	require.Error(t, err)
 	unstable := label.Expr()
@@ -90,4 +97,77 @@ func TestComputedOrderCursorMapping(t *testing.T) {
 	encoded := Input("custom", Text().WithEncoder(func(string) (any, error) { return nil, failure }))
 	_, err = plan.Cursor("key", AtExpr(encoded.Expr(), "b"), At(id, 7))
 	require.ErrorIs(t, err, failure)
+}
+
+func TestPhysicalCatalogNameKeepsFieldOrdering(t *testing.T) {
+	type item struct {
+		ID    int64  `db:"id,key"`
+		Label string `db:"label"`
+	}
+	reg := NewRegistry(RegistryConfig[struct{}]{})
+	table := DefinePlanSource(reg, TableSpec[item, int64]{Name: "public.items", RelationScope: Global()})
+	layout := MapTable(table, ColumnType("label", CatalogType[string]("pg_catalog", "name", nil)))
+	src := layout.As("i")
+	label := MappedColumn[string](layout, "label").On(src.Rel())
+	spec := RowsSpec{GroupBy: []RowColumn{label.Column()}, Orders: []RowOrder{{Name: "label", Terms: []RowTerm{Asc(label)}}}}
+	_, err := TryDefineTableRows(src, "names", spec, SelectColumns(label.Column()))
+	require.NoError(t, err)
+	want := `SELECT "i"."label" AS "label" FROM "public"."items" AS "i" GROUP BY "i"."label" ORDER BY "i"."label" ASC NULLS LAST`
+	require.Equal(t, want, table.Definition().Statements["names.global.data.sort.label"])
+	query := Select().GroupBy(label.Expr()).OrderBy(Asc(label))
+	_, err = TryDefineTableRead(src, "fixed", SelectColumns(label.Column()), query)
+	require.NoError(t, err)
+	require.Equal(t, want, table.Definition().Statements["fixed.global.data"])
+}
+
+func TestQuotedKeyDoesNotCollideWithGeneratedCursorName(t *testing.T) {
+	type item struct {
+		ID   int64 `db:"id,key"`
+		Rank int64 `db:"id.3"`
+	}
+	r := NewRegistry(RegistryConfig[struct{}]{})
+	table := Define(r, TableSpec[item, int64]{Name: "public.items", RelationScope: Global(), ReadOnly: true})
+	layout := MapTable(table)
+	key := MappedColumn[int64](layout, "id")
+	fields := []Field[int64]{
+		MappedColumn[int64](layout, "id.3").On(layout.As("a").Rel()),
+		key.On(layout.As("b").Rel()),
+		key.On(layout.As("c").Rel()),
+	}
+	var order rowOrdering
+	var projections []Projection
+	var values []CursorValue
+	for i, field := range fields {
+		order.terms = append(order.terms, Asc(field))
+		projections = append(projections, Projection{index: i, part: field.ref})
+		values = append(values, At(field, int64(i+1)))
+	}
+	require.NoError(t, prepareOrderCursor(&order, projections, nil))
+	params := newParameterLayout(false)
+	for _, input := range order.cursors {
+		_, err := params.parameter(input)
+		require.NoError(t, err)
+	}
+	cursor, err := cursorForOrder(&order, values)
+	require.NoError(t, err)
+	args, err := params.bind(nil, cursor.bindings)
+	require.NoError(t, err)
+	require.Equal(t, []any{int64(1), int64(2), int64(3)}, args)
+}
+
+func TestRowSummariesRequireStableMembership(t *testing.T) {
+	r := NewRegistry(RegistryConfig[struct{}]{})
+	table := DefinePlanSource(r, TableSpec[groupingItem, int64]{Name: "public.items", RelationScope: Global()})
+	src := MapTable(table).As("i")
+	condition := Eq(GenRandomUUID(), GenRandomUUID())
+	for _, filter := range []RowFilter{
+		{Where: condition},
+		{Optional: []RowPredicate{{Name: "match", When: condition}}},
+	} {
+		_, err := TryDefineTableRows(src, "sample", RowsSpec{RowFilter: filter}, SelectAll())
+		require.ErrorContains(t, err, "volatile")
+		require.Empty(t, table.Definition().StatementShapes)
+	}
+	_, err := TryDefineTableRead(src, "read", SelectAll(), Select().Where(condition))
+	require.NoError(t, err)
 }

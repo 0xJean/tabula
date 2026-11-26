@@ -1,8 +1,8 @@
-// Package tabula is a zero-dependency, descriptor-driven single-table SQL
-// engine for PostgreSQL. A row struct carries lightweight `db` tags; Define
-// validates the declaration once at package initialization, derives static
-// parameterized statements and column privilege needs, and records them in a
-// Registry for verification (PREPARE/EXPLAIN, schema checks, SQL snapshots).
+// Package tabula declares PostgreSQL tables, statements and typed query plans
+// using only the Go standard library. Define derives single-table operations
+// from a row struct's `db` tags. Typed plans can join explicitly named tables,
+// group results, and register ordered pages. A Registry records the SQL shapes
+// and their grants for snapshots, catalog checks, PREPARE and EXPLAIN.
 //
 // Host applications inject their own scope type S (e.g. a tenant scope or
 // struct{}), value converters, and error classification via RegistryConfig so

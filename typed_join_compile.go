@@ -26,6 +26,12 @@ func (q ReadSelect) render(c *typedCompiler, owner *registration, indexes []int,
 	if err != nil {
 		return "", StatementShape{}, err
 	}
+	if q.distinct || len(q.distinctOn) > 0 || slices.ContainsFunc(groups, func(g scalarOperand) bool {
+		_, physical := g.part.(*fieldRef)
+		return !physical
+	}) {
+		c.extendedForm = true
+	}
 	outer := make(map[*occurrence]bool)
 	for i, join := range q.joins {
 		if join.kind == "LEFT JOIN" {

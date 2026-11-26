@@ -282,10 +282,27 @@ func (a aggregateCall) render(c *typedCompiler) (string, error) {
 		}
 		query += " FILTER (WHERE " + filter + ")"
 	}
-	if !a.legacy {
+	if a.legacy {
+		c.legacyAggregates = append(c.legacyAggregates, a)
+	} else {
 		c.requireNative(a.signature())
 	}
 	return query, nil
+}
+
+// Old MIN/MAX declarations also accept catalog types whose effective
+// overload can only be resolved by PostgreSQL. Record a known native
+// overload when a legacy aggregate is composed into a new expression.
+func (a aggregateCall) knownLegacySignature() string {
+	if a.fn != "min" && a.fn != "max" {
+		return a.signature()
+	}
+	t := a.args[0].kind
+	if t.element != nil || nativeType(t, "bpchar", "date", "float4", "float8", "inet", "int2", "int4", "int8",
+		"interval", "money", "numeric", "oid", "pg_lsn", "text", "tid", "time", "timestamp", "timestamptz", "timetz", "xid8") {
+		return a.signature()
+	}
+	return ""
 }
 
 func (a aggregateCall) signature() string {

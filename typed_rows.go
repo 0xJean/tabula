@@ -9,6 +9,9 @@ import (
 
 // RowsSpec declares the finite alternatives for a single-table read.
 // GroupBy lists the fields or GroupExpr terms that determine each group.
+// Named orders share one exact count. Each order must preserve the result
+// cardinality, including the one-row result of an ungrouped aggregate on
+// empty input.
 type RowsSpec struct {
 	RowFilter
 	GroupBy []RowColumn
@@ -73,17 +76,9 @@ func compileRowsPlan[T, R, S any](owner *descriptor[T, S], indexes []int, name s
 	if owner == nil || src.owner == nil {
 		return nil, fmt.Errorf("tabula: a declared output and row source are required")
 	}
-	_, err := checkRowGrouping(src.rowSource, project, spec.GroupBy)
+	aggregate, err := checkRowGrouping(src.rowSource, project, spec)
 	if err != nil {
 		return nil, err
-	}
-	var allOrder []RowTerm
-	for _, order := range spec.Orders {
-		allOrder = append(allOrder, order.Terms...)
-	}
-	aggregate, err := groupingExpressions(project, nil, allOrder, rowGroupOperands(spec.GroupBy))
-	if err != nil {
-		return nil, fmt.Errorf("tabula: ungrouped order or projection: %w", err)
 	}
 	locked := spec.Lock.declared
 	if locked && aggregate {
@@ -120,8 +115,10 @@ func compileRowsPlan[T, R, S any](owner *descriptor[T, S], indexes []int, name s
 		names = append(names, "exists")
 	}
 	names = append(names, slices.Sorted(maps.Keys(forms))...)
+	expressionForms := spec.hasExpressionForms(project)
 	p.family, err = compileRowFamily(owner, name, []rowSource{src.rowSource}, spec.RowFilter, names,
 		func(c *typedCompiler, form string, predicates []Pred) (string, StatementShape, error) {
+			c.extendedForm = expressionForms
 			if form == "exists" {
 				return renderRowExists(c, src.rowSource, predicates)
 			}
@@ -133,12 +130,62 @@ func compileRowsPlan[T, R, S any](owner *descriptor[T, S], indexes []int, name s
 	return p, nil
 }
 
-func checkRowGrouping(src rowSource, project []Projection, groups []RowColumn) (bool, error) {
-	values := rowGroupOperands(groups)
+// Count drops presentation expressions. Classify the declaration once so a
+// separately bound summary still exports the aggregate it executes, even if
+// the only new expression belongs to a projection or an optional filter.
+func (s RowsSpec) hasExpressionForms(project []Projection) bool {
+	if slices.ContainsFunc(s.GroupBy, func(g RowColumn) bool { return g.ref == nil }) ||
+		slices.ContainsFunc(project, func(p Projection) bool { return hasNewScalarOrAggregate(p.part) }) ||
+		hasNewScalarOrAggregate(s.Where.part) ||
+		slices.ContainsFunc(s.Optional, func(p RowPredicate) bool { return hasNewScalarOrAggregate(p.When.part) }) {
+		return true
+	}
+	for _, order := range s.Orders {
+		for _, term := range order.Terms {
+			if term.field == nil || term.nulls != defaultNulls {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasNewScalarOrAggregate(p expressionPart) bool {
+	switch p.(type) {
+	case scalarNode, aggregateCall:
+		return true
+	}
+	traits, ok := expressionStructure(p)
+	return ok && slices.ContainsFunc(traits.children, hasNewScalarOrAggregate)
+}
+
+func checkRowGrouping(src rowSource, project []Projection, spec RowsSpec) (bool, error) {
+	values := rowGroupOperands(spec.GroupBy)
 	if err := checkGroupKeys(values, map[*occurrence]bool{src.rel: true}); err != nil {
 		return false, err
 	}
-	return groupingExpressions(project, nil, nil, values)
+	if !spec.Lock.declared {
+		if err := checkRowCountStability(spec); err != nil {
+			return false, err
+		}
+	}
+	aggregate, err := groupingExpressions(project, nil, nil, values)
+	if err != nil {
+		return false, err
+	}
+	for i, order := range spec.Orders {
+		grouped, err := groupingExpressions(project, nil, order.Terms, values)
+		if err != nil {
+			return false, fmt.Errorf("tabula: ungrouped order or projection in %q: %w", order.Name, err)
+		}
+		// Count has no order choice. Every presentation of this result
+		// must agree on whether an empty input yields a scalar group.
+		if i > 0 && aggregate != grouped {
+			return false, fmt.Errorf("tabula: order %q changes the result cardinality", order.Name)
+		}
+		aggregate = grouped
+	}
+	return aggregate, nil
 }
 
 func (p *RowsPlan[T, S]) render(c *typedCompiler, src rowSource, project []Projection, groups []RowColumn,
@@ -147,6 +194,7 @@ func (p *RowsPlan[T, S]) render(c *typedCompiler, src rowSource, project []Proje
 	var selectSQL string
 	var fields []ShapeField
 	if count {
+		c.legacyAggregates = append(c.legacyAggregates, aggregateCall{fn: "count", star: true})
 		selectSQL = `pg_catalog.count(*) AS "count"`
 		fields = []ShapeField{{Name: "count", Type: Int8().id.qualified()}}
 	} else {
@@ -160,9 +208,11 @@ func (p *RowsPlan[T, S]) render(c *typedCompiler, src rowSource, project []Proje
 	if err != nil {
 		return "", StatementShape{}, err
 	}
+	order := data.order
+	prove := (data.page == FirstPage || data.page == AfterPage) && order.needsResultProof(groups)
 	resultSeek := data.page == AfterPage && aggregate && complexRowOrder(data.order, groups)
 	if data.page == AfterPage && !resultSeek {
-		after, err := data.order.afterSQL(c)
+		after, err := order.afterSQL(c, prove)
 		if err != nil {
 			return "", StatementShape{}, err
 		}
@@ -188,7 +238,7 @@ func (p *RowsPlan[T, S]) render(c *typedCompiler, src rowSource, project []Proje
 	}
 	if resultSeek {
 		resultOrder := projectedRowOrder(data.order, project, "rows")
-		after, err := resultOrder.afterSQL(c)
+		after, err := resultOrder.afterSQL(c, true)
 		if err != nil {
 			return "", StatementShape{}, err
 		}
@@ -215,6 +265,13 @@ func (p *RowsPlan[T, S]) render(c *typedCompiler, src rowSource, project []Proje
 		return "", StatementShape{}, err
 	}
 	meta.Result = fields
+	if prove {
+		selection := ReadSelect{project: project, group: rowGroupFields(groups)}
+		meta.Keys, meta.Comparisons, err = readResultProof(selection, []rowSource{src}, order.terms)
+		if err != nil {
+			return "", StatementShape{}, err
+		}
+	}
 	if p.lock.declared {
 		clause, err := p.lock.clause(c, &meta)
 		if err != nil {

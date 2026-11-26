@@ -208,6 +208,9 @@ func (o *rowOrdering) orderSQL(c *typedCompiler) (string, error) {
 	}
 	parts := make([]string, len(o.terms))
 	for i, term := range o.terms {
+		if term.field == nil || term.nulls != defaultNulls {
+			c.extendedForm = true
+		}
 		if err := validateOrderTerm(term); err != nil {
 			return "", err
 		}
@@ -220,7 +223,10 @@ func (o *rowOrdering) orderSQL(c *typedCompiler) (string, error) {
 	return " ORDER BY " + strings.Join(parts, ", "), nil
 }
 
-func (o *rowOrdering) afterSQL(c *typedCompiler) (string, error) {
+func (o *rowOrdering) afterSQL(c *typedCompiler, prove bool) (string, error) {
+	if prove {
+		return (readSeek{order: o}).render(c)
+	}
 	var prefixes []string
 	for i, term := range o.terms {
 		if err := validateOrderTerm(term); err != nil {

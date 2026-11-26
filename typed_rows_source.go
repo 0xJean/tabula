@@ -241,6 +241,13 @@ type rowFamily struct {
 func compileRowFamily[T, S any](d *descriptor[T, S], name string, sources []rowSource, spec RowFilter, forms []string,
 	render func(*typedCompiler, string, []Pred) (string, StatementShape, error),
 ) (*rowFamily, error) {
+	return compileRowFamilyChoices(d, name, sources, spec, forms, nil, render)
+}
+
+func compileRowFamilyChoices[T, S any](d *descriptor[T, S], name string, sources []rowSource, spec RowFilter, forms []string,
+	reachable func([]shapeAlternative) bool,
+	render func(*typedCompiler, string, []Pred) (string, StatementShape, error),
+) (*rowFamily, error) {
 	if d == nil || d.entry == nil || len(sources) == 0 || !rowLabel(name) {
 		return nil, fmt.Errorf("tabula: a registered owner, matching source and named row plan are required")
 	}
@@ -286,7 +293,7 @@ func compileRowFamily[T, S any](d *descriptor[T, S], name string, sources []rowS
 		choices = append(choices, shapeChoice{"filter." + p.Name, []string{"off", "on"}})
 	}
 	choices = append(choices, shapeChoice{"form", forms})
-	paths, err := enumerateShapes(name, spec.Budget, choices, nil)
+	paths, err := enumerateShapes(name, spec.Budget, choices, reachable)
 	if err != nil {
 		return nil, err
 	}

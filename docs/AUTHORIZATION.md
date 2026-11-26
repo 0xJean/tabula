@@ -372,3 +372,29 @@ each assigned role. For typed reads it also checks physical column types,
 parameter types, and the projected names and types. The type probe uses a
 zero-row source. Run the operations on representative scoped data to verify
 row visibility, aggregate NULL results and affected counts.
+
+## Result key verification
+
+`StatementShape.Keys` records each physical primary-key premise used by a joined
+keyset or a deterministic DISTINCT ON winner. `Comparisons` records physical
+operands whose native types and deterministic collations support the order.
+Compound order terms also retain pairs of physical inputs whose implicit
+collations must be compatible. Readiness conservatively rejects conflicting
+non-default collations even beneath nested expressions; separate order terms
+may use different deterministic collations.
+These fields survive SQL snapshots and `RoleStatements.Readiness`; they add no
+column grants. `VerifyStatements` and `VerifyRoleStatements` verify the same
+premises while preparing each statement.
+
+Catalog checks require a complete, valid, immediate primary key using compatible
+native ordering. Deferrable keys and ordinary inherited scans with descendants
+cannot establish cross-row uniqueness. A valid parent-wide primary key on a
+partitioned table is accepted. Grouped and whole-DISTINCT result proofs do not
+invent a physical-key requirement. Rerun readiness after schema changes.
+
+List data and exact summaries have independent grants, inputs and observation
+keys. Authorize counts separately when a role should see only cardinality. A
+plain summary needs join, filter, scope and live-row columns; grouped summaries
+also need group and HAVING inputs. DISTINCT summaries retain values determining
+the distinct classes. Cursor operators use qualified native implementations and
+record their function privileges without requiring internal sort support grants.
