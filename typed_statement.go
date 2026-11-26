@@ -92,9 +92,10 @@ func cloneQueryKeys(keys []queryResultKey) []queryResultKey {
 }
 
 type statementWrite struct {
-	id      *statementEffectIdentity
-	target  physicalName
-	command string
+	id        *statementEffectIdentity
+	target    physicalName
+	command   string
+	returning bool
 }
 
 type statementEffects struct {
@@ -125,11 +126,14 @@ func (e statementEffects) combine(other statementEffects) (statementEffects, err
 		reused := false
 		for _, prior := range out.writes {
 			if prior.id == next.id {
-				if prior.target != next.target || prior.command != next.command {
+				if prior.target != next.target || prior.returning != next.returning {
 					return statementEffects{}, fmt.Errorf("tabula: inconsistent reused write effect")
 				}
-				reused = true
-				break
+				if prior.command == next.command {
+					reused = true
+					break
+				}
+				continue
 			}
 			if prior.target == next.target {
 				return statementEffects{}, fmt.Errorf("tabula: multiple writes target %s in one statement", next.target.sql())
@@ -143,6 +147,15 @@ func (e statementEffects) combine(other statementEffects) (statementEffects, err
 		out.bits |= EffectWrite
 	}
 	return out, nil
+}
+
+func (e statementEffects) returns(target physicalName) bool {
+	for _, write := range e.writes {
+		if write.target == target && write.returning {
+			return true
+		}
+	}
+	return false
 }
 
 func (r statementResult) frozen() statementResult {

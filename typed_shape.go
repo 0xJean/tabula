@@ -67,6 +67,17 @@ type StatementShape struct {
 	Keys []KeyRequirement `json:",omitempty"`
 	// Comparisons records native ordering and deterministic collation premises.
 	Comparisons []ComparisonRequirement `json:",omitempty"`
+	// UniqueMatches proves at most one matching write-source row.
+	UniqueMatches []UniqueMatchRequirement `json:",omitempty"`
+	// Defaults records columns whose catalog defaults supply write values.
+	Defaults []DefaultRequirement `json:",omitempty"`
+	// Conflicts records premises checked against actual EXPLAIN arbiters.
+	Conflicts []ConflictRequirement `json:",omitempty"`
+	// ReturningRelations identifies physical targets with a RETURNING clause.
+	ReturningRelations []string `json:",omitempty"`
+	// ResultLineage supplies logical type evidence in Result order. An empty
+	// entry supplies no additional evidence beyond the server description.
+	ResultLineage []ResultLineage `json:",omitempty"`
 	// UnscopedOnly marks a shape that omits a declared column-scope predicate.
 	// It can be bound only to an unscoped session.
 	UnscopedOnly bool
@@ -86,6 +97,7 @@ type compiledShape struct {
 	layout         *parameterLayout
 	shape          StatementShape
 	columns        map[physicalColumn]catalogType
+	effects        statementEffects
 }
 
 type physicalColumn struct {
@@ -115,6 +127,7 @@ func cloneShape(s StatementShape) StatementShape {
 	s.Routines = slices.Clone(s.Routines)
 	s.Keys = appendKeyRequirements(nil, s.Keys...)
 	s.Comparisons = slices.Clone(s.Comparisons)
+	cloneWriteRequirements(&s)
 	return s
 }
 
@@ -147,7 +160,8 @@ func (s *compiledShape) checkSources(issuer *statementIssuer) error {
 					return fmt.Errorf("tabula: shape %q requires a write effect for %s", s.key, access.Command)
 				}
 				updates = updates || access.Command == "UPDATE"
-				if src.mode == WriteInsertOnly && len(s.shape.Result) > 0 {
+				if src.mode == WriteInsertOnly && len(s.shape.Result) > 0 &&
+					(len(s.effects.writes) == 0 || s.effects.returns(src.table)) {
 					return fmt.Errorf("%w: insert-only %s cannot return rows", ErrOperationDenied, table)
 				}
 			}

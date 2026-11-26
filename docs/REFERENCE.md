@@ -662,6 +662,16 @@ type ComparisonRequirement struct {
     WithRelation and WithColumn are set, both columns also require compatible
     implicit collations within one expression.
 
+type ConflictRequirement struct {
+	Relation, Constraint string
+	Columns              []string
+	DoUpdate             bool
+}
+    ConflictRequirement records the target of a native conflict-inference
+    clause. Constraint and Columns are alternative targets. The original SQL
+    and its EXPLAIN arbiter indexes supply the inference evidence, including a
+    partial index predicate. DoUpdate requires a nondeferrable unique arbiter.
+
 type CountMode int
     CountMode controls how Rows.List obtains the total row count.
 
@@ -721,6 +731,14 @@ const (
 )
     Native PostgreSQL date/time fields. TimezoneSeconds is the EXTRACT timezone
     field; TimezoneHour and TimezoneMinute are its signed components.
+
+type DefaultRequirement struct {
+	Relation string
+	Columns  []string
+}
+    DefaultRequirement records columns whose database defaults are used by a
+    write. Verification distinguishes identity generation from sequence defaults
+    and does not infer arbitrary default-function privileges from SQL text.
 
 type DefinedColumn struct {
 	Name     string
@@ -2009,6 +2027,15 @@ func Global() RelationScope
     Global declares a physical relation whose rows do not depend on session
     scope.
 
+type ResultLineage struct {
+	Relation, Column, CastType string
+}
+    ResultLineage records evidence for a result's logical SQL type. Relation and
+    Column identify an exact physical origin; CastType identifies an explicit
+    outer result conversion. These alternatives require independent agreement
+    with the server description/catalog or the original result expression.
+    A declaration alone, or a matching wire base OID, cannot prove a domain.
+
 type ResultStatement interface {
 	// Has unexported methods.
 }
@@ -2723,6 +2750,17 @@ type StatementShape struct {
 	Keys []KeyRequirement `json:",omitempty"`
 	// Comparisons records native ordering and deterministic collation premises.
 	Comparisons []ComparisonRequirement `json:",omitempty"`
+	// UniqueMatches proves at most one matching write-source row.
+	UniqueMatches []UniqueMatchRequirement `json:",omitempty"`
+	// Defaults records columns whose catalog defaults supply write values.
+	Defaults []DefaultRequirement `json:",omitempty"`
+	// Conflicts records premises checked against actual EXPLAIN arbiters.
+	Conflicts []ConflictRequirement `json:",omitempty"`
+	// ReturningRelations identifies physical targets with a RETURNING clause.
+	ReturningRelations []string `json:",omitempty"`
+	// ResultLineage supplies logical type evidence in Result order. An empty
+	// entry supplies no additional evidence beyond the server description.
+	ResultLineage []ResultLineage `json:",omitempty"`
 	// UnscopedOnly marks a shape that omits a declared column-scope predicate.
 	// It can be bound only to an unscoped session.
 	UnscopedOnly bool
@@ -2901,6 +2939,14 @@ type TypeDefault struct {
 func TypeMapping[V any](kind PGType[V]) TypeDefault
     TypeMapping retains the catalog identity and input codec of kind as a
     registry default for V. A nullable *V field can use the same declaration.
+
+type UniqueMatchRequirement struct {
+	Relation string
+	Columns  []string
+}
+    UniqueMatchRequirement records a physical write-source uniqueness premise.
+    Columns must be covered by an immediate, valid unique index and be NOT NULL.
+    A table name or an application assertion is not evidence of uniqueness.
 
 type UpsertPlan[T, K, S any] struct {
 	// Has unexported fields.

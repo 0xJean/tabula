@@ -78,7 +78,7 @@ func TestQueryScopeIdentity(t *testing.T) {
 }
 
 func TestStatementEffectUnion(t *testing.T) {
-	write := statementWrite{&statementEffectIdentity{}, physicalName{"public", "items"}, "UPDATE"}
+	write := statementWrite{id: &statementEffectIdentity{}, target: physicalName{"public", "items"}, command: "UPDATE"}
 	first := statementEffects{bits: EffectRead, writes: []statementWrite{write}, writeCTE: true}
 	var empty statementEffects
 	combined, err := empty.combine(first)
@@ -87,7 +87,7 @@ func TestStatementEffectUnion(t *testing.T) {
 	combined, err = combined.combine(first)
 	require.NoError(t, err)
 	require.Len(t, combined.writes, 1)
-	second := statementEffects{writes: []statementWrite{{&statementEffectIdentity{}, physicalName{"public", "notes"}, "INSERT"}}}
+	second := statementEffects{writes: []statementWrite{{id: &statementEffectIdentity{}, target: physicalName{"public", "notes"}, command: "INSERT"}}}
 	combined, err = combined.combine(second)
 	require.NoError(t, err)
 	require.Len(t, combined.writes, 2)
@@ -96,18 +96,30 @@ func TestStatementEffectUnion(t *testing.T) {
 	require.Equal(t, "UPDATE", first.writes[0].command)
 
 	for _, invalid := range []statementWrite{
-		{&statementEffectIdentity{}, write.target, "DELETE"},
-		{write.id, write.target, "DELETE"},
-		{write.id, physicalName{"public", "jobs"}, "UPDATE"},
-		{nil, write.target, "UPDATE"},
-		{&statementEffectIdentity{}, write.target, "SELECT"},
-		{&statementEffectIdentity{}, physicalName{}, "INSERT"},
+		{id: &statementEffectIdentity{}, target: write.target, command: "DELETE"},
+		{id: write.id, target: write.target, command: "UPDATE", returning: true},
+		{id: write.id, target: physicalName{"public", "jobs"}, command: "UPDATE"},
+		{target: write.target, command: "UPDATE"},
+		{id: &statementEffectIdentity{}, target: write.target, command: "SELECT"},
+		{id: &statementEffectIdentity{}, command: "INSERT"},
 	} {
 		_, err := first.combine(statementEffects{writes: []statementWrite{invalid}})
 		require.Error(t, err)
 		require.Len(t, first.writes, 1)
 		require.Equal(t, "UPDATE", first.writes[0].command)
 	}
+	upsert := write
+	upsert.command = "INSERT"
+	combined, err = first.combine(statementEffects{writes: []statementWrite{upsert}})
+	require.NoError(t, err)
+	require.Len(t, combined.writes, 2)
+	combined, err = combined.combine(statementEffects{writes: []statementWrite{upsert}})
+	require.NoError(t, err)
+	require.Len(t, combined.writes, 2)
+	require.False(t, combined.returns(write.target))
+	combined.writes[0].returning = true
+	require.True(t, combined.returns(write.target))
+	require.False(t, combined.returns(physicalName{"public", "jobs"}))
 	routine, err := empty.combine(statementEffects{writeRoutine: true})
 	require.NoError(t, err)
 	require.Equal(t, EffectWrite, routine.bits)
