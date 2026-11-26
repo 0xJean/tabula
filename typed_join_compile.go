@@ -61,7 +61,7 @@ func (q ReadSelect) checkGrouping(c *typedCompiler) ([]*fieldRef, bool, error) {
 	return fields, aggregate, nil
 }
 
-func (q ReadSelect) render(c *typedCompiler, owner *registration, sources []rowSource, take *typedInput) (string, StatementShape, error) {
+func (q ReadSelect) render(c *typedCompiler, owner *registration, indexes []int, sources []rowSource, take *typedInput) (string, StatementShape, error) {
 	groups, aggregate, err := q.checkGrouping(c)
 	if err != nil {
 		return "", StatementShape{}, err
@@ -75,14 +75,14 @@ func (q ReadSelect) render(c *typedCompiler, owner *registration, sources []rowS
 	if q.lock.declared && (aggregate || outer[q.lock.target]) {
 		return "", StatementShape{}, fmt.Errorf("tabula: row locks require ungrouped rows on a preserved occurrence")
 	}
-	selects, result, err := c.project(owner, q.project)
+	selects, result, err := c.projectFields(owner, q.project, indexes)
 	if err != nil {
 		return "", StatementShape{}, err
 	}
 	if len(outer) > 0 {
 		for i, p := range q.project {
 			if nullExtended(p.part, outer) {
-				if !owner.def.Columns[i].Nullable {
+				if !owner.def.Columns[p.index].Nullable {
 					return "", StatementShape{}, fmt.Errorf("tabula: outer join requires a nullable output for %q", result[i].Name)
 				}
 				result[i].Nullable = true
@@ -207,6 +207,8 @@ func (q ReadSelect) fromSQL(c *typedCompiler, sources []rowSource) (string, []st
 func nullExtended(part expressionPart, outer map[*occurrence]bool) bool {
 	propagates := func(p Pred) bool { return nullExtended(p.part, outer) }
 	switch n := part.(type) {
+	case describedExpression:
+		return n.nullableAfterJoin(outer)
 	case *fieldRef:
 		return outer[n.source]
 	case comparison:

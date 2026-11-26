@@ -265,6 +265,12 @@ func (c *typedCompiler) finishShape(key, query string, scopeType catalogType, me
 	// Add the physical scope and schema requirements for reads and writes alike.
 	meta.UnscopedOnly = false
 	schemas, forced := slices.Clone(meta.SchemaUsage), slices.Clone(meta.ForceRLS)
+	if len(c.functions) > 0 {
+		schemas = append(schemas, "pg_catalog")
+		for _, signature := range slices.Sorted(maps.Keys(c.functions)) {
+			meta.Privileges = append(meta.Privileges, DefinedPrivilege{Function: signature, Privilege: "EXECUTE"})
+		}
+	}
 	columnTypes := maps.Clone(c.reads)
 	for _, src := range c.from {
 		schemas = append(schemas, src.table.schema)

@@ -2,6 +2,10 @@
 
 Start with the section for the version you are adopting. The integration guide lists the APIs and commands available in this checkout. [Integration guide](INTEGRATION.md)
 
+## From v0.4.2 to v0.4.3
+
+Use `DefineTableRead` to return a full or partial mapped record from an explicit single-source read. Reuse the same source occurrence in the selection and read clauses. Register and verify the resulting shape under the role that executes it.
+
 ## From v0.4.1 to v0.4.2
 
 For tables used exclusively by typed plans, replace `Define(reg, spec)` with `DefinePlanSource(reg, spec)`. Use `TryDefinePlanSource` when startup should return a declaration error. Its successful result is already registered. Supply a schema-qualified physical name and declare the scope. A tagged scope field selects `ByScopeColumn` by default.

@@ -164,6 +164,24 @@ func numericAggregate[V, R any](fn string, f Expr[V], result PGType[R]) Expr[R] 
 // projection cannot read an ungrouped field through a comparison.
 func checkRowExpr(p expressionPart, visit func(expressionPart) error) error {
 	switch v := p.(type) {
+	case describedExpression:
+		t := v.expressionTraits()
+		if t.aggregate && visit == nil {
+			return fmt.Errorf("tabula: aggregate outside result projection")
+		}
+		if visit != nil {
+			if err := visit(p); err != nil {
+				return err
+			}
+		}
+		if !t.aggregate {
+			for _, child := range t.children {
+				if err := checkRowExpr(child, visit); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
 	case membership:
 		if err := checkRowExpr(v.value, visit); err != nil {
 			return err

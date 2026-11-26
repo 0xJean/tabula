@@ -30,6 +30,16 @@ type typedCompiler struct {
 	selectCols map[physicalName]map[string]bool
 	hasSecret  bool
 	scopeType  catalogType
+	functions  map[string]bool
+}
+
+// requireNative records the exact pg_proc identity selected by a closed
+// expression overload, including polymorphic identities when applicable.
+func (c *typedCompiler) requireNative(signature string) {
+	if c.functions == nil {
+		c.functions = make(map[string]bool)
+	}
+	c.functions[signature] = true
 }
 
 func newTypedCompiler(scoped bool, sources ...*occurrence) (*typedCompiler, error) {

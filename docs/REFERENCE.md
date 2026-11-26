@@ -299,6 +299,10 @@ func TryDefineRowsWithForms[T, R, S any](out *View[T, S], name string, src RowSo
     TryDefineRowsWithForms registers the data, summary and requested bounded
     forms together. A rejected declaration publishes no shapes.
 
+func TryDefineTableRead[T, S any](src RowSource[T, S], name string, columns TableSelection, query ReadSelect, observe ...StatementOption) (*ReadPlan[T, S], error)
+    TryDefineTableRead registers the complete table-backed read or returns a
+    declaration error. The source and selection already define FROM and SELECT.
+
 func TryDefineTableRows[T, S any](src RowSource[T, S], name string, spec RowsSpec, columns TableSelection, forms ...ReadForms) (*RowsPlan[T, S], error)
     TryDefineTableRows registers every shape of a table-backed read together.
     An invalid source, selection or plan leaves the registry untouched.
@@ -1371,6 +1375,11 @@ func DefineRead[T, S any](out *View[T, S], name string, query ReadSelect, observ
     DefineRead registers an explicit typed SELECT. It panics on a declaration
     error.
 
+func DefineTableRead[T, S any](src RowSource[T, S], name string, columns TableSelection, query ReadSelect, observe ...StatementOption) *ReadPlan[T, S]
+    DefineTableRead applies SELECT clauses to fields of a single mapped source.
+    The selection supplies the result fields and their decoders. Pass a query
+    starting with Select() and supply clauses such as Where and OrderBy.
+
 func (p *ReadPlan[T, S]) Bind(s Session[S]) *BoundReadPlan[T, S]
     Bind attaches the plan to a session from its registry.
 
@@ -2000,6 +2009,12 @@ func (f *SQLFiles) Lookup(name string) (string, bool)
 
 func (f *SQLFiles) Names() []string
     Names returns all loaded relative file names in sorted order.
+
+type Scalar interface {
+	// Has unexported methods.
+}
+    Scalar is a declared typed expression in a heterogeneous argument list.
+    Its PostgreSQL type, input codec and relation identity stay attached to it.
 
 type ScalarAggregates struct {
 	Max, Min, Sum, Avg []string

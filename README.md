@@ -28,6 +28,8 @@ The [v0.4 design](docs/DESIGN-v0.4.md) describes typed predicates, per-shape ver
 
 Use `DefinePlanSource` for a physical table accessed exclusively through typed plans. Call `MapTable(items).As("i")` to reuse its fields in reads, writes and joins. `DefineTableRows` returns rows of the table's Go type and `DefineExists` registers a standalone boolean query. A narrow read needs grants on its referenced columns. A conditional update can write a column on which the role has only `UPDATE`. [Mapped table example](docs/COOKBOOK.md#mapped-table-reads) and [minimum grants](docs/AUTHORIZATION.md#physical-sources-for-typed-plans)
 
+Use `DefineTableRead` to apply explicit SELECT clauses to a full or partial mapped record. The source supplies the projection and its decoder.
+
 Set `RowsSpec.Lock` on a filtered or ordered page, or enable `WithExists` on an unlocked plan for a boolean result. Registered transaction advisory locks and PostgreSQL functions also use `plan.Bind(session)`. Each statement identifies its result, session requirements and minimum grants. [Lock and routine examples](docs/COOKBOOK.md#registered-locks-and-functions)
 
 Use `DefineRead` for inner, left and cross joins. Give each side of a self-join its own occurrence. Use `In` for a fixed list, `Any` for an array parameter and `Like` or `ILike` for patterns. [Explicit join example](docs/COOKBOOK.md#explicit-joins)

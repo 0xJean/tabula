@@ -3,6 +3,10 @@
 All notable changes are listed here. The project follows semantic versioning; before
 v1.0 a minor version may contain breaking changes.
 
+## v0.4.3 — unreleased
+
+- `DefineTableRead` and `TryDefineTableRead` apply SELECT clauses to a mapped table selection and reuse its existing result decoders. [Mapped table reads](docs/COOKBOOK.md#mapped-table-reads)
+
 ## v0.4.2 — 2026-11-27
 
 - `DefinePlanSource` and `TryDefinePlanSource` register a physical table for typed plans. The declared plans determine its SQL and grants, including column-level updates and locking reads on composite keys. Legacy `Rows` calls return `ErrOperationDenied` before database I/O. [Physical plan sources](docs/AUTHORIZATION.md#physical-sources-for-typed-plans)

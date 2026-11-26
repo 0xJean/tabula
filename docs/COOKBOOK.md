@@ -425,6 +425,8 @@ contributes its own shape. `TryDefineRows`, `TryDefineUpdateMany` and
 
 ### Mapped table reads
 
+Use `DefineTableRead(src, "labels", SelectColumns(label.Column()), Select().OrderBy(Asc(label)))` to apply explicit SELECT clauses to the table's Go type. The source supplies FROM and the selected column decoders in projection order.
+
 Map the physical descriptor once, then name an occurrence for each operand. A field resolves against the same table registration each time. Declare a shared catalog default for a named Go type or override a single column when constructing the layout.
 
 ```go

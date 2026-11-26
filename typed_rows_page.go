@@ -12,6 +12,27 @@ import (
 type RowTerm struct {
 	field *fieldRef
 	desc  bool
+	expr  scalarOperand
+	nulls nullPlacement
+}
+
+type nullPlacement uint8
+
+const (
+	defaultNulls nullPlacement = iota
+	firstNulls
+	lastNulls
+)
+
+func (t RowTerm) orderValue() scalarOperand {
+	if f := t.field; f != nil {
+		return scalarOperand{f, f.kind, f.nullable}
+	}
+	return t.expr
+}
+
+func (t RowTerm) nullsFirst() bool {
+	return t.nulls == firstNulls || t.nulls == defaultNulls && t.desc
 }
 
 // Asc orders a field from least to greatest.
