@@ -3,6 +3,11 @@
 All notable changes are listed here. The project follows semantic versioning; before
 v1.0 a minor version may contain breaking changes.
 
+## v0.4.0 — unreleased
+
+- Typed relation occurrences, fields, input slots and projections carry their PostgreSQL types through compilation. Each registered shape records its ordered parameters, output columns, effects and grants in `Definition.StatementShapes`.
+- The adapter interface accepts a statement issued by its registry for one session and operation. A snapshot can be inspected independently of execution. [Typed query design](docs/DESIGN-v0.4.md)
+
 ## v0.3.11 — 2026-11-26
 
 - `TableSpec.WriteMode` supports read and update access with an optional `UpdateColumns` list, and strict insert access with optional serial sequence usage. The descriptor derives statements and privileges for the selected operations. Bound methods and pgx COPY check the mode before database I/O.

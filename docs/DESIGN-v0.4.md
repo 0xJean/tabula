@@ -143,6 +143,16 @@ The existing Table, Rows, View and QuerySpec APIs keep their default behavior. S
 
 Use the same compiler, variant keys and snapshot format for declared single-table operations. A declaration enumerates allowed assignment column sets, typed predicate alternatives, ordering, and scoped or unscoped binding modes. Include the data and count forms of a page and filtered aggregate shapes. Reject undeclared combinations before I/O in strict mode. Untyped string Filter callbacks remain legacy operations. Source inventory resolves each declared plan to its owner and expands its exact keys for role-bound PREPARE and EXPLAIN. An unresolved owner needs an explicit binding. Runtime SQL generation cannot silently extend the verified set.
 
+## Compiler and adapter interfaces
+
+`TableSpec.RelationScope` declares the enforcement for a physical table. A tagged scope column supplies the default for typed occurrences. A table without a scope tag can explicitly declare `ByRLS()` or `Global()`. The scope argument to `FromTable` must agree with that declaration. Column types are checked against the Go field and against declarations of the same physical column, including across aliases. `CatalogType[V]` accepts separate schema and type identifiers and an optional bind encoder.
+
+A typed expression contributes a result type, nullability, read columns and ordered slots. The compiler includes each alternative under its own key in `Definition.Statements`, records its plan name in `StatementQueries` and keeps the verifier's per-key metadata in `StatementShapes`. Compilation validates a complete family before registering any member. Verification snapshots include physical column names and declared catalog types in stable order, column grants, inputs, result fields, physical RLS relations and effects.
+
+The compiler derives schema and RLS requirements from the physical sources for reads and writes. A shape using column scoping must render the predicate for every such occurrence. Its unscoped variant records `UnscopedOnly` and requires an unscoped session when binding. Registration checks physical commands against each table's write mode. A typed read on an insert-only table and an update outside an update-only table's declared columns fail before the registry can issue a call.
+
+The driver boundary consists of `SQLAuthority`, `AuthorizedStatement` and `AuthorizedSession`. At startup a registry supplies a verification credential. Its driver presents a call, its own session pointer and the intended method to `SQLAuthority.Open`. The successful result contains the registered SQL, its observation key, ordered arguments, redaction mask and effects. A shape referencing a secret column conservatively marks every argument for redaction. Execution still uses the driver's normal statement guards, transaction checks and observation settings.
+
 ## Release sequence and acceptance
 
 | Version | PostgreSQL capabilities |

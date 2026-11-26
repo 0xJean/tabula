@@ -2,6 +2,10 @@
 
 Follow this guide when upgrading an application to v0.3. For the full surface after the upgrade, see the [integration guide](INTEGRATION.md).
 
+## Typed relation declarations in v0.4
+
+Name a physical table by schema and relation. Declare `TableSpec.RelationScope` for a table whose rows depend on database RLS or are shared globally. A table with a tagged scope column can use `ByScopeColumn()` directly. A plan can use several references to the same table by declaring separate occurrences. Use its fields and slots consistently in the plan and pass runtime values with `BindValue`. [Compilation and role verification](DESIGN-v0.4.md#compilation-binding-and-snapshots)
+
 ## From v0.3.10 to v0.3.11
 
 Existing keyed `TableSpec` declarations continue to use `WriteDefault`, including the `ReadOnly` and `AllowDelete` flags. The signatures of `Define`, `TryDefine` and bound methods are unchanged. Convert positional `TableSpec` literals to keyed fields before upgrading because the struct gains two fields.

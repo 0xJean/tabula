@@ -95,6 +95,7 @@ type RegistryConfig[S any] struct {
 // metrics, and the list of defined tables and views. Applications normally
 // declare one package-level Registry and may construct isolated registries in tests.
 type Registry[S any] struct {
+	statementIssuer     *statementIssuer
 	prefix              string
 	scopeType           reflect.Type
 	scopeID             func(S) any
@@ -110,11 +111,12 @@ type Registry[S any] struct {
 	sessionToken        atomic.Pointer[sessionToken]
 	deny                Capability
 
-	mu    sync.RWMutex
-	types map[reflect.Type]func(any) any
-	zeros map[reflect.Type]func(any) any
-	defs  []*registration
-	views []*registration
+	mu           sync.RWMutex
+	types        map[reflect.Type]func(any) any
+	zeros        map[reflect.Type]func(any) any
+	defs         []*registration
+	views        []*registration
+	typedColumns map[physicalColumn]catalogType
 }
 
 // NewRegistry creates a Registry preloaded with built-in scalar zero
@@ -125,6 +127,7 @@ func NewRegistry[S any](cfg RegistryConfig[S]) *Registry[S] {
 		prefix = "tabula"
 	}
 	r := &Registry[S]{
+		statementIssuer:     new(statementIssuer),
 		prefix:              prefix,
 		scopeType:           reflect.TypeFor[S](),
 		scopeID:             cfg.ScopeID,
@@ -291,5 +294,6 @@ func cloneDefinition(d Definition) Definition {
 		Statements:       maps.Clone(d.Statements),
 		Privileges:       privs,
 		StatementQueries: maps.Clone(d.StatementQueries),
+		StatementShapes:  cloneShapeMap(d.StatementShapes),
 	}
 }

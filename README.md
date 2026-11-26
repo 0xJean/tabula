@@ -20,6 +20,8 @@ builds joins, never generates DDL, and never runs hidden callbacks.
 
 Read the README at the Git tag or commit your application builds. The [migration guide](docs/MIGRATION.md) covers upgrading to v0.3. The [changelog](CHANGELOG.md) records release status.
 
+The [v0.4 design](docs/DESIGN-v0.4.md) describes typed predicates, per-shape verification and the driver interface for registered queries.
+
 ## Install v0.3.11
 
 Run `go get github.com/0xJean/tabula@v0.3.11` in your application module with Go 1.26 or later. For the native driver and telemetry modules, use the matching version with `go get github.com/0xJean/tabula/pgxdriver@v0.3.11` and/or `go get github.com/0xJean/tabula/oteltabula@v0.3.11`.

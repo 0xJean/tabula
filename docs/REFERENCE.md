@@ -76,6 +76,10 @@ const (
 	ErrInsufficientPrivilege staticError = "insufficient PostgreSQL privilege"
 	ErrCanceled              staticError = "statement canceled"
 )
+const ErrStatementAuthority staticError = "tabula: statement authority or session does not match"
+    ErrStatementAuthority reports an unregistered call, a different registry's
+    credential, or a call delivered to a different session.
+
 
 FUNCTIONS
 
@@ -263,6 +267,55 @@ func Add[N number](column string, delta N) Assignment
 func SetNow(column string) Assignment
     SetNow assigns PostgreSQL's transaction timestamp, now(), to a column.
 
+type AuthorizedSQL struct {
+	Query, Key string
+	Args       []any
+	Effects    ShapeEffects
+	// SecretArgs uses the same bind order as Args.
+	SecretArgs []bool
+}
+    AuthorizedSQL is the driver view of a successfully verified call. Its fields
+    describe this call only. Editing the view cannot authorize SQL.
+
+type AuthorizedSession interface {
+	ExecAuthorized(context.Context, AuthorizedStatement) (int64, error)
+	ScanAuthorized(context.Context, AuthorizedStatement, ...any) error
+	EachAuthorized(context.Context, AuthorizedStatement, func(func(...any) error) error) error
+}
+    AuthorizedSession is the driver channel used for registered queries.
+    Every entry verifies its AuthorizedStatement against the receiving session
+    and applies the usual method, transaction and database guards.
+
+type AuthorizedStatement struct {
+	// Has unexported fields.
+}
+    AuthorizedStatement is an opaque call bound to one registered shape, one
+    session instance and its ordered parameters. Applications cannot construct
+    it from SQL text, a snapshot or a verification credential.
+
+type Binding struct {
+	// Has unexported fields.
+}
+    Binding supplies the value of one Slot to an execution.
+
+func BindValue[V any](slot Slot[V], value V) Binding
+    BindValue pairs an input with a value of its declared Go type.
+
+type CallMethod uint8
+    CallMethod is the driver operation authorized for one execution.
+
+const (
+	// CallExec executes an affected-row mutation without a result shape.
+	CallExec CallMethod = iota + 1
+	// CallScan decodes a single read result.
+	CallScan
+	// CallEach visits results of a read.
+	CallEach
+	// CallReturning decodes a single row produced by a write.
+	CallReturning
+	// CallReturningEach streams rows produced by a write.
+	CallReturningEach
+)
 type Capability uint32
     Capability is a bitmask of operations that RegistryConfig.Deny forbids on
     tables and bindings belonging to a Registry.
@@ -342,6 +395,8 @@ type Definition struct {
 	// StatementQueries records the owner of each composed-query variant and
 	// registered scalar aggregate (for example, sum_rank belongs to sum:rank).
 	StatementQueries map[string]string `json:",omitempty"`
+	// StatementShapes holds verification metadata for each typed variant.
+	StatementShapes map[string]StatementShape `json:",omitempty"`
 }
     Definition is one defined table as Registry.Defined lists it.
 
@@ -378,6 +433,23 @@ type ErrorPolicy struct {
 }
     ErrorPolicy maps execution and write-guard failures into the host's own
     error categories. Nil fields fall back to the package's default sentinels.
+
+type Expr[V any] struct {
+	// Has unexported fields.
+}
+    Expr is a typed expression assembled from descriptor fields and inputs.
+
+type Field[V any] struct {
+	// Has unexported fields.
+}
+    Field is a typed column on exactly one relation occurrence.
+
+func FieldOf[R, V any](r Rel[R], name string, kind PGType[V]) Field[V]
+    FieldOf resolves a descriptor column at definition time. The Go value type
+    must match. A pointer field may be read as its nullable element type.
+
+func (f Field[V]) Expr() Expr[V]
+    Expr references this column on its declaring occurrence.
 
 type Filter struct {
 	// Has unexported fields.
@@ -614,6 +686,62 @@ func (s OrderSpec) Resolve(by, dir string) string
     Resolve maps caller-provided sort key and direction to a safe SQL ORDER BY
     expression (without leading "ORDER BY").
 
+type OutputField[V any] struct {
+	// Has unexported fields.
+}
+    OutputField is a named projection target on a registered View.
+
+func Output[T, S, V any](view *View[T, S], name string, kind PGType[V]) OutputField[V]
+    Output resolves a view column and checks its Go type at definition time.
+
+type PGType[V any] struct {
+	// Has unexported fields.
+}
+    PGType pairs a Go value type with an exact PostgreSQL catalog type. Its zero
+    value cannot be used to declare a column or parameter.
+
+func Bool() PGType[bool]
+    Bool declares PostgreSQL boolean.
+
+func CatalogType[V any](schema, name string, encode func(V) any) PGType[V]
+    CatalogType declares a schema-qualified PostgreSQL type. Supply its encoding
+    for a bound input, or nil when the driver already accepts V. Both names are
+    exact catalog identifiers. No portion is interpreted as a SQL expression.
+
+func Int4() PGType[int32]
+    Int4 declares PostgreSQL integer.
+
+func Int8() PGType[int64]
+    Int8 declares PostgreSQL bigint.
+
+func Text() PGType[string]
+    Text declares PostgreSQL text.
+
+func Timestamptz() PGType[time.Time]
+    Timestamptz declares PostgreSQL timestamp with time zone.
+
+type Pred = Expr[bool]
+    Pred is a PostgreSQL boolean expression. A nullable predicate follows SQL
+    three-valued logic when it is used in WHERE.
+
+func And(first, second Pred, rest ...Pred) Pred
+    And combines two or more typed predicates in declaration order.
+
+func Eq[V any](left, right Expr[V]) Pred
+    Eq compares two expressions of the same PostgreSQL type.
+
+func IsNotDistinct[V any](left, right Expr[V]) Pred
+    IsNotDistinct compares values using PostgreSQL's null-safe equality.
+
+type Projection struct {
+	// Has unexported fields.
+}
+    Projection assigns a typed expression to one output column.
+
+func Project[V any](target OutputField[V], value Expr[V]) Projection
+    Project pairs an output target with an expression of the same Go value type.
+    Compilation also checks the PostgreSQL types, nullability and output order.
+
 type Query[T, S any] struct {
 	// Has unexported fields.
 }
@@ -831,6 +959,10 @@ func (r *Registry[S]) Resolve(ft reflect.Type, jsonOption, zeroOption bool) (fun
      5. database/sql native primitives (bool, ints, floats, string, []byte,
         time.Time).
 
+func (r *Registry[S]) SQLAuthority() SQLAuthority
+    SQLAuthority returns this registry's verification credential. Pass it to a
+    driver that executes authorized statements for this registry.
+
 func (r *Registry[S]) Seal(key SessionKey) error
     Seal atomically attaches key to a Registry created with RequireSealed:
     true and a zero SessionKey. It fails on an open registry, a zero key, or any
@@ -881,6 +1013,33 @@ type RegistryConfig[S any] struct {
 	Deny Capability
 }
     RegistryConfig configures one isolated Registry for scope type S.
+
+type Rel[T any] struct {
+	// Has unexported fields.
+}
+    Rel identifies one occurrence of a physical table in a query. Two
+    occurrences are distinct even when they use the same descriptor and alias.
+
+func FromTable[T, K, S any](t *Table[T, K, S], alias string, scope RelationScope) Rel[T]
+    FromTable declares an occurrence of a registered, schema-qualified Table.
+    The requested strategy must match the descriptor's declared enforcement.
+
+type RelationScope struct {
+	// Has unexported fields.
+}
+    RelationScope identifies the enforcement declared for a physical relation.
+
+func ByRLS() RelationScope
+    ByRLS delegates scoping to PostgreSQL row-level security. A compiled shape
+    records the physical relation for role-bound ENABLE and FORCE checks.
+
+func ByScopeColumn() RelationScope
+    ByScopeColumn binds the session scope to the descriptor's tagged scope
+    column.
+
+func Global() RelationScope
+    Global declares a physical relation whose rows do not depend on session
+    scope.
 
 type RetryConfig struct {
 	// MaxAttempts is the total number of attempts including the initial run
@@ -1059,6 +1218,19 @@ func (r *Rows[T, K, S]) WithLogger(logger *slog.Logger) *Rows[T, K, S]
     WithLogger returns a Rows handle sharing the same Table and Session with a
     per-binding logger override.
 
+type SQLAuthority struct {
+	// Has unexported fields.
+}
+    SQLAuthority verifies registered statements for a driver on behalf of one
+    registry. It cannot sign SQL or change which statements that registry owns.
+
+func (a SQLAuthority) IsZero() bool
+    IsZero reports whether this is the unset credential.
+
+func (a SQLAuthority) Open(owner any, method CallMethod, call AuthorizedStatement) (AuthorizedSQL, error)
+    Open validates a compiled call for the receiving session. Drivers pass their
+    own session pointer. The returned parameters are in PostgreSQL bind order.
+
 type SQLFiles struct {
 	// Has unexported fields.
 }
@@ -1149,6 +1321,53 @@ type SessionProof struct {
     key token and the concrete owner pointer, so copying a proof onto another
     struct or wrapping a session fails verification.
 
+type ShapeAccess struct{ Relation, Command string }
+    ShapeAccess identifies one physical relation and command for policy checks.
+
+type ShapeColumn struct{ Relation, Name, Type string }
+    ShapeColumn records the declared PostgreSQL type of a referenced physical
+    column for catalog verification. Relation is its quoted, qualified table.
+
+type ShapeEffects uint8
+    ShapeEffects describes what a compiled statement can do on its session.
+
+const (
+	// EffectRead marks a statement that observes rows.
+	EffectRead ShapeEffects = 1 << iota
+	// EffectWrite marks a statement that can modify data, including through a routine.
+	EffectWrite
+	// EffectRowLock marks a row-locking read that needs a writable transaction.
+	EffectRowLock
+	// EffectAdvisoryLock marks an operation whose advisory lock needs a transaction.
+	EffectAdvisoryLock
+)
+type ShapeField struct {
+	Name, Type string
+	Nullable   bool
+}
+    ShapeField describes a result column in projection order.
+
+type ShapeInput struct {
+	Name, Type string
+	Scope      bool
+	// Secret requests redaction of this bind value by observers.
+	Secret bool
+}
+    ShapeInput identifies a numbered parameter. Scope marks a parameter supplied
+    by the session. Values are kept outside all snapshots.
+
+type Slot[V any] struct {
+	// Has unexported fields.
+}
+    Slot is the identity of a typed input. Reusing it in a statement reuses the
+    parameter position. Two Input calls always allocate distinct inputs.
+
+func Input[V any](name string, kind PGType[V]) Slot[V]
+    Input declares one named input at definition time.
+
+func (s Slot[V]) Expr() Expr[V]
+    Expr references a bound value. Its value never enters the SQL text.
+
 type SoftDelete struct {
 	// DeletedValue is the sentinel value written to mark a row deleted
 	// (must be string/~string or an integer matching the ",deleted" field type).
@@ -1234,6 +1453,24 @@ func (p StatementPolicy) Compile(singleStatement bool) (StatementGuard, error)
     enabled, the guard checks statement boundaries without restricting the
     method.
 
+type StatementShape struct {
+	Inputs          []ShapeInput
+	Result          []ShapeField
+	Effects         ShapeEffects
+	Privileges      []DefinedPrivilege
+	Access          []ShapeAccess
+	PhysicalColumns []ShapeColumn
+	ForceRLS        []string
+	SchemaUsage     []string
+	AnyColumnSelect []string
+	AnyColumnUpdate []string
+	// UnscopedOnly marks a shape that omits a declared column-scope predicate.
+	// It can be bound only to an unscoped session.
+	UnscopedOnly bool
+}
+    StatementShape describes the inputs, results, effects and minimum grants for
+    one SQL string in Definition.Statements under the same key.
+
 type Table[T, K, S any] struct {
 	descriptor[T, S]
 
@@ -1299,9 +1536,13 @@ func (t *Table[T, K, S]) TryDefineUpsert(key string, spec UpsertSpec, opts ...St
     in the Registry.
 
 type TableSpec[T, K any] struct {
-	Name, Order string
-	Columns     []Column[T]
-	SoftDelete  *SoftDelete
+	// RelationScope declares how a typed query may access this physical table.
+	// A tagged scope column implies ByScopeColumn when this field is zero.
+	// An untagged table needs an explicit ByRLS or Global declaration for typed use.
+	RelationScope RelationScope
+	Name, Order   string
+	Columns       []Column[T]
+	SoftDelete    *SoftDelete
 	// ReadOnly restricts this table to read operations only: no INSERT/UPDATE/DELETE
 	// statements or write privileges are derived, and write methods return ErrReadOnly.
 	ReadOnly bool

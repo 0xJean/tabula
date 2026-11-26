@@ -34,9 +34,13 @@ func (c Column[T]) Secret() Column[T] { c.secret = true; return c }
 // type's db tags, read once by Define.
 // Tag options: key, serial, scope, deleted, version, once, json, zero, array, secret.
 type TableSpec[T, K any] struct {
-	Name, Order string
-	Columns     []Column[T]
-	SoftDelete  *SoftDelete
+	// RelationScope declares how a typed query may access this physical table.
+	// A tagged scope column implies ByScopeColumn when this field is zero.
+	// An untagged table needs an explicit ByRLS or Global declaration for typed use.
+	RelationScope RelationScope
+	Name, Order   string
+	Columns       []Column[T]
+	SoftDelete    *SoftDelete
 	// ReadOnly restricts this table to read operations only: no INSERT/UPDATE/DELETE
 	// statements or write privileges are derived, and write methods return ErrReadOnly.
 	ReadOnly bool
@@ -60,6 +64,7 @@ type TableSpec[T, K any] struct {
 // access modes are fixed by Define.
 type Table[T, K, S any] struct {
 	descriptor[T, S]
+	relationScope           RelationScope
 	order                   string
 	readOnly, allowDelete   bool
 	mode                    WriteMode
@@ -117,6 +122,8 @@ type Definition struct {
 	// StatementQueries records the owner of each composed-query variant and
 	// registered scalar aggregate (for example, sum_rank belongs to sum:rank).
 	StatementQueries map[string]string `json:",omitempty"`
+	// StatementShapes holds verification metadata for each typed variant.
+	StatementShapes map[string]StatementShape `json:",omitempty"`
 }
 
 // DefinedColumn is one column's metadata for schema and privilege checks.
@@ -222,6 +229,9 @@ func TryDefine[T, K, S any](r *Registry[S], spec TableSpec[T, K]) (*Table[T, K, 
 	}
 	if err := t.bindUpdateColumns(spec.UpdateColumns, fail); err != nil {
 		return nil, err
+	}
+	if err := t.bindRelationScope(spec.RelationScope); err != nil {
+		return nil, fail("%v", err)
 	}
 	if len(spec.GroupBy) > 0 {
 		t.groupBy = make(map[string]bool, len(spec.GroupBy))
