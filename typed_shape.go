@@ -22,18 +22,24 @@ const (
 )
 
 // ShapeField describes a result column in projection order.
+// When AllowedTypes is non-empty, sqlcheck accepts any PostgreSQL type whose
+// exact or unwrapped domain base OID matches one of the listed type names.
 type ShapeField struct {
-	Name, Type string
-	Nullable   bool
+	Name, Type   string
+	Nullable     bool
+	AllowedTypes []string `json:",omitempty"`
 }
 
 // ShapeInput identifies a numbered parameter. Scope marks a parameter supplied
 // by the session. Values are kept outside all snapshots.
+// When AllowedTypes is non-empty, sqlcheck accepts any PostgreSQL parameter
+// type whose exact or unwrapped domain base OID matches one of the listed names.
 type ShapeInput struct {
 	Name, Type string
 	Scope      bool
 	// Secret requests redaction of this bind value by observers.
-	Secret bool
+	Secret       bool
+	AllowedTypes []string `json:",omitempty"`
 }
 
 // ShapeAccess identifies one physical relation and command for policy checks.
@@ -107,7 +113,13 @@ type physicalColumn struct {
 
 func cloneShape(s StatementShape) StatementShape {
 	s.Inputs = slices.Clone(s.Inputs)
+	for i := range s.Inputs {
+		s.Inputs[i].AllowedTypes = slices.Clone(s.Inputs[i].AllowedTypes)
+	}
 	s.Result = slices.Clone(s.Result)
+	for i := range s.Result {
+		s.Result[i].AllowedTypes = slices.Clone(s.Result[i].AllowedTypes)
+	}
 	s.Privileges = slices.Clone(s.Privileges)
 	for i := range s.Privileges {
 		s.Privileges[i].Columns = slices.Clone(s.Privileges[i].Columns)

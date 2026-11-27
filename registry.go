@@ -92,6 +92,14 @@ type RegistryConfig[S any] struct {
 	// DefaultTypes supplies the PostgreSQL type and input codec for exact Go
 	// types used in table layouts. ColumnType overrides the registry default.
 	DefaultTypes []TypeDefault
+	// TypeFamilies declares Go-type to PostgreSQL compatible type sets for
+	// DefineSQL, DefineSQLExec, DefineSQLReturning and DefineSQLList verification.
+	// Construct entries with TypeFamilyOf or register later with RegisterTypeFamily.
+	TypeFamilies []TypeFamily
+	// SessionGuard optionally enforces additional session-state restrictions
+	// (such as protected VariablePrefixes or ForbidVariableReads) at DefineSQL*
+	// registration time in addition to the built-in GuardNoSessionEscape check.
+	SessionGuard SessionGuardConfig
 }
 
 // Registry owns registered value converters, error policy, logging, tracing,
@@ -106,6 +114,7 @@ type Registry[S any] struct {
 	arrayArgFn          func(any) any
 	arrayColFn          func(reflect.Type) (func(any) any, error)
 	defaultTypes        map[reflect.Type]TypeDefault
+	sessionGuard        func(string) error
 	errors              ErrorPolicy
 	log                 *logState
 	tracer              Tracer
@@ -118,6 +127,7 @@ type Registry[S any] struct {
 	mu           sync.RWMutex
 	types        map[reflect.Type]func(any) any
 	zeros        map[reflect.Type]func(any) any
+	typeFamilies map[reflect.Type][]string
 	defs         []*registration
 	views        []*registration
 	typedColumns map[physicalColumn]catalogType
@@ -125,11 +135,22 @@ type Registry[S any] struct {
 
 // NewRegistry creates a Registry preloaded with built-in scalar zero
 // converters (string, bool, int, int32, int64, float64, time.Time).
-// Invalid or duplicate DefaultTypes declarations cause a panic.
+// Invalid or duplicate DefaultTypes or TypeFamilies declarations, or an invalid
+// SessionGuard configuration, cause a panic.
 func NewRegistry[S any](cfg RegistryConfig[S]) *Registry[S] {
 	prefix := cfg.Prefix
 	if prefix == "" {
 		prefix = "tabula"
+	}
+	var sessionGuard func(string) error
+	if len(cfg.SessionGuard.VariablePrefixes) > 0 || cfg.SessionGuard.ForbidRole ||
+		cfg.SessionGuard.ForbidSessionAuthorization || cfg.SessionGuard.ForbidSetConfig ||
+		cfg.SessionGuard.ForbidVariableReads {
+		var err error
+		sessionGuard, err = NewSessionGuard(cfg.SessionGuard)
+		if err != nil {
+			panic(prefix + ".NewRegistry: SessionGuard: " + err.Error())
+		}
 	}
 	r := &Registry[S]{
 		statementIssuer:     &statementIssuer{strict: cfg.Deny&DenyLegacySQL != 0},
@@ -140,6 +161,7 @@ func NewRegistry[S any](cfg RegistryConfig[S]) *Registry[S] {
 		arrayArgFn:          cfg.ArrayArg,
 		arrayColFn:          cfg.ArrayColumn,
 		defaultTypes:        registryTypeDefaults(cfg.DefaultTypes),
+		sessionGuard:        sessionGuard,
 		errors:              cfg.Errors,
 		log:                 newLogState(cfg.Log),
 		tracer:              cfg.Tracer,
@@ -148,6 +170,7 @@ func NewRegistry[S any](cfg RegistryConfig[S]) *Registry[S] {
 		requireSealed:       cfg.RequireSealed,
 		deny:                cfg.Deny,
 		types:               networkTypes(),
+		typeFamilies:        registryTypeFamilies(cfg.TypeFamilies),
 		zeros: map[reflect.Type]func(any) any{
 			reflect.TypeFor[string]():    zeroOf[string],
 			reflect.TypeFor[bool]():      zeroOf[bool],

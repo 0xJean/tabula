@@ -95,7 +95,7 @@ func TestInferredPolicyAccess(t *testing.T) {
 }
 
 func TestACLTypesAndOptions(t *testing.T) {
-	scope := CatalogScope{[]string{"s"}, []string{"public reader"}}
+	scope := CatalogScope{Schemas: []string{"s"}, Roles: []string{"public reader"}}
 	g := Grant{Role: scope.Roles[0], Schema: "s", Kind: "FUNCTION", Object: `f"n`, Privilege: "EXECUTE", Arguments: `pg_catalog.int4, "Weird S"."With.dot"`}
 	q, err := g.sql(true, false)
 	require.NoError(t, err)
@@ -116,7 +116,7 @@ func TestACLTypesAndOptions(t *testing.T) {
 		_, err := signature(bad)
 		require.Error(t, err)
 	}
-	_, err = CompareGrants(GrantManifest{CatalogScope{[]string{"other"}, scope.Roles}, nil}, []Grant{g})
+	_, err = CompareGrants(GrantManifest{CatalogScope: CatalogScope{Schemas: []string{"other"}, Roles: scope.Roles}}, []Grant{g})
 	require.Error(t, err)
 	g.Kind = "COLUMN"
 	_, err = g.sql(false, false)

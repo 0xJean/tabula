@@ -185,7 +185,7 @@ WITH target AS (
         WHEN q."Privilege" = 'FORCE RLS' THEN c.relkind IN ('r','p') AND c.relforcerowsecurity
         WHEN c.relkind IN ('r','p','v','m','f') THEN CASE
             WHEN q."Kind" = 'COLUMN' THEN a.attnum IS NOT NULL AND pg_catalog.has_column_privilege(r.oid, c.oid, a.attnum, q."Privilege")
-            WHEN q."Privilege" = 'DELETE' THEN pg_catalog.has_table_privilege(r.oid, c.oid, 'DELETE')
+            WHEN q."Privilege" IN ('SELECT', 'INSERT', 'UPDATE', 'DELETE') THEN pg_catalog.has_table_privilege(r.oid, c.oid, q."Privilege")
             WHEN q."Privilege" = 'SELECT ANY COLUMN' THEN pg_catalog.has_any_column_privilege(r.oid, c.oid, 'SELECT')
             WHEN q."Privilege" = 'UPDATE ANY COLUMN' THEN pg_catalog.has_any_column_privilege(r.oid, c.oid, 'UPDATE')
         END

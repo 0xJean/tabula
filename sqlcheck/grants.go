@@ -35,14 +35,22 @@ type GrantDiff struct {
 	SQL            []string
 }
 
-func readGrants(ctx context.Context, tx *sql.Tx, schemas, roles string) ([]Grant, error) {
+func readGrants(ctx context.Context, tx *sql.Tx, schemas, roles string, granularity GrantGranularity) ([]Grant, error) {
+	gran, err := granularity.normalized()
+	if err != nil {
+		return nil, err
+	}
+	columnBranch := `
+ UNION ALL SELECT ns,relname,'COLUMN',a.attname,'',a.attacl FROM relations t JOIN pg_catalog.pg_attribute a ON a.attrelid=t.oid
+ WHERE a.attnum>0 AND NOT a.attisdropped AND a.attacl IS NOT NULL`
+	if gran == GranularityTable {
+		columnBranch = ""
+	}
 	grants, err := readRows(ctx, tx, `WITH relations AS (
  SELECT n.nspname AS ns,c.* FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
  WHERE c.relkind IN ('r','p','v','m','f','S') AND n.nspname`+schemaFilter+`), objects AS (
  SELECT ns,relname AS obj,CASE WHEN relkind='S' THEN 'SEQUENCE' ELSE 'TABLE' END AS kind,'' AS col,'' AS args,
- coalesce(relacl,pg_catalog.acldefault(CASE WHEN relkind='S' THEN 's'::"char" ELSE 'r'::"char" END,relowner)) AS acl FROM relations
- UNION ALL SELECT ns,relname,'COLUMN',a.attname,'',a.attacl FROM relations t JOIN pg_catalog.pg_attribute a ON a.attrelid=t.oid
- WHERE a.attnum>0 AND NOT a.attisdropped AND a.attacl IS NOT NULL
+ coalesce(relacl,pg_catalog.acldefault(CASE WHEN relkind='S' THEN 's'::"char" ELSE 'r'::"char" END,relowner)) AS acl FROM relations`+columnBranch+`
  UNION ALL SELECT n.nspname,p.proname,'FUNCTION','',`+routineArgs+`,coalesce(proacl,pg_catalog.acldefault('f',proowner))
  FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace WHERE p.prokind IN ('f','a','w') AND n.nspname`+schemaFilter+`),
  entries AS (SELECT CASE WHEN grantee=0 THEN 'PUBLIC' ELSE pg_catalog.pg_get_userbyid(grantee)::text END AS role,
@@ -127,8 +135,13 @@ func (g Grant) sql(grant, optionOnly bool) (string, error) {
 // CompareGrants computes exact direct ACL differences, including grant options.
 // PostgreSQL revokes same-privilege column ACLs when revoking from a table;
 // surviving explicit column grants are restored in the generated script.
+// Under GranularityTable, COLUMN grants in the manifest or actual slice are rejected.
 func CompareGrants(manifest GrantManifest, actual []Grant) (GrantDiff, error) {
 	var d GrantDiff
+	gran, err := manifest.Granularity.normalized()
+	if err != nil {
+		return d, err
+	}
 	if _, err := scopeArray(manifest.Schemas); err != nil {
 		return d, err
 	}
@@ -139,6 +152,9 @@ func CompareGrants(manifest GrantManifest, actual []Grant) (GrantDiff, error) {
 	for i, grants := range [][]Grant{manifest.Grants, actual} {
 		set := map[Grant]Grant{}
 		for _, g := range grants {
+			if gran == GranularityTable && g.Kind == "COLUMN" {
+				return d, fmt.Errorf("column grant is not allowed with GranularityTable: %+v", g)
+			}
 			if _, err := g.sql(true, false); err != nil {
 				return d, err
 			}
@@ -210,7 +226,7 @@ func CheckGrantManifest(ctx context.Context, db *sql.DB, m GrantManifest) (Grant
 	if err != nil {
 		return GrantDiff{}, err
 	}
-	grants, err := readGrants(ctx, tx, schemas, roles)
+	grants, err := readGrants(ctx, tx, schemas, roles, m.Granularity)
 	if err != nil {
 		return GrantDiff{}, err
 	}

@@ -1,10 +1,10 @@
-# Integrating Tabula v0.4
+# Integrating Tabula v0.5
 
 Start here when adding Tabula to an application. The [Go API and CLI reference](REFERENCE.md) lists the public packages, functions, methods, types, constants and command flags in this revision.
 
 ## Use the docs that match the build
 
-These pages describe **v0.4**. For a released version, select its Git tag and open the README there. For a development build, open the README at the exact commit you build. Its links to guides and the reference stay on that revision. The changelog records changes between versions. [Migration guide](MIGRATION.md) · [Changelog](../CHANGELOG.md)
+These pages describe **v0.5**. For a released version, select its Git tag and open the README there. For a development build, open the README at the exact commit you build. Its links to guides and the reference stay on that revision. The changelog records changes between versions. [Migration guide](MIGRATION.md) · [Changelog](../CHANGELOG.md)
 
 From an application checkout, ask Go which copy it actually selected. `Dir` locates its source and docs, including a local workspace or replacement. With a replacement, `Version` can still show the requested tag. Check `Replace.Dir` for the code actually in use. Run the second command as well if the application imports the separate pgxdriver module.
 
@@ -56,6 +56,7 @@ To try a local checkout from an application that already depends on Tabula, set 
 | Read, aggregate or lock rows | `Rows.Get`, `GetMany`, `Lock`, `LockMany`, `Find`, `List`, `ListKeyset` (with `KeysetPage.Next`), `Iter`, `Exists`, and package aggregates `Max`, `Min`, `Sum`, `Avg`, `CountBy`. Use `Filter` and `OrderSpec` for runtime values and sort choices, `LockMode` for row locks and `CountMode` for totals. | [Keyset pagination](COOKBOOK.md#6-keyset-pagination-without-offset) · [Streaming and locks](COOKBOOK.md#10-stream-a-worker-batch) |
 | Map fields and their PostgreSQL types | Use `MapTable`, `ColumnType` and `RegistryConfig.DefaultTypes`. Each alias of the layout can be used for a table read, mutation, projection or join. | [pgtype](REFERENCE.md#pgtype) and [mapped table reads](COOKBOOK.md#mapped-table-reads) |
 | Register a typed single-table plan | `RowsFrom`, `DefineRows`, `DefineUpdateMany` and `DefineDeleteMany` compile typed predicates, projections, groups and named alternatives. Use `DefineTableRows` for a table-shaped result and `DefineExists` for a standalone existence check. | [Registered row plans](COOKBOOK.md#registered-single-table-reads-and-writes) |
+| Register named-parameter SQL with `[Row, Args]` structs | `DefineSQL`, `DefineSQLExec`, `DefineSQLReturning` and `DefineSQLList` compile `@name` placeholders with `ScopeParam`/`ScopeByRLS`/`ScopeGlobal` and Go type families (`RegisterTypeFamily`, `TypeFamilyOf`) under `SQLAuthority`. | [Named-parameter SQL](COOKBOOK.md#named-parameter-sql-with-struct-scanning) |
 | Execute handwritten SQL, composed view queries or embedded SQL files | Use `Rows.SelectIter` for table-shaped results, `View.Statement` + `ViewRows.One`/`Select`/`Iter` for full queries, `View.DefineQuery` (`Select`/`Where`/`Tail`/`CountBase`, `ScopeColumns`/`ScopeByRLS`/`ScopeGlobal`, `QueryParams`) for composed lists/counts/keyset pages, and `MustSQLFiles`/`LoadSQLFiles` for embedded `.sql` files. | [Composed queries](COOKBOOK.md#14-composed-view-queries-and-aggregates) · [Projection example](../example_test.go) |
 | Write one row or a batch | `Insert`, `Save`, `SetWhere`, `UpdateWhere`, `SetExpr`, `SoftDelete` and opt-in `Delete`. Use `InsertReturning` or `SaveReturning` for returned columns, `InsertMany` or `UpsertMany` for batches, and `DefineUpsert` for a conflict plan. Use `TableSpec.WriteMode` and `UpdateColumns` for role-specific writes and `RegistryConfig.Deny` for registry-wide limits. | [Batch and atomic updates](COOKBOOK.md#11-batch-upserts-and-atomic-updates) |
 | Register typed writes and returned rows | Build `InsertInto`, `UpdateOf` or `DeleteFrom`; register through `DefineWrite`, `DefineReturning` or their mapped/finite variants. Batches and returned rows require `OperationSession`. | [Typed writes](TYPED-WRITES.md) |
@@ -72,15 +73,15 @@ Call the [sqlcheck Go API](REFERENCE.md#sqlcheck) in tests or use the commands b
 | --- | --- | --- |
 | Descriptor and view columns against the installed schema | `VerifySchema`, `VerifyViewSchema` | Go API |
 | Registered SQL or a committed snapshot, optionally as a role | `RenderAllSnapshot`, `ParseSnapshot`, `VerifyStatements`, `VerifyViewStatements` | [check](REFERENCE.md#tabula-check) |
-| Write-result columns without executing the statement | `VerifyStatementsUsing` or `VerifyRoleStatementsUsing` with `pgxdriver.SQLVerifier`. A database/sql-only verifier reports `ErrDescribeRequired` for these results. | Go API |
+| Write-result columns and named-parameter SQL shapes without executing the statement | `VerifyStatementsUsing` or `VerifyRoleStatementsUsing` with `pgxdriver.SQLVerifier`. Verifies parameter OIDs, exact positional column names, and domain-unwrapped `AllowedTypes`. A database/sql-only verifier reports `ErrDescribeRequired` for returning writes. | Go API |
 | Expected table RLS settings | `CheckRLS` | [check-rls](REFERENCE.md#tabula-check-rls) |
 | Login role hygiene (`NOINHERIT`, memberships, direct grants, ownership, `CREATE`) | `CheckLoginRole` | [check-login-role](REFERENCE.md#tabula-check-login-role) |
 | Handwritten SQL, registered row plans, locks, routine calls, composed queries, aggregates and role bindings | `CollectSQL`, `DefaultSecurityCallTargets`, `SQLInventory.BindRolesWithDefinitions` | [inventory](REFERENCE.md#tabula-inventory) |
 | Whether PostgreSQL can plan each role's own statements | `VerifyRoleStatements` | [verify-roles](REFERENCE.md#tabula-verify-roles) |
-| Startup readiness of the runner role | `RoleStatements.Readiness` derives requirements from typed statements assigned to the role. `CheckReadiness` checks effective grants and required table RLS flags in one query. | [Startup example](AUTHORIZATION.md#check-a-role-at-startup) |
-| Required descriptor privileges or exact direct grants on all configured objects | `CollectPrivilegeNeeds` and `CheckRolePrivileges` for descriptors. `CheckGrantManifest` for missing and extra grants with reconciliation SQL. | [grants](REFERENCE.md#tabula-grants) for the manifest |
-| Which grants a tested workload still needs | `MinimizeGrants` | [minimize](REFERENCE.md#tabula-minimize) |
-| Policy definitions, FORCE RLS tables, direct grants and SECURITY DEFINER functions and procedures | `ReadCatalog`, `Catalog.Snapshots` | [catalog](REFERENCE.md#tabula-catalog) |
+| Startup readiness of the runner role | `RoleStatements.Readiness` derives requirements from typed statements assigned to the role. `CheckReadiness` checks effective column or table privileges (`TableSelect`, `TableInsert`, `TableUpdate`, `TableDelete`) and required table RLS flags in one query. | [Startup example](AUTHORIZATION.md#check-a-role-at-startup) |
+| Required descriptor privileges or exact direct grants on all configured objects | `CollectPrivilegeNeeds` and `CheckRolePrivileges` for descriptors. `CheckGrantManifest` for missing and extra grants with reconciliation SQL; select `GranularityTable` or `--granularity=table` for table-level auditing. | [grants](REFERENCE.md#tabula-grants) for the manifest |
+| Which grants a tested workload still needs | `MinimizeGrants` (`MinimizeConfig.Granularity` selects `GranularityAll` or `GranularityTable`) | [minimize](REFERENCE.md#tabula-minimize) |
+| Policy definitions, FORCE RLS tables, direct grants and SECURITY DEFINER functions and procedures | `ReadCatalog`, `Catalog.Snapshots` (`CatalogScope.Granularity` selects `GranularityAll` or `GranularityTable`) | [catalog](REFERENCE.md#tabula-catalog) |
 | Whether each policy matches one configured category | `ClassifyPolicies` | [check-policies](REFERENCE.md#tabula-check-policies) |
 | Whether a role has policy coverage for the SQL commands it uses | `CheckPolicyCoverage` | [check-coverage](REFERENCE.md#tabula-check-coverage) |
 | Which rows a role sees or changes for a given scope | `RunRLSMatrix` | [test-rls](REFERENCE.md#tabula-test-rls) |

@@ -43,14 +43,16 @@ const (
 	scopeColumns
 	scopeByRLS
 	scopeGlobal
+	scopeParam
 )
 
-// QueryScope declares how a composed query applies row scope on a scoped
-// Registry. On a scoped Registry (S != struct{}), leaving Scope unset fails
-// closed at DefineQuery time; choose ScopeColumns, ScopeByRLS or ScopeGlobal.
+// QueryScope declares how a composed or named-parameter SQL query applies row
+// scope on a scoped Registry. On a scoped Registry (S != struct{}), leaving
+// Scope unset fails closed at registration time.
 type QueryScope struct {
-	mode scopeMode
-	cols []string
+	mode  scopeMode
+	cols  []string
+	param string
 }
 
 // ScopeColumns injects outer WHERE predicates (<col> = $n) using the bound
@@ -66,8 +68,16 @@ func ScopeColumns(cols ...string) QueryScope {
 // (or CTE/base predicates) rather than an outer scope column predicate.
 func ScopeByRLS() QueryScope { return QueryScope{mode: scopeByRLS} }
 
-// ScopeGlobal declares a view over global lookup tables that have no row scope.
+// ScopeGlobal declares a query over global lookup tables that have no row scope.
 func ScopeGlobal() QueryScope { return QueryScope{mode: scopeGlobal} }
+
+// ScopeParam binds the current session's scope S automatically to the named
+// parameter @<name> in DefineSQL, DefineSQLExec, DefineSQLReturning or
+// DefineSQLList. The parameter must appear in the SQL and must not also be
+// declared on Args. Unscoped sessions fail closed at execution time.
+func ScopeParam(name string) QueryScope {
+	return QueryScope{mode: scopeParam, param: name}
+}
 
 // QuerySortTerm pairs a parameter-free SQL ordering expression with its matching View column.
 type QuerySortTerm struct {

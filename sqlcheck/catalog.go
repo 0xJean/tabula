@@ -9,9 +9,42 @@ import (
 	"strings"
 )
 
+// GrantGranularity selects which PostgreSQL ACL object kinds are included in
+// catalog reads, grant comparisons and grant minimization.
+type GrantGranularity string
+
+const (
+	// GranularityAll audits TABLE, COLUMN, SEQUENCE and FUNCTION direct grants (default).
+	GranularityAll GrantGranularity = ""
+	// GranularityTable audits TABLE, SEQUENCE and FUNCTION direct grants, omitting column ACLs.
+	GranularityTable GrantGranularity = "table"
+)
+
+// ParseGrantGranularity parses a configuration or CLI granularity value ("all" or "table").
+func ParseGrantGranularity(raw string) (GrantGranularity, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "all":
+		return GranularityAll, nil
+	case "table":
+		return GranularityTable, nil
+	default:
+		return "", fmt.Errorf("invalid grant granularity %q (expected \"all\" or \"table\")", raw)
+	}
+}
+
+func (g GrantGranularity) normalized() (GrantGranularity, error) {
+	return ParseGrantGranularity(string(g))
+}
+
 // CatalogScope names the complete set of schemas and direct grantees in an audit.
-// PUBLIC includes privileges granted to everyone.
-type CatalogScope struct{ Schemas, Roles []string }
+// PUBLIC includes privileges granted to everyone. Granularity defaults to
+// GranularityAll (including column ACLs) and may be set to GranularityTable to
+// audit table, sequence and function grants only.
+type CatalogScope struct {
+	Schemas     []string
+	Roles       []string
+	Granularity GrantGranularity `json:",omitempty"`
+}
 
 // Relation identifies one schema-qualified PostgreSQL relation.
 type Relation struct{ Schema, Table string }
@@ -80,6 +113,9 @@ func scopeArray(names []string) (string, error) {
 	return string(raw), err
 }
 func (s CatalogScope) bind(ctx context.Context, tx *sql.Tx) (schemas, roles string, err error) {
+	if _, err = s.Granularity.normalized(); err != nil {
+		return
+	}
 	schemas, err = scopeArray(s.Schemas)
 	if err != nil {
 		return
@@ -128,7 +164,7 @@ func ReadCatalog(ctx context.Context, db *sql.DB, scope CatalogScope) (Catalog, 
 	if err != nil {
 		return c, err
 	}
-	c.Grants, err = readGrants(ctx, tx, schemas, roles)
+	c.Grants, err = readGrants(ctx, tx, schemas, roles, scope.Granularity)
 	if err != nil {
 		return c, err
 	}

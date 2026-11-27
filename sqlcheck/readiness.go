@@ -19,6 +19,10 @@ import (
 type ReadinessNeeds struct {
 	Privileges      PrivilegeNeeds
 	SchemaUsage     []string
+	TableSelect     []string                        // table-level SELECT via has_table_privilege
+	TableInsert     []string                        // table-level INSERT via has_table_privilege
+	TableUpdate     []string                        // table-level UPDATE via has_table_privilege
+	TableDelete     []string                        // table-level DELETE via has_table_privilege
 	AnyColumnSelect []string                        // SELECT on at least one column of each relation
 	AnyColumnUpdate []string                        // UPDATE on at least one column of each locked relation
 	Routines        []tabula.RoutineRequirement     // exact function catalog contracts
@@ -142,6 +146,10 @@ func readinessItems(n ReadinessNeeds) ([]readinessItem, error) {
 	}{
 		{n.Privileges.Functions, "FUNCTION", "EXECUTE"},
 		{n.SchemaUsage, "SCHEMA", "USAGE"},
+		{n.TableSelect, "TABLE", "SELECT"},
+		{n.TableInsert, "TABLE", "INSERT"},
+		{n.TableUpdate, "TABLE", "UPDATE"},
+		{n.TableDelete, "TABLE", "DELETE"},
 		{n.AnyColumnSelect, "TABLE", "SELECT ANY COLUMN"},
 		{n.AnyColumnUpdate, "TABLE", "UPDATE ANY COLUMN"},
 		{n.ForceRLS, "TABLE", "ENABLE RLS"},

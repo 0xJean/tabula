@@ -237,7 +237,7 @@ func CheckPolicyCoverage(ctx context.Context, db *sql.DB, work RoleStatements) (
 			return nil, err
 		}
 		for _, s := range stmts {
-			if s.needsPolicyAccess() {
+			if s.needsPolicyAccess() && !shapeHasAllowedTypes(s.Shape) {
 				findings = append(findings, fmt.Sprintf("%s/%s: typed statement requires reviewed Access or NoAccess", role, s.Name))
 				continue
 			}

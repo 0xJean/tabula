@@ -201,6 +201,9 @@ func (v *View[T, S]) TryDefineQuery(key string, spec QuerySpec, opts ...Statemen
 		}
 		sMode = scopeGlobal
 	}
+	if sMode == scopeParam {
+		return nil, fail("ScopeParam is not supported on View.DefineQuery (use ScopeColumns, ScopeByRLS or ScopeGlobal)")
+	}
 	if sMode == scopeColumns {
 		if len(spec.Scope.cols) == 0 {
 			return nil, fail("ScopeColumns requires at least one column")
