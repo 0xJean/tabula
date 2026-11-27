@@ -32,7 +32,11 @@ func decodeConfig[T any](raw []byte) (T, error) {
 	return c, nil
 }
 
-type auditOptions struct{ section, against, bindings, snapshot string }
+type auditOptions struct {
+	section, against, bindings, snapshot string
+	granularity                          sqlcheck.GrantGranularity
+	granularitySet                       bool
+}
 
 func runAudit(ctx context.Context, name string, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
@@ -40,6 +44,7 @@ func runAudit(ctx context.Context, name string, args []string, stdout, stderr io
 	config := fs.String("config", "", "path to command-specific JSON configuration")
 	var dsn string
 	var opts auditOptions
+	var granularityFlag string
 	if name != "inventory" {
 		fs.StringVar(&dsn, "dsn", "", "disposable PostgreSQL connection string (or TABULA_DSN)")
 	} else {
@@ -50,8 +55,24 @@ func runAudit(ctx context.Context, name string, args []string, stdout, stderr io
 		fs.StringVar(&opts.section, "section", "", "emit one named snapshot file")
 		fs.StringVar(&opts.against, "against", "", "compare with committed snapshot directory")
 	}
+	if name == "catalog" || name == "grants" || name == "minimize" {
+		fs.StringVar(&granularityFlag, "granularity", "all", "grant audit granularity: all or table")
+	}
 	if err := fs.Parse(args); err != nil {
 		return flagExitCode(err)
+	}
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "granularity" {
+			opts.granularitySet = true
+		}
+	})
+	if opts.granularitySet {
+		g, err := sqlcheck.ParseGrantGranularity(granularityFlag)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 2
+		}
+		opts.granularity = g
 	}
 	if dsn == "" {
 		dsn = os.Getenv("TABULA_DSN")
@@ -149,6 +170,9 @@ func audit(ctx context.Context, name string, db *sql.DB, raw []byte, opts auditO
 		if err != nil {
 			return nil, nil, err
 		}
+		if opts.granularitySet {
+			m.Granularity = opts.granularity
+		}
 		d, err := sqlcheck.CheckGrantManifest(ctx, db, m)
 		var f []string
 		if len(d.Extra)+len(d.Missing) > 0 {
@@ -159,6 +183,9 @@ func audit(ctx context.Context, name string, db *sql.DB, raw []byte, opts auditO
 		cfg, err := decodeConfig[sqlcheck.MinimizeConfig](raw)
 		if err != nil {
 			return nil, nil, err
+		}
+		if opts.granularitySet {
+			cfg.Granularity = opts.granularity
 		}
 		m, err := sqlcheck.MinimizeGrants(ctx, db, cfg)
 		return m, nil, err
@@ -187,6 +214,9 @@ func audit(ctx context.Context, name string, db *sql.DB, raw []byte, opts auditO
 		c, err := decodeConfig[sqlcheck.CatalogScope](raw)
 		if err != nil {
 			return nil, nil, err
+		}
+		if opts.granularitySet {
+			c.Granularity = opts.granularity
 		}
 		catalog, err := sqlcheck.ReadCatalog(ctx, db, c)
 		if err != nil {

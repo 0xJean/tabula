@@ -69,4 +69,21 @@ func TestAuditCLI(t *testing.T) {
 	call(1, "catalog", scope, "--against", dir)
 	call(2, "catalog", scope, "--section", "../bad")
 	call(2, "minimize", map[string]any{"invalid": true})
+
+	// Test --granularity=table and --granularity=all across catalog, grants and minimize.
+	_, err = db.Exec("GRANT SELECT(id) ON " + ns + ".items TO " + role)
+	require.NoError(t, err)
+	allGrantsOut := call(0, "catalog", scope, "--section", "grants.json", "--granularity=all")
+	require.Contains(t, allGrantsOut, `"Kind": "COLUMN"`)
+	tblGrantsOut := call(0, "catalog", scope, "--section", "grants.json", "--granularity=table")
+	require.NotContains(t, tblGrantsOut, `"Kind": "COLUMN"`)
+	var tblGrants []sqlcheck.Grant
+	require.NoError(t, json.Unmarshal([]byte(tblGrantsOut), &tblGrants))
+	call(0, "grants", sqlcheck.GrantManifest{CatalogScope: scope, Grants: tblGrants}, "--granularity=table")
+	minTblOut := call(0, "minimize", sqlcheck.MinimizeConfig{Role: role, Schemas: scope.Schemas, Statements: work[role]}, "--granularity=table")
+	require.NotContains(t, minTblOut, `"Kind": "COLUMN"`)
+	require.Contains(t, minTblOut, "REVOKE DELETE")
+	call(2, "catalog", scope, "--granularity=bogus")
+	call(2, "grants", sqlcheck.GrantManifest{CatalogScope: scope}, "--granularity=bogus")
+	call(2, "minimize", sqlcheck.MinimizeConfig{Role: role, Schemas: scope.Schemas, Statements: work[role]}, "--granularity=bogus")
 }

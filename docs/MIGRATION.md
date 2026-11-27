@@ -1,6 +1,15 @@
-# Migrating to Tabula v0.4
+# Migrating to Tabula v0.5
 
 Start with the section for the version you are adopting. The integration guide lists the APIs and commands available in this checkout. [Integration guide](INTEGRATION.md)
+
+## From v0.4.4 to v0.5.0
+
+v0.5.0 is backward-compatible with v0.4.4 when using keyed struct literals. Existing `Table`, `View`, Typed Plan AST, `SQLAuthority`, and column-level `sqlcheck` workflows keep their exact behavior and snapshots.
+
+- **Named-parameter SQL with `[Row, Args]` struct scanning**: Opt in with `DefineSQL`, `DefineSQLExec`, `DefineSQLReturning` and `DefineSQLList` (plus `TryDefine*` variants) on any existing `*Registry[S]`. They issue signed `SQLAuthority` calls compatible with `DenyLegacySQL: true` on both `stdsql` and `pgxdriver`. Use `ScopeParam`, `ScopeByRLS`, or `ScopeGlobal` on scoped registries, and register custom Go type families via `RegisterTypeFamily[T]` or `RegistryConfig.TypeFamilies` (`TypeFamilyOf`). [Named-parameter SQL examples](COOKBOOK.md#named-parameter-sql-with-struct-scanning)
+- **Bidirectional `AllowedTypes` verification**: `ShapeInput` and `ShapeField` gain an optional `AllowedTypes []string` field. Shapes with empty `AllowedTypes` continue using exact catalog `Type` verification unchanged. Verify returning writes and modifying CTEs with `sqlcheck.VerifyStatementsUsing` / `VerifyRoleStatementsUsing` and `pgxdriver.SQLVerifier`.
+- **Table-level grant granularity**: `GrantGranularity` defaults to `GranularityAll` (`""`), preserving existing `TABLE` + `COLUMN` + `SEQUENCE` + `FUNCTION` behavior. Opt in to `GranularityTable` (`"table"`) on `CatalogScope.Granularity`, `MinimizeConfig.Granularity`, or via `--granularity=table` on `tabula catalog`, `tabula grants` and `tabula minimize`. For table-level startup readiness checks, set `ReadinessNeeds.TableSelect`, `TableInsert`, `TableUpdate` and `TableDelete`. [Table-level grant granularity](AUTHORIZATION.md#table-level-grant-granularity)
+- **Keyed literals**: `RegistryConfig`, `ShapeField`, `ShapeInput`, `CatalogScope`, `MinimizeConfig` and `ReadinessNeeds` gained additive fields; convert any positional struct literals to keyed literals.
 
 ## From v0.4.3 to v0.4.4
 

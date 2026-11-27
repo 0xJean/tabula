@@ -1,0 +1,603 @@
+package tabula_test
+
+import (
+	"bytes"
+	"context"
+	"database/sql"
+	"database/sql/driver"
+	"encoding/json"
+	"errors"
+	"log/slog"
+	"net/netip"
+	"reflect"
+	"testing"
+	"time"
+
+	"github.com/0xJean/tabula"
+	"github.com/0xJean/tabula/sqlcheck"
+	"github.com/stretchr/testify/require"
+)
+
+type fakeAuthSession[S any] struct {
+	scope      S
+	unscoped   bool
+	readOnly   bool
+	proof      tabula.SessionProof
+	authority  tabula.SQLAuthority
+	execRows   int64
+	execErr    error
+	eachRows   [][]any
+	eachErr    error
+	scanVal    any
+	scanErr    error
+	lastSQL    tabula.AuthorizedSQL
+	lastMethod tabula.CallMethod
+	textCalls  int
+	authCalls  int
+	stoppedAt  int
+}
+
+func (s *fakeAuthSession[S]) Scope() S                          { return s.scope }
+func (s *fakeAuthSession[S]) Unscoped() bool                    { return s.unscoped }
+func (s *fakeAuthSession[S]) ReadOnly() bool                    { return s.readOnly }
+func (s *fakeAuthSession[S]) SessionProof() tabula.SessionProof { return s.proof }
+func (s *fakeAuthSession[S]) SQLAuthority() tabula.SQLAuthority { return s.authority }
+func (s *fakeAuthSession[S]) Exec(context.Context, string, ...any) (int64, error) {
+	s.textCalls++
+	return 0, tabula.ErrLegacySQL
+}
+func (s *fakeAuthSession[S]) Scan(context.Context, string, []any, ...any) error {
+	s.textCalls++
+	return tabula.ErrLegacySQL
+}
+func (s *fakeAuthSession[S]) Returning(context.Context, string, []any, ...any) error {
+	s.textCalls++
+	return tabula.ErrLegacySQL
+}
+func (s *fakeAuthSession[S]) Each(context.Context, string, []any, func(func(...any) error) error) error {
+	s.textCalls++
+	return tabula.ErrLegacySQL
+}
+
+func (s *fakeAuthSession[S]) ExecAuthorized(_ context.Context, call tabula.AuthorizedStatement) (int64, error) {
+	q, err := s.authority.Open(s, tabula.CallExec, call)
+	if err != nil {
+		return 0, err
+	}
+	s.authCalls++
+	s.lastSQL = q
+	s.lastMethod = tabula.CallExec
+	return s.execRows, s.execErr
+}
+
+func (s *fakeAuthSession[S]) ScanAuthorized(_ context.Context, call tabula.AuthorizedStatement, dest ...any) error {
+	method := tabula.CallScan
+	if call.Method() == tabula.CallReturning {
+		method = tabula.CallReturning
+	}
+	q, err := s.authority.Open(s, method, call)
+	if err != nil {
+		return err
+	}
+	s.authCalls++
+	s.lastSQL = q
+	s.lastMethod = method
+	if s.scanErr != nil {
+		return s.scanErr
+	}
+	if len(dest) == 1 {
+		if p, ok := dest[0].(*int64); ok {
+			if v, ok := s.scanVal.(int64); ok {
+				*p = v
+			}
+		}
+	}
+	return nil
+}
+
+func (s *fakeAuthSession[S]) EachAuthorized(_ context.Context, call tabula.AuthorizedStatement, visit func(func(...any) error) error) error {
+	method := tabula.CallEach
+	if call.Method() == tabula.CallReturningEach {
+		method = tabula.CallReturningEach
+	}
+	q, err := s.authority.Open(s, method, call)
+	if err != nil {
+		return err
+	}
+	s.authCalls++
+	s.lastSQL = q
+	s.lastMethod = method
+	if s.eachErr != nil {
+		return s.eachErr
+	}
+	for idx, row := range s.eachRows {
+		if err := visit(func(dest ...any) error {
+			for i, d := range dest {
+				switch p := d.(type) {
+				case *int64:
+					*p = row[i].(int64)
+				case *string:
+					*p = row[i].(string)
+				case *bool:
+					*p = row[i].(bool)
+				case **string:
+					if row[i] == nil {
+						*p = nil
+					} else {
+						v := row[i].(string)
+						*p = &v
+					}
+				case sql.Scanner:
+					if err := p.Scan(row[i]); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		}); err != nil {
+			s.stoppedAt = idx + 1
+			return err
+		}
+	}
+	return nil
+}
+
+type customUUID [16]byte
+
+func (u customUUID) Value() (driver.Value, error) { return "00000000-0000-0000-0000-000000000001", nil }
+func (u *customUUID) Scan(src any) error          { return nil }
+
+type unmappedCustom struct{ V string }
+
+func (u unmappedCustom) Value() (driver.Value, error) { return u.V, nil }
+func (u *unmappedCustom) Scan(src any) error          { return nil }
+
+func TestDefineSQLValidationAndExecution(t *testing.T) {
+	type itemRow struct {
+		ID   int64  `db:"id"`
+		Name string `db:"name"`
+	}
+	type itemArgs struct {
+		ID     int64  `db:"id"`
+		Secret string `db:"secret,secret"`
+	}
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	key := tabula.NewSessionKey()
+	reg := tabula.NewRegistry(tabula.RegistryConfig[int64]{
+		Deny:       tabula.DenyLegacySQL,
+		SessionKey: key,
+		Log: tabula.LogConfig{
+			Logger: logger,
+			Level:  tabula.LogAll,
+			Values: tabula.ValuesAllowed,
+			SQL:    true,
+		},
+		SessionGuard: tabula.SessionGuardConfig{
+			VariablePrefixes:    []string{"demo."},
+			ForbidVariableReads: true,
+		},
+	})
+
+	q := tabula.DefineSQL[itemRow, itemArgs](reg, tabula.SQLSpec{
+		Name:  "items.get",
+		SQL:   "SELECT id, name FROM public.items WHERE tenant_id = @tenant_id AND id = @id AND token = @secret",
+		Scope: tabula.ScopeParam("tenant_id"),
+	})
+	require.Equal(t, "items.get", q.Name())
+	require.Equal(t, "SELECT id, name FROM public.items WHERE tenant_id = $1 AND id = $2 AND token = $3", q.SQL())
+
+	def := q.Definition()
+	require.Len(t, def.Statements, 1)
+	shape := def.StatementShapes["sql"]
+	require.Equal(t, tabula.EffectRead, shape.Effects)
+	require.Len(t, shape.Inputs, 3)
+	require.True(t, shape.Inputs[0].Scope)
+	require.Equal(t, []string{"smallint", "integer", "bigint"}, shape.Inputs[0].AllowedTypes)
+	require.False(t, shape.Inputs[1].Secret)
+	require.True(t, shape.Inputs[2].Secret)
+	require.Len(t, shape.Result, 2)
+	require.Equal(t, "id", shape.Result[0].Name)
+	require.Equal(t, "name", shape.Result[1].Name)
+
+	// Verify snapshot round-trip preserves AllowedTypes.
+	snap := sqlcheck.RenderAllSnapshot(reg.Defined(), reg.DefinedViews())
+	parsed, err := sqlcheck.ParseSnapshot(snap)
+	require.NoError(t, err)
+	require.Len(t, parsed, 1)
+	require.Equal(t, shape.Inputs, parsed[0].StatementShapes["sql"].Inputs)
+	require.Equal(t, shape.Result, parsed[0].StatementShapes["sql"].Result)
+
+	// Authorized execution with One / MaybeOne / First / All / Each and redaction.
+	sess := &fakeAuthSession[int64]{
+		scope:     42,
+		authority: reg.SQLAuthority(),
+		eachRows:  [][]any{{int64(7), "alpha"}},
+	}
+	sess.proof = key.Sign(sess)
+	bound := q.Bind(sess)
+
+	row, err := bound.One(t.Context(), itemArgs{ID: 7, Secret: "top-secret-token"})
+	require.NoError(t, err)
+	require.Equal(t, itemRow{ID: 7, Name: "alpha"}, row)
+	require.Zero(t, sess.textCalls)
+	require.Equal(t, []any{int64(42), int64(7), "top-secret-token"}, sess.lastSQL.Args)
+	require.Equal(t, []bool{false, false, true}, sess.lastSQL.SecretArgs)
+	require.NotContains(t, logBuf.String(), "top-secret-token")
+	require.Contains(t, logBuf.String(), "[redacted]")
+
+	// ScopeParam fails closed on unscoped session.
+	unscopedSess := &fakeAuthSession[int64]{unscoped: true, authority: reg.SQLAuthority()}
+	unscopedSess.proof = key.Sign(unscopedSess)
+	_, err = q.Bind(unscopedSess).One(t.Context(), itemArgs{ID: 7, Secret: "x"})
+	require.ErrorIs(t, err, tabula.ErrStatementAuthority)
+
+	// Foreign session rejected by SessionKey.
+	foreignSess := &fakeAuthSession[int64]{scope: 42, authority: reg.SQLAuthority()}
+	_, err = q.Bind(foreignSess).One(t.Context(), itemArgs{ID: 7, Secret: "x"})
+	require.ErrorIs(t, err, tabula.ErrForeignSession)
+
+	// 0 rows behavior: One -> ErrNotFound (matches sql.ErrNoRows), MaybeOne -> false, First -> false.
+	sess.eachRows = nil
+	_, err = bound.One(t.Context(), itemArgs{ID: 7, Secret: "x"})
+	require.ErrorIs(t, err, tabula.ErrNotFound)
+	require.ErrorIs(t, err, sql.ErrNoRows)
+	_, ok, err := bound.MaybeOne(t.Context(), itemArgs{ID: 7, Secret: "x"})
+	require.NoError(t, err)
+	require.False(t, ok)
+	_, ok, err = bound.First(t.Context(), itemArgs{ID: 7, Secret: "x"})
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	// >1 rows behavior: One/MaybeOne -> ErrMultipleRows; First -> first row & stops cursor; All -> all; Each -> callback error preserved.
+	sess.eachRows = [][]any{{int64(1), "a"}, {int64(2), "b"}}
+	_, err = bound.One(t.Context(), itemArgs{ID: 7, Secret: "x"})
+	require.ErrorIs(t, err, tabula.ErrMultipleRows)
+	_, ok, err = bound.MaybeOne(t.Context(), itemArgs{ID: 7, Secret: "x"})
+	require.ErrorIs(t, err, tabula.ErrMultipleRows)
+	require.False(t, ok)
+
+	first, ok, err := bound.First(t.Context(), itemArgs{ID: 7, Secret: "x"})
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, itemRow{ID: 1, Name: "a"}, first)
+	require.Equal(t, 1, sess.stoppedAt)
+
+	all, err := bound.All(t.Context(), itemArgs{ID: 7, Secret: "x"})
+	require.NoError(t, err)
+	require.Equal(t, []itemRow{{ID: 1, Name: "a"}, {ID: 2, Name: "b"}}, all)
+
+	sentinel := errors.New("app callback stop")
+	err = bound.Each(t.Context(), itemArgs{ID: 7, Secret: "x"}, func(r itemRow) error {
+		return sentinel
+	})
+	require.Same(t, sentinel, err)
+}
+
+func TestDefineSQLRowLockReadOnlyAndRejections(t *testing.T) {
+	type row struct {
+		ID int64 `db:"id"`
+	}
+	type idArgs struct {
+		ID int64 `db:"id"`
+	}
+	reg := tabula.NewRegistry(tabula.RegistryConfig[int64]{
+		Deny: tabula.DenyLegacySQL,
+		SessionGuard: tabula.SessionGuardConfig{
+			VariablePrefixes:    []string{"demo."},
+			ForbidVariableReads: true,
+		},
+	})
+
+	for i, clause := range []string{"FOR UPDATE", "FOR NO KEY UPDATE", "FOR SHARE", "FOR KEY SHARE"} {
+		q := tabula.DefineSQL[row, idArgs](reg, tabula.SQLSpec{
+			Name:  "lock_" + clause,
+			SQL:   "SELECT id FROM public.items WHERE id = @id " + clause,
+			Scope: tabula.ScopeByRLS(),
+		})
+		require.NotZero(t, q.Definition().StatementShapes["sql"].Effects&tabula.EffectRowLock, i)
+		ro := &fakeAuthSession[int64]{scope: 1, readOnly: true, authority: reg.SQLAuthority()}
+		_, err := q.Bind(ro).One(t.Context(), idArgs{ID: 1})
+		require.ErrorIs(t, err, tabula.ErrReadOnly)
+	}
+
+	// Rejections at TryDefineSQL time.
+	badSpecs := []struct {
+		name string
+		spec tabula.SQLSpec
+		want string
+	}{
+		{
+			name: "missing scope on scoped registry",
+			spec: tabula.SQLSpec{Name: "bad_scope", SQL: "SELECT id FROM public.items WHERE id = @id"},
+			want: "explicit Scope",
+		},
+		{
+			name: "raw positional placeholder",
+			spec: tabula.SQLSpec{Name: "bad_pos", SQL: "SELECT id FROM public.items WHERE id = $1", Scope: tabula.ScopeGlobal()},
+			want: "positional parameter $1",
+		},
+		{
+			name: "unknown named parameter",
+			spec: tabula.SQLSpec{Name: "bad_param", SQL: "SELECT id FROM public.items WHERE id = @id AND code = @missing", Scope: tabula.ScopeGlobal()},
+			want: "unknown parameter @missing",
+		},
+		{
+			name: "unused args field",
+			spec: tabula.SQLSpec{Name: "bad_unused", SQL: "SELECT id FROM public.items", Scope: tabula.ScopeGlobal()},
+			want: "not referenced in SQL",
+		},
+		{
+			name: "multi-statement",
+			spec: tabula.SQLSpec{Name: "bad_multi", SQL: "SELECT id FROM public.items WHERE id = @id; DELETE FROM public.items", Scope: tabula.ScopeGlobal()},
+			want: "multiple SQL statements",
+		},
+		{
+			name: "set_config blocked",
+			spec: tabula.SQLSpec{Name: "bad_set_config", SQL: "SELECT set_config('demo.x', '1', true) AS id WHERE 1 = @id", Scope: tabula.ScopeGlobal()},
+			want: "set_config",
+		},
+		{
+			name: "protected variable read blocked by Registry SessionGuard",
+			spec: tabula.SQLSpec{Name: "bad_var_read", SQL: "SELECT current_setting('demo.scope')::bigint AS id WHERE 1 = @id", Scope: tabula.ScopeGlobal()},
+			want: "current_setting",
+		},
+		{
+			name: "write statement rejected in DefineSQL",
+			spec: tabula.SQLSpec{Name: "bad_write", SQL: "DELETE FROM public.items WHERE id = @id RETURNING id", Scope: tabula.ScopeGlobal()},
+			want: "read-only queries only",
+		},
+		{
+			name: "modifying CTE rejected in DefineSQL",
+			spec: tabula.SQLSpec{Name: "bad_mcte", SQL: "WITH d AS (DELETE FROM public.items WHERE id = @id RETURNING id) SELECT id FROM d", Scope: tabula.ScopeGlobal()},
+			want: "read-only queries only",
+		},
+		{
+			name: "ScopeParam conflicts with Args field",
+			spec: tabula.SQLSpec{Name: "bad_scope_dup", SQL: "SELECT id FROM public.items WHERE id = @id", Scope: tabula.ScopeParam("id")},
+			want: "must not also be declared on Args",
+		},
+		{
+			name: "ScopeParam not referenced in SQL",
+			spec: tabula.SQLSpec{Name: "bad_scope_unused", SQL: "SELECT id FROM public.items WHERE id = @id", Scope: tabula.ScopeParam("tenant_id")},
+			want: "ScopeParam @tenant_id is not referenced",
+		},
+		{
+			name: "duplicate name",
+			spec: tabula.SQLSpec{Name: "lock_FOR UPDATE", SQL: "SELECT id FROM public.items WHERE id = @id", Scope: tabula.ScopeGlobal()},
+			want: "already registered",
+		},
+		{
+			name: "session-level advisory lock rejected",
+			spec: tabula.SQLSpec{Name: "bad_sess_lock", SQL: "SELECT pg_advisory_lock(@id) AS id", Scope: tabula.ScopeGlobal()},
+			want: "session-level advisory lock",
+		},
+	}
+	for _, tc := range badSpecs {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := tabula.TryDefineSQL[row, idArgs](reg, tc.spec)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.want)
+		})
+	}
+
+	// Untagged exported field and duplicate db tags rejected.
+	type untaggedArgs struct {
+		ID int64
+	}
+	_, err := tabula.TryDefineSQL[row, untaggedArgs](reg, tabula.SQLSpec{
+		Name: "untagged", SQL: "SELECT id FROM public.items", Scope: tabula.ScopeGlobal(),
+	})
+	require.ErrorContains(t, err, "has no db tag")
+
+	type dupTagArgs struct {
+		A int64 `db:"id"`
+		B int64 `db:"id"`
+	}
+	_, err = tabula.TryDefineSQL[row, dupTagArgs](reg, tabula.SQLSpec{
+		Name: "dup_tag", SQL: "SELECT id FROM public.items WHERE id = @id", Scope: tabula.ScopeGlobal(),
+	})
+	require.ErrorContains(t, err, `declared twice`)
+}
+
+func TestDefineSQLExecAndReturning(t *testing.T) {
+	type row struct {
+		ID int64 `db:"id"`
+	}
+	type args struct {
+		ID int64 `db:"id"`
+	}
+	reg := tabula.NewRegistry(tabula.RegistryConfig[struct{}]{
+		Deny: tabula.DenyLegacySQL | tabula.DenyUnscopedWrites,
+	})
+
+	// Exec accepts INSERT/UPDATE/DELETE/MERGE/modifying CTE without RETURNING and AdvisoryLock.
+	del := tabula.DefineSQLExec[args](reg, tabula.SQLSpec{
+		Name: "items.delete",
+		SQL:  "DELETE FROM public.items WHERE id = @id",
+	})
+	require.Equal(t, tabula.EffectWrite, del.Definition().StatementShapes["sql"].Effects)
+
+	adv := tabula.DefineSQLExec[args](reg, tabula.SQLSpec{
+		Name:         "items.lock_xact",
+		SQL:          "SELECT pg_advisory_xact_lock(@id)",
+		AdvisoryLock: true,
+	})
+	require.Equal(t, tabula.EffectRead|tabula.EffectAdvisoryLock, adv.Definition().StatementShapes["sql"].Effects)
+
+	// Exec rejects RETURNING, plain SELECT without AdvisoryLock, and session advisory lock.
+	_, err := tabula.TryDefineSQLExec[args](reg, tabula.SQLSpec{
+		Name: "bad_ret", SQL: "DELETE FROM public.items WHERE id = @id RETURNING id",
+	})
+	require.ErrorContains(t, err, "DefineSQLReturning")
+
+	_, err = tabula.TryDefineSQLExec[args](reg, tabula.SQLSpec{
+		Name: "bad_sel", SQL: "SELECT id FROM public.items WHERE id = @id",
+	})
+	require.ErrorContains(t, err, "AdvisoryLock: true")
+
+	_, err = tabula.TryDefineSQLExec[args](reg, tabula.SQLSpec{
+		Name: "bad_adv", SQL: "SELECT pg_advisory_lock(@id)", AdvisoryLock: true,
+	})
+	require.ErrorContains(t, err, "session-level advisory lock")
+
+	// Returning accepts RETURNING and modifying CTE returning rows; rejects plain SELECT and non-RETURNING writes.
+	ret := tabula.DefineSQLReturning[row, args](reg, tabula.SQLSpec{
+		Name: "items.delete_returning",
+		SQL:  "DELETE FROM public.items WHERE id = @id RETURNING id",
+	})
+	mcte := tabula.DefineSQLReturning[row, args](reg, tabula.SQLSpec{
+		Name: "items.move_returning",
+		SQL:  "WITH moved AS (DELETE FROM public.items WHERE id = @id RETURNING id) SELECT id FROM moved",
+	})
+	require.Equal(t, tabula.EffectWrite, ret.Definition().StatementShapes["sql"].Effects)
+	require.Equal(t, tabula.EffectWrite, mcte.Definition().StatementShapes["sql"].Effects)
+
+	_, err = tabula.TryDefineSQLReturning[row, args](reg, tabula.SQLSpec{
+		Name: "bad_plain_sel", SQL: "SELECT id FROM public.items WHERE id = @id",
+	})
+	require.ErrorContains(t, err, "DefineSQL")
+
+	_, err = tabula.TryDefineSQLReturning[row, args](reg, tabula.SQLSpec{
+		Name: "bad_no_ret", SQL: "DELETE FROM public.items WHERE id = @id",
+	})
+	require.ErrorContains(t, err, "DefineSQLExec")
+
+	// Exec & Returning respect ReadOnly and DenyUnscopedWrites.
+	sess := &fakeAuthSession[struct{}]{authority: reg.SQLAuthority(), execRows: 3, eachRows: [][]any{{int64(9)}}}
+	n, err := del.Bind(sess).Exec(t.Context(), args{ID: 9})
+	require.NoError(t, err)
+	require.Equal(t, int64(3), n)
+
+	got, err := mcte.Bind(sess).One(t.Context(), args{ID: 9})
+	require.NoError(t, err)
+	require.Equal(t, row{ID: 9}, got)
+	require.Equal(t, tabula.CallReturningEach, sess.lastMethod)
+
+	// StatementGuard with AllowAuthorizedWriteCTE permits modifying CTE via CheckAuthorized.
+	guard, err := (tabula.StatementPolicy{
+		Read:                    []string{"select"},
+		Write:                   []string{"delete", "with"},
+		RequireReturning:        true,
+		AllowAuthorizedWriteCTE: true,
+	}).Compile(true)
+	require.NoError(t, err)
+	require.NoError(t, guard.Check("Scan", "SELECT 1"))
+
+	// Unscoped write denied when DenyUnscopedWrites is set.
+	unscoped := &fakeAuthSession[struct{}]{unscoped: true, authority: reg.SQLAuthority()}
+	_, err = del.Bind(unscoped).Exec(t.Context(), args{ID: 9})
+	require.ErrorIs(t, err, tabula.ErrCapabilityDenied)
+
+	// ReadOnly rejects write.
+	ro := &fakeAuthSession[struct{}]{readOnly: true, authority: reg.SQLAuthority()}
+	_, err = ret.Bind(ro).One(t.Context(), args{ID: 9})
+	require.ErrorIs(t, err, tabula.ErrReadOnly)
+}
+
+func TestTypeFamiliesDerivationAndCustomRegistration(t *testing.T) {
+	type codeAlias string
+	type wideRow struct {
+		ID      int64           `db:"id"`
+		Small   int16           `db:"small"`
+		Mid     int32           `db:"mid"`
+		Flag    bool            `db:"flag"`
+		Ratio   float64         `db:"ratio"`
+		Code    codeAlias       `db:"code"`
+		At      time.Time       `db:"at"`
+		Raw     []byte          `db:"raw"`
+		Meta    json.RawMessage `db:"meta"`
+		Payload map[string]any  `db:"payload,json"`
+		Tags    []string        `db:"tags,array"`
+		Addr    netip.Addr      `db:"addr"`
+		CIDR    netip.Prefix    `db:"cidr"`
+		UID     customUUID      `db:"uid"`
+	}
+	reg := tabula.NewRegistry(tabula.RegistryConfig[struct{}]{
+		ArrayColumn: func(ft reflect.Type) (func(any) any, error) {
+			return func(p any) any { return p }, nil
+		},
+		TypeFamilies: []tabula.TypeFamily{
+			tabula.TypeFamilyOf[customUUID]("uuid"),
+		},
+	})
+	tabula.RegisterTypeFamily[codeAlias](reg, "character varying")
+
+	q := tabula.DefineSQL[wideRow, tabula.NoArgs](reg, tabula.SQLSpec{
+		Name: "wide.select",
+		SQL:  "SELECT id, small, mid, flag, ratio, code, at, raw, meta, payload, tags, addr, cidr, uid FROM public.wide",
+	})
+	res := q.Definition().StatementShapes["sql"].Result
+	byName := map[string][]string{}
+	for _, f := range res {
+		byName[f.Name] = f.AllowedTypes
+	}
+	require.Equal(t, []string{"smallint", "integer", "bigint"}, byName["id"])
+	require.Equal(t, []string{"smallint"}, byName["small"])
+	require.Equal(t, []string{"smallint", "integer"}, byName["mid"])
+	require.Equal(t, []string{"boolean"}, byName["flag"])
+	require.Equal(t, []string{"real", "double precision"}, byName["ratio"])
+	require.Equal(t, []string{"character varying"}, byName["code"])
+	require.Equal(t, []string{"timestamp with time zone", "timestamp without time zone", "date"}, byName["at"])
+	require.Equal(t, []string{"bytea"}, byName["raw"])
+	require.Equal(t, []string{"json", "jsonb"}, byName["meta"])
+	require.Equal(t, []string{"json", "jsonb"}, byName["payload"])
+	require.Equal(t, []string{"text[]", "character varying[]", "character[]", "name[]", "citext[]"}, byName["tags"])
+	require.Equal(t, []string{"inet"}, byName["addr"])
+	require.Equal(t, []string{"cidr", "inet"}, byName["cidr"])
+	require.Equal(t, []string{"uuid"}, byName["uid"])
+
+	// Unmapped custom struct fails closed.
+	type badRow struct {
+		X unmappedCustom `db:"x"`
+	}
+	_, err := tabula.TryDefineSQL[badRow, tabula.NoArgs](reg, tabula.SQLSpec{
+		Name: "bad.unmapped",
+		SQL:  "SELECT x FROM public.wide",
+	})
+	require.ErrorContains(t, err, "no registered PostgreSQL type family")
+}
+
+func FuzzDefineSQL(f *testing.F) {
+	seeds := []string{
+		"SELECT id FROM public.items WHERE id = @id",
+		"SELECT id FROM public.items WHERE id = @id FOR UPDATE",
+		"SELECT id FROM public.items WHERE id = $1",
+		"SELECT id FROM public.items; DROP TABLE public.items",
+		"SELECT set_config('demo.scope', '1', true) AS id WHERE 1 = @id",
+		"SELECT id FROM public.items WHERE note = '@id' AND id = @id",
+		"SELECT id FROM public.items WHERE tags <@ ARRAY['a'] AND id = @id",
+		"WITH d AS (DELETE FROM public.items WHERE id = @id RETURNING id) SELECT id FROM d",
+	}
+	for _, s := range seeds {
+		f.Add(s)
+	}
+	type row struct {
+		ID int64 `db:"id"`
+	}
+	type args struct {
+		ID int64 `db:"id"`
+	}
+	f.Fuzz(func(t *testing.T, query string) {
+		reg := tabula.NewRegistry(tabula.RegistryConfig[struct{}]{
+			Deny: tabula.DenyLegacySQL,
+			SessionGuard: tabula.SessionGuardConfig{
+				VariablePrefixes:    []string{"demo."},
+				ForbidVariableReads: true,
+			},
+		})
+		q, err := tabula.TryDefineSQL[row, args](reg, tabula.SQLSpec{
+			Name: "fuzz.read",
+			SQL:  query,
+		})
+		if err == nil {
+			// Any admitted DefineSQL query must satisfy GuardNoSessionEscape and SingleDML.
+			require.NoError(t, tabula.GuardNoSessionEscape(q.SQL()))
+			require.NoError(t, tabula.GuardSingleStatement(q.SQL()))
+			require.Zero(t, q.Definition().StatementShapes["sql"].Effects&tabula.EffectWrite)
+		}
+		_, _ = tabula.TryDefineSQLExec[args](reg, tabula.SQLSpec{Name: "fuzz.exec", SQL: query})
+		_, _ = tabula.TryDefineSQLReturning[row, args](reg, tabula.SQLSpec{Name: "fuzz.ret", SQL: query})
+	})
+}

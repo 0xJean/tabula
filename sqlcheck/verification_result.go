@@ -14,6 +14,16 @@ func checkDescription(ctx context.Context, tx VerificationTx, query string, para
 		return fmt.Errorf("protocol parameter count differs from prepared statement")
 	}
 	for i, oid := range d.Parameters {
+		if len(s.Inputs[i].AllowedTypes) > 0 {
+			matches, actualName, err := checkAllowedTypeOID(ctx, tx, oid, s.Inputs[i].AllowedTypes)
+			if err != nil {
+				return err
+			}
+			if !matches {
+				return fmt.Errorf("protocol input %q at $%d has PostgreSQL type %s, not compatible with %v", s.Inputs[i].Name, i+1, actualName, s.Inputs[i].AllowedTypes)
+			}
+			continue
+		}
 		var matches bool
 		if err := tx.Scan(ctx, `SELECT pg_catalog.to_regtype($1)::oid = $2::oid`, []any{s.Inputs[i].Type, oid}, &matches); err != nil {
 			return err
@@ -23,7 +33,7 @@ func checkDescription(ctx context.Context, tx VerificationTx, query string, para
 		}
 	}
 	if len(d.Fields) != len(s.Result) {
-		return fmt.Errorf("prepared result fields differ from declared fields")
+		return fmt.Errorf("prepared result has %d fields, expected %d", len(d.Fields), len(s.Result))
 	}
 	if len(s.ResultLineage) != 0 && len(s.ResultLineage) != len(s.Result) {
 		return fmt.Errorf("result lineage must follow the ordered result fields")
@@ -38,6 +48,16 @@ func checkDescription(ctx context.Context, tx VerificationTx, query string, para
 		got := d.Fields[i]
 		if got.Name != want.Name {
 			return fmt.Errorf("prepared result field %d is %q, expected %q", i+1, got.Name, want.Name)
+		}
+		if len(want.AllowedTypes) > 0 {
+			matches, actualName, err := checkAllowedTypeOID(ctx, tx, got.TypeOID, want.AllowedTypes)
+			if err != nil {
+				return err
+			}
+			if !matches {
+				return fmt.Errorf("prepared result %q at position %d has PostgreSQL type %s, not compatible with %v", want.Name, i+1, actualName, want.AllowedTypes)
+			}
+			continue
 		}
 		var expected, base uint32
 		err := tx.Scan(ctx, `WITH RECURSIVE types AS (

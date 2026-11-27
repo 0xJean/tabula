@@ -3,6 +3,17 @@
 All notable changes are listed here. The project follows semantic versioning; before
 v1.0 a minor version may contain breaking changes.
 
+## v0.5.0 — 2026-11-27
+
+- Add a named-parameter (`@name`) struct-scanning SQL tier in core package `tabula`: `DefineSQL`, `DefineSQLExec`, `DefineSQLReturning` and `DefineSQLList` (with `TryDefine*` partners, `SQLSpec`, `SQLListSpec`, `SQLFilter` and `NoArgs`). All four compile against `*Registry[S]`, issue signed `SQLAuthority` calls compatible with `DenyLegacySQL: true` on `stdsql` and `pgxdriver`, reuse `View` struct decoding and `db:"...,secret"` redaction, and fail closed at initialization on raw `$1` placeholders, undeclared or unused `Args` fields, multi-statements, session-escape attempts and missing scope declarations. [Named-parameter SQL](docs/COOKBOOK.md#named-parameter-sql-with-struct-scanning)
+- Add `ScopeParam(name)` to bind session scope `S` automatically to `@<name>` on `DefineSQL*` statements (failing closed on unscoped sessions), alongside `ScopeByRLS()` and `ScopeGlobal()`.
+- Automatically detect row-lock clauses (`FOR UPDATE`, `FOR NO KEY UPDATE`, `FOR SHARE`, `FOR KEY SHARE`) on `DefineSQL` as `EffectRowLock` (rejected on `WithinReadOnly` and `Direct`), support explicit `AdvisoryLock: true` transaction-level advisory locks on `DefineSQLExec`, and admit modifying CTEs on `DefineSQLReturning` under `StatementPolicy.AllowAuthorizedWriteCTE`.
+- Add Go type families (`TypeFamily`, `TypeFamilyOf`, `RegisterTypeFamily`, `RegistryConfig.TypeFamilies`, plus automatic derivation from `DefaultTypes`/`TypeMapping`, `,json`, `json.RawMessage` and `,array`) and optional `AllowedTypes []string` on `ShapeInput` and `ShapeField` (with zero change to existing Typed Plan AST shapes).
+- Add bidirectional catalog compatibility verification in `sqlcheck` (`VerifyStatementsUsing`, `VerifyRoleStatementsUsing`, and `database/sql` fallback for non-returning statements): checks exact parameter counts and domain-unwrapped `ParamOID` membership in `ShapeInput.AllowedTypes`, exact result widths, positional `Fields[i].Name == Shape.Result[i].Name`, and domain-unwrapped result `TypeOID` membership in `ShapeField.AllowedTypes`, alongside role-bound `PREPARE` and `EXPLAIN EXECUTE`.
+- Add optional table-level grant granularity (`GrantGranularity`: `GranularityAll` default and `GranularityTable`, plus `ParseGrantGranularity`) across `CatalogScope.Granularity` (`ReadCatalog`, `CheckGrantManifest`, `CompareGrants`), `MinimizeConfig.Granularity` (`MinimizeGrants`), and `cmd/tabula` (`catalog`, `grants`, `minimize` `--granularity=all|table`).
+- Add table-level startup readiness fields `TableSelect`, `TableInsert`, `TableUpdate` and `TableDelete` to `sqlcheck.ReadinessNeeds` (checking `pg_catalog.has_table_privilege`). [Table-level grant granularity](docs/AUTHORIZATION.md#table-level-grant-granularity)
+- Add `RegistryConfig.SessionGuard` for custom init-time `DefineSQL*` SQL guards, plus bypass-regression tests and fuzz targets (`FuzzRewriteNamedSQL`, `FuzzDefineSQL`) for the named-parameter lexer and declaration validator.
+
 ## v0.4.4 — 2026-11-27
 
 - Compose explicit query blocks through exported result identities, correlated scalar and quantified subqueries, derived/LATERAL sources, all six set operations, read/recursive common tables, parallel UNNEST and ARRAY subqueries. Inputs retain one identity and binding across nested blocks. [Query composition](docs/QUERY-COMPOSITION.md)

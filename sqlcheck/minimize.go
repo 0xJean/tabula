@@ -13,11 +13,14 @@ import (
 
 // MinimizeConfig selects one role and its complete planning workload. Keep
 // pins runtime requirements, including requirements from outside the workload.
+// Granularity defaults to GranularityAll (TABLE, COLUMN, SEQUENCE, FUNCTION)
+// and may be set to GranularityTable to trial only TABLE, SEQUENCE and FUNCTION grants.
 type MinimizeConfig struct {
-	Role       string
-	Schemas    []string
-	Statements []Statement
-	Keep       []Grant
+	Role        string
+	Schemas     []string
+	Granularity GrantGranularity `json:",omitempty"`
+	Statements  []Statement
+	Keep        []Grant
 	// Current, if supplied, must match the live direct ACL exactly.
 	Current []Grant
 	// Runtime probes supplement planning for specified privileges.
@@ -75,7 +78,11 @@ func MinimizeGrants(ctx context.Context, db *sql.DB, cfg MinimizeConfig) (Minimu
 	if err := (RoleStatements{cfg.Role: cfg.Statements}).validate(); err != nil {
 		return result, err
 	}
-	scope := CatalogScope{cfg.Schemas, []string{cfg.Role}}
+	gran, err := cfg.Granularity.normalized()
+	if err != nil {
+		return result, err
+	}
+	scope := CatalogScope{Schemas: cfg.Schemas, Roles: []string{cfg.Role}, Granularity: gran}
 	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
 	if err != nil {
 		return result, err
@@ -85,7 +92,7 @@ func MinimizeGrants(ctx context.Context, db *sql.DB, cfg MinimizeConfig) (Minimu
 	if err != nil {
 		return result, err
 	}
-	original, err := readGrants(ctx, tx, schemas, roles)
+	original, err := readGrants(ctx, tx, schemas, roles, gran)
 	if err != nil {
 		return result, err
 	}
@@ -107,6 +114,9 @@ func MinimizeGrants(ctx context.Context, db *sql.DB, cfg MinimizeConfig) (Minimu
 			return result, err
 		}
 		for _, g := range p.Covers {
+			if gran == GranularityTable && g.Kind == "COLUMN" {
+				return result, fmt.Errorf("column grant is not allowed with GranularityTable: %+v", g)
+			}
 			if !slices.Contains(original, g) {
 				return result, fmt.Errorf("runtime grant absent: %+v", g)
 			}
@@ -117,6 +127,9 @@ func MinimizeGrants(ctx context.Context, db *sql.DB, cfg MinimizeConfig) (Minimu
 		return result, fmt.Errorf("baseline: %w", err)
 	}
 	for _, g := range cfg.Keep {
+		if gran == GranularityTable && g.Kind == "COLUMN" {
+			return result, fmt.Errorf("column grant is not allowed with GranularityTable: %+v", g)
+		}
 		if !slices.Contains(original, g) {
 			return result, fmt.Errorf("pinned grant absent: %+v", g)
 		}
@@ -158,7 +171,7 @@ func MinimizeGrants(ctx context.Context, db *sql.DB, cfg MinimizeConfig) (Minimu
 		}
 		if err == nil {
 			var installed []Grant
-			installed, err = readGrants(ctx, tx, schemas, roles)
+			installed, err = readGrants(ctx, tx, schemas, roles, gran)
 			if err != nil {
 				return result, fmt.Errorf("read trial ACL: %w", err)
 			}

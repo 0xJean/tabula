@@ -9,14 +9,21 @@ and keeps the SQL for joins, locks and conditional writes available for review.
 1. **Declarative descriptors.** A Go struct with `db` tags describes one table or one row
    shape. Descriptors are defined once at package init and validated strictly: an invalid
    tag panics at start-up, not at the first query.
-2. **Explicit SQL.** Plans declare their sources, projections, predicates, locks and
-   permitted writes. Each shape has a stable key and reviewable SQL. A joined read names
-   its relation occurrences and join conditions. A view describes the output columns.
+2. **Explicit SQL across three tiers.** Applications choose the right tradeoff per
+   operation while sharing one `Registry`, `SQLAuthority`, `SessionGuard` and `sqlcheck`
+   verification chain:
+   - Single-table `Table` descriptors for primary-key CRUD and single-table operations.
+   - Named-parameter (`@name`) SQL with `[Row, Args]` struct scanning (`DefineSQL`,
+     `DefineSQLExec`, `DefineSQLReturning`, `DefineSQLList`) for low-boilerplate SQL
+     validated at init time and bidirectionally type-checked against PostgreSQL.
+   - Typed Plan AST (`DefineRows`, `DefineRead`, `DefineWrite`, `DefineReturning`) when
+     exact column-level privilege derivation, typed expression composition, or strict
+     catalog type identities are required.
 3. **Verified against a real database.** Every derived or registered statement can be
    prepared and explained against the target schema, and the full SQL is kept in a
    reviewable snapshot.
 
-The authorization tooling accepts application-owned role assignments, policy categories and expected ACLs. It reads PostgreSQL catalogs, trials revocations in a rolled-back transaction and checks real row behavior in isolated fixtures. [Authorization design](AUTHORIZATION.md)
+The authorization tooling accepts application-owned role assignments, policy categories and expected ACLs, supporting both full column-level (`GranularityAll`) and table-level (`GranularityTable`) grant auditing and minimization. It reads PostgreSQL catalogs, trials revocations in a rolled-back transaction and checks real row behavior in isolated fixtures. [Authorization design](AUTHORIZATION.md)
 
 ## Red lines
 

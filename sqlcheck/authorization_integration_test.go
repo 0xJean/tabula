@@ -52,7 +52,7 @@ func TestAuthorizationWorkflow(t *testing.T) {
 		_, err := db.ExecContext(ctx, q)
 		require.NoError(t, err, q)
 	}
-	scope := CatalogScope{[]string{ns}, []string{reader, writer, "PUBLIC"}}
+	scope := CatalogScope{Schemas: []string{ns}, Roles: []string{reader, writer, "PUBLIC"}}
 	cat, err := ReadCatalog(ctx, db, scope)
 	require.NoError(t, err)
 	require.Len(t, cat.Policies, 3)
@@ -92,7 +92,7 @@ func TestAuthorizationWorkflow(t *testing.T) {
 	}
 	schemas, roles, err := scope.bind(ctx, tx)
 	require.NoError(t, err)
-	actual, err := readGrants(ctx, tx, schemas, roles)
+	actual, err := readGrants(ctx, tx, schemas, roles, scope.Granularity)
 	require.NoError(t, err)
 	require.ElementsMatch(t, desired, actual)
 	require.NoError(t, tx.Rollback())
@@ -152,7 +152,7 @@ func TestAuthorizationWorkflow(t *testing.T) {
 	minCfg.Statements = []Statement{ins}
 	_, err = MinimizeGrants(ctx, db, minCfg)
 	require.ErrorContains(t, err, "baseline")
-	_, err = ReadCatalog(ctx, db, CatalogScope{[]string{ns + "_missing"}, []string{reader}})
+	_, err = ReadCatalog(ctx, db, CatalogScope{Schemas: []string{ns + "_missing"}, Roles: []string{reader}})
 	require.Error(t, err)
 
 	r := false

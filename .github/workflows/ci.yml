@@ -113,9 +113,10 @@ jobs:
       - name: Fuzz parsers and SQL guards
         if: matrix.module == '.'
         run: |
-          for target in FuzzParseColumnTag FuzzFilterAnd FuzzOrderSpecResolve FuzzGuardNoSessionEscape FuzzCompileQueryFragment; do
+          for target in FuzzParseColumnTag FuzzFilterAnd FuzzOrderSpecResolve FuzzGuardNoSessionEscape FuzzCompileQueryFragment FuzzDefineSQL; do
             go test -run='^$' -fuzz="^${target}$" -fuzztime=1s .
           done
+          go test -run='^$' -fuzz='^FuzzRewriteNamedSQL$' -fuzztime=1s ./internal/pgstmt
           go test -run='^$' -fuzz='^FuzzParseSnapshot$' -fuzztime=1s ./sqlcheck
       - name: Verify standalone modules against an unpublished core
         if: matrix.module == '.'

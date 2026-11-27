@@ -244,6 +244,12 @@ func RegisterType[S, V any](r *Registry[S], wrap func(*V) any)
     RegisterType registers a converter wrapping a pointer to a value of type T.
     Call during initialization before Define.
 
+func RegisterTypeFamily[T, S any](r *Registry[S], pgTypes ...string)
+    RegisterTypeFamily registers the PostgreSQL type names compatible with
+    Go type T on r for DefineSQL, DefineSQLExec, DefineSQLReturning and
+    DefineSQLList verification. Call during initialization before DefineSQL*.
+    Registering T also covers *T unless *T is registered separately.
+
 func RegisterZero[S, V any](r *Registry[S])
     RegisterZero registers scalar type V for the ",zero" db tag option (NULL
     scans as V's zero value; writes bind V directly).
@@ -317,6 +323,22 @@ func TryDefineRows[T, R, S any](out *View[T, S], name string, src RowSource[R, S
 func TryDefineRowsWithForms[T, R, S any](out *View[T, S], name string, src RowSource[R, S], spec RowsSpec, forms ReadForms, project ...Projection) (*RowsPlan[T, S], error)
     TryDefineRowsWithForms registers the data, summary and requested bounded
     forms together. A rejected declaration publishes no shapes.
+
+func TryDefineSQL[Row, Args, S any](r *Registry[S], spec SQLSpec) (*SQLQuery[Row, Args, S], error)
+    TryDefineSQL validates and atomically registers a read-only named-parameter
+    SQL query on r, publishing nothing on error.
+
+func TryDefineSQLExec[Args, S any](r *Registry[S], spec SQLSpec) (*SQLExec[Args, S], error)
+    TryDefineSQLExec validates and atomically registers a non-returning write or
+    transaction-level advisory lock on r, publishing nothing on error.
+
+func TryDefineSQLList[Row, Args, S any](r *Registry[S], spec SQLListSpec) (*SQLList[Row, Args, S], error)
+    TryDefineSQLList validates and atomically registers a named-parameter list
+    query on r, publishing nothing on error.
+
+func TryDefineSQLReturning[Row, Args, S any](r *Registry[S], spec SQLSpec) (*SQLReturning[Row, Args, S], error)
+    TryDefineSQLReturning validates and atomically registers a returning write
+    statement on r, publishing nothing on error.
 
 func TryDefineTableRead[T, S any](src RowSource[T, S], name string, columns TableSelection, query ReadSelect, observe ...StatementOption) (*ReadPlan[T, S], error)
     TryDefineTableRead registers the complete table-backed read or returns a
@@ -633,6 +655,93 @@ func (b *BoundRowsPlan[T, S]) One(ctx context.Context, choice RowChoice, values 
     One returns the only matching row. It returns ErrNotFound on an empty result
     and ErrMultipleRows on a second match. Declare Exact to limit PostgreSQL to
     two rows. Unlocked, unpaged reads can reuse their existing data statement.
+
+type BoundSQLExec[Args, S any] struct {
+	// Has unexported fields.
+}
+    BoundSQLExec executes a registered SQLExec on one authorized session.
+
+func (b *BoundSQLExec[Args, S]) Exec(ctx context.Context, args Args) (int64, error)
+    Exec executes the statement and returns the affected row count.
+
+func (b *BoundSQLExec[Args, S]) WithLogger(logger *slog.Logger) *BoundSQLExec[Args, S]
+    WithLogger returns a handle with a per-binding logger override.
+
+type BoundSQLList[Row, Args, S any] struct {
+	// Has unexported fields.
+}
+    BoundSQLList executes a registered SQLList on one authorized session.
+
+func (b *BoundSQLList[Row, Args, S]) All(ctx context.Context, args Args, order QueryOrder) ([]Row, error)
+    All reads all matching rows in the selected order without pagination or
+    COUNT(*).
+
+func (b *BoundSQLList[Row, Args, S]) Count(ctx context.Context, args Args) (int64, error)
+    Count returns the exact number of matching rows before pagination.
+
+func (b *BoundSQLList[Row, Args, S]) Each(ctx context.Context, args Args, order QueryOrder, fn func(Row) error) error
+    Each streams all matching rows in the selected order to fn.
+
+func (b *BoundSQLList[Row, Args, S]) List(ctx context.Context, args Args, page QueryPage) ([]Row, int64, error)
+    List reads one offset-paginated page plus optional exact total count.
+    CountMode must be CountExact (default) or CountNone (total = -1).
+
+func (b *BoundSQLList[Row, Args, S]) ListKeyset(ctx context.Context, args Args, page QueryKeyset) (KeysetPage[Row], error)
+    ListKeyset reads one cursor-paginated page without OFFSET, fetching Limit+1
+    rows to set HasMore and populating Next from the last returned row.
+
+func (b *BoundSQLList[Row, Args, S]) WithLogger(logger *slog.Logger) *BoundSQLList[Row, Args, S]
+    WithLogger returns a handle with a per-binding logger override.
+
+type BoundSQLQuery[Row, Args, S any] struct {
+	// Has unexported fields.
+}
+    BoundSQLQuery executes a registered SQLQuery on one authorized session.
+
+func (b *BoundSQLQuery[Row, Args, S]) All(ctx context.Context, args Args) ([]Row, error)
+    All decodes and returns all matching rows.
+
+func (b *BoundSQLQuery[Row, Args, S]) Each(ctx context.Context, args Args, fn func(Row) error) error
+    Each streams every matching row to fn, stopping on the first error returned
+    by fn.
+
+func (b *BoundSQLQuery[Row, Args, S]) First(ctx context.Context, args Args) (Row, bool, error)
+    First returns the first matching row and true, or (zero, false, nil) on 0
+    rows.
+
+func (b *BoundSQLQuery[Row, Args, S]) MaybeOne(ctx context.Context, args Args) (Row, bool, error)
+    MaybeOne returns the single matching row and true, (zero, false, nil) on 0
+    rows, or ErrMultipleRows on >1 rows.
+
+func (b *BoundSQLQuery[Row, Args, S]) One(ctx context.Context, args Args) (Row, error)
+    One returns the single matching row, ErrNotFound on 0 rows, or
+    ErrMultipleRows on >1 rows.
+
+func (b *BoundSQLQuery[Row, Args, S]) WithLogger(logger *slog.Logger) *BoundSQLQuery[Row, Args, S]
+    WithLogger returns a handle with a per-binding logger override.
+
+type BoundSQLReturning[Row, Args, S any] struct {
+	// Has unexported fields.
+}
+    BoundSQLReturning executes a registered SQLReturning on one authorized
+    session.
+
+func (b *BoundSQLReturning[Row, Args, S]) All(ctx context.Context, args Args) ([]Row, error)
+    All executes the write and decodes every returned row.
+
+func (b *BoundSQLReturning[Row, Args, S]) Each(ctx context.Context, args Args, fn func(Row) error) error
+    Each executes the write and streams every returned row to fn.
+
+func (b *BoundSQLReturning[Row, Args, S]) MaybeOne(ctx context.Context, args Args) (Row, bool, error)
+    MaybeOne executes the write and returns the single returned row and true,
+    (zero, false, nil) on 0 rows, or ErrMultipleRows on >1 rows.
+
+func (b *BoundSQLReturning[Row, Args, S]) One(ctx context.Context, args Args) (Row, error)
+    One executes the write and returns the single returned row, ErrNotFound on 0
+    rows, or ErrMultipleRows on >1 rows.
+
+func (b *BoundSQLReturning[Row, Args, S]) WithLogger(logger *slog.Logger) *BoundSQLReturning[Row, Args, S]
+    WithLogger returns a handle with a per-binding logger override.
 
 type BoundWritePlan[S any] struct {
 	// Has unexported fields.
@@ -1841,6 +1950,11 @@ type MutationSpec struct {
     MutationSpec requires a fixed WHERE predicate in addition to any optional
     predicates. Versioned tables require ExpectVersion for updates and deletes.
 
+type NoArgs struct{}
+    NoArgs is an empty parameter struct for DefineSQL, DefineSQLExec,
+    DefineSQLReturning and DefineSQLList declarations that take no named
+    parameters.
+
 type ObserveMask uint8
     ObserveMask identifies which observability signals a runner session handles
     itself so that a Registry skips duplicate emissions for those signals.
@@ -2231,9 +2345,9 @@ func (r *QueryRows[T, S]) WithLogger(logger *slog.Logger) *QueryRows[T, S]
 type QueryScope struct {
 	// Has unexported fields.
 }
-    QueryScope declares how a composed query applies row scope on a scoped
-    Registry. On a scoped Registry (S != struct{}), leaving Scope unset fails
-    closed at DefineQuery time; choose ScopeColumns, ScopeByRLS or ScopeGlobal.
+    QueryScope declares how a composed or named-parameter SQL query applies row
+    scope on a scoped Registry. On a scoped Registry (S != struct{}), leaving
+    Scope unset fails closed at registration time.
 
 func ScopeByRLS() QueryScope
     ScopeByRLS declares that row scope is enforced by PostgreSQL RLS policies
@@ -2247,8 +2361,14 @@ func ScopeColumns(cols ...string) QueryScope
     use a composite foreign key or rely on PostgreSQL RLS.
 
 func ScopeGlobal() QueryScope
-    ScopeGlobal declares a view over global lookup tables that have no row
+    ScopeGlobal declares a query over global lookup tables that have no row
     scope.
+
+func ScopeParam(name string) QueryScope
+    ScopeParam binds the current session's scope S automatically to the named
+    parameter @<name> in DefineSQL, DefineSQLExec, DefineSQLReturning or
+    DefineSQLList. The parameter must appear in the SQL and must not also be
+    declared on Args. Unscoped sessions fail closed at execution time.
 
 type QuerySort struct {
 	Key       string
@@ -2486,8 +2606,9 @@ type Registry[S any] struct {
 
 func NewRegistry[S any](cfg RegistryConfig[S]) *Registry[S]
     NewRegistry creates a Registry preloaded with built-in scalar zero
-    converters (string, bool, int, int32, int64, float64, time.Time). Invalid or
-    duplicate DefaultTypes declarations cause a panic.
+    converters (string, bool, int, int32, int64, float64, time.Time). Invalid
+    or duplicate DefaultTypes or TypeFamilies declarations, or an invalid
+    SessionGuard configuration, cause a panic.
 
 func (r *Registry[S]) Defined() []Definition
     Defined lists every table defined in r in definition order. The returned
@@ -2563,6 +2684,14 @@ type RegistryConfig[S any] struct {
 	// DefaultTypes supplies the PostgreSQL type and input codec for exact Go
 	// types used in table layouts. ColumnType overrides the registry default.
 	DefaultTypes []TypeDefault
+	// TypeFamilies declares Go-type to PostgreSQL compatible type sets for
+	// DefineSQL, DefineSQLExec, DefineSQLReturning and DefineSQLList verification.
+	// Construct entries with TypeFamilyOf or register later with RegisterTypeFamily.
+	TypeFamilies []TypeFamily
+	// SessionGuard optionally enforces additional session-state restrictions
+	// (such as protected VariablePrefixes or ForbidVariableReads) at DefineSQL*
+	// registration time in addition to the built-in GuardNoSessionEscape check.
+	SessionGuard SessionGuardConfig
 }
     RegistryConfig configures one isolated Registry for scope type S.
 
@@ -3099,6 +3228,32 @@ func (a SQLAuthority) Open(owner any, method CallMethod, call AuthorizedStatemen
     Open validates a compiled call for the receiving session. Drivers pass their
     own session pointer. The returned parameters are in PostgreSQL bind order.
 
+type SQLExec[Args, S any] struct {
+	// Has unexported fields.
+}
+    SQLExec is a compiled, registered row-count-only named-parameter SQL
+    mutation (or explicit transaction-level advisory lock) binding parameters
+    from Args.
+
+func DefineSQLExec[Args, S any](r *Registry[S], spec SQLSpec) *SQLExec[Args, S]
+    DefineSQLExec validates and registers a non-returning write statement
+    (INSERT, UPDATE, DELETE, MERGE, or modifying CTE without top-level
+    RETURNING) or an explicit AdvisoryLock transaction-level advisory lock call
+    on r. Panics on declaration mistakes at initialization.
+
+func (q *SQLExec[Args, S]) Bind(s Session[S]) *BoundSQLExec[Args, S]
+    Bind attaches this statement to an authorized session from the owning
+    Registry.
+
+func (q *SQLExec[Args, S]) Definition() Definition
+    Definition returns a deep copy of the registered Definition for sqlcheck.
+
+func (q *SQLExec[Args, S]) Name() string
+    Name returns the registered declaration name.
+
+func (q *SQLExec[Args, S]) SQL() string
+    SQL returns the compiled positional PostgreSQL SQL ($1..$n).
+
 type SQLFiles struct {
 	// Has unexported fields.
 }
@@ -3117,6 +3272,129 @@ func (f *SQLFiles) Lookup(name string) (string, bool)
 
 func (f *SQLFiles) Names() []string
     Names returns all loaded relative file names in sorted order.
+
+type SQLFilter struct {
+	Name   string
+	SQL    string
+	When   string
+	Secret bool
+}
+    SQLFilter declares one named, optional WHERE fragment of a SQLList.
+    Parameters use @name placeholders bound from Args. When optionally names
+    the Args field (by db tag name or exported Go field name) that toggles
+    this filter (bool == true, pointer != nil, slice len > 0, string != "").
+    When omitted, a filter referencing exactly one pointer Args parameter is
+    enabled automatically whenever that pointer is non-nil.
+
+type SQLList[Row, Args, S any] struct {
+	// Has unexported fields.
+}
+    SQLList is a compiled, registered named-parameter dynamic list query that
+    executes exclusively through AuthorizedSession (SQLAuthority).
+
+func DefineSQLList[Row, Args, S any](r *Registry[S], spec SQLListSpec) *SQLList[Row, Args, S]
+    DefineSQLList validates spec against r, registers its finite verification
+    variants in Definition.Statements and Definition.StatementShapes,
+    and returns a compiled SQLList handle. Panics on declaration mistakes at
+    initialization.
+
+func (l *SQLList[Row, Args, S]) Bind(s Session[S]) *BoundSQLList[Row, Args, S]
+    Bind attaches this list query to an authorized session from the owning
+    Registry.
+
+func (l *SQLList[Row, Args, S]) Definition() Definition
+    Definition returns a deep copy of the registered Definition for sqlcheck.
+
+func (l *SQLList[Row, Args, S]) Name() string
+    Name returns the registered declaration name.
+
+type SQLListSpec struct {
+	Name      string
+	Select    string
+	Where     string
+	Tail      string
+	CountBase string
+	Scope     QueryScope
+	Filters   []SQLFilter
+	Order     QueryOrderSpec
+	MaxLimit  int
+	// MaxOffset is the largest permitted QueryPage.Offset, inclusive. Zero allows any nonnegative offset.
+	MaxOffset int
+	Keyset    bool
+	Observe   []StatementOption
+}
+    SQLListSpec declares a dynamic named-parameter list query using
+    explicit Select, optional Where, optional Tail (GROUP BY / HAVING),
+    optional optimized CountBase, optional Filters, whitelisted Order choices,
+    and pagination bounds.
+
+type SQLQuery[Row, Args, S any] struct {
+	// Has unexported fields.
+}
+    SQLQuery is a compiled, registered read-only named-parameter SQL query
+    scanning results into Row and binding parameters from Args.
+
+func DefineSQL[Row, Args, S any](r *Registry[S], spec SQLSpec) *SQLQuery[Row, Args, S]
+    DefineSQL validates and registers a read-only named-parameter SQL query on
+    r. It accepts SELECT, WITH ... SELECT, VALUES, and row-locking SELECT ...
+    FOR UPDATE/SHARE (automatically marking EffectRowLock), and rejects writes
+    and modifying CTEs. Panics on declaration mistakes at initialization.
+
+func (q *SQLQuery[Row, Args, S]) Bind(s Session[S]) *BoundSQLQuery[Row, Args, S]
+    Bind attaches this query to an authorized session from the owning Registry.
+
+func (q *SQLQuery[Row, Args, S]) Definition() Definition
+    Definition returns a deep copy of the registered Definition for sqlcheck.
+
+func (q *SQLQuery[Row, Args, S]) Name() string
+    Name returns the registered declaration name.
+
+func (q *SQLQuery[Row, Args, S]) SQL() string
+    SQL returns the compiled positional PostgreSQL SQL ($1..$n).
+
+type SQLReturning[Row, Args, S any] struct {
+	// Has unexported fields.
+}
+    SQLReturning is a compiled, registered row-returning named-parameter SQL
+    write (INSERT/UPDATE/DELETE/MERGE ... RETURNING ... or a modifying CTE
+    returning rows) scanning results into Row and binding parameters from Args.
+
+func DefineSQLReturning[Row, Args, S any](r *Registry[S], spec SQLSpec) *SQLReturning[Row, Args, S]
+    DefineSQLReturning validates and registers a returning write statement on r.
+    Panics on declaration mistakes at initialization.
+
+func (q *SQLReturning[Row, Args, S]) Bind(s Session[S]) *BoundSQLReturning[Row, Args, S]
+    Bind attaches this statement to an authorized session from the owning
+    Registry.
+
+func (q *SQLReturning[Row, Args, S]) Definition() Definition
+    Definition returns a deep copy of the registered Definition for sqlcheck.
+
+func (q *SQLReturning[Row, Args, S]) Name() string
+    Name returns the registered declaration name.
+
+func (q *SQLReturning[Row, Args, S]) SQL() string
+    SQL returns the compiled positional PostgreSQL SQL ($1..$n).
+
+type SQLSpec struct {
+	// Name uniquely identifies this statement in the Registry and snapshots.
+	Name string
+	// SQL is one PostgreSQL statement using @name placeholders (no positional $1).
+	SQL string
+	// Scope declares how row scope applies on a scoped Registry. On a scoped
+	// Registry (S != struct{}), leaving Scope unset fails closed at Define time.
+	// Use ScopeByRLS(), ScopeGlobal(), or ScopeParam("param_name").
+	Scope QueryScope
+	// AdvisoryLock opts a transaction-level advisory lock SELECT
+	// (pg_advisory_xact_lock*, pg_try_advisory_xact_lock*) into DefineSQLExec
+	// or marks a DefineSQL lock check with EffectAdvisoryLock (rejected on Direct).
+	AdvisoryLock bool
+	// Observe configures per-statement logging redaction options (Quiet, Secret).
+	Observe []StatementOption
+}
+    SQLSpec declares a named-parameter SQL statement compiled against a
+    Registry. Parameters use @name placeholders bound from fields of Args with
+    matching `db:"name[,json|zero|array|secret]"` tags.
 
 type Scalar interface {
 	// Has unexported methods.
@@ -3216,19 +3494,25 @@ const (
 	EffectAdvisoryLock
 )
 type ShapeField struct {
-	Name, Type string
-	Nullable   bool
+	Name, Type   string
+	Nullable     bool
+	AllowedTypes []string `json:",omitempty"`
 }
-    ShapeField describes a result column in projection order.
+    ShapeField describes a result column in projection order. When AllowedTypes
+    is non-empty, sqlcheck accepts any PostgreSQL type whose exact or unwrapped
+    domain base OID matches one of the listed type names.
 
 type ShapeInput struct {
 	Name, Type string
 	Scope      bool
 	// Secret requests redaction of this bind value by observers.
-	Secret bool
+	Secret       bool
+	AllowedTypes []string `json:",omitempty"`
 }
     ShapeInput identifies a numbered parameter. Scope marks a parameter supplied
-    by the session. Values are kept outside all snapshots.
+    by the session. Values are kept outside all snapshots. When AllowedTypes
+    is non-empty, sqlcheck accepts any PostgreSQL parameter type whose exact or
+    unwrapped domain base OID matches one of the listed names.
 
 type Slot[V any] struct {
 	// Has unexported fields.
@@ -3373,6 +3657,9 @@ type StatementShape struct {
 	// UnscopedOnly marks a shape that omits a declared column-scope predicate.
 	// It can be bound only to an unscoped session.
 	UnscopedOnly bool
+	// StructSQL marks a named-parameter SQL declaration registered via DefineSQL,
+	// DefineSQLExec, DefineSQLReturning or DefineSQLList.
+	StructSQL bool `json:",omitempty"`
 }
     StatementShape describes the inputs, results, effects and minimum grants for
     one SQL string in Definition.Statements under the same key.
@@ -3548,6 +3835,18 @@ type TypeDefault struct {
 func TypeMapping[V any](kind PGType[V]) TypeDefault
     TypeMapping retains the catalog identity and input codec of kind as a
     registry default for V. A nullable *V field can use the same declaration.
+
+type TypeFamily struct {
+	// Has unexported fields.
+}
+    TypeFamily pairs a Go value type with the PostgreSQL catalog type names
+    considered compatible during DefineSQL, DefineSQLExec, DefineSQLReturning
+    and DefineSQLList verification. Construct it with TypeFamilyOf.
+
+func TypeFamilyOf[T any](pgTypes ...string) TypeFamily
+    TypeFamilyOf declares the PostgreSQL type names compatible with Go type T
+    (for example "uuid", "numeric", or "public.item_status"). Pointer fields *T
+    automatically inherit T's family unless overridden separately.
 
 type UniqueMatchRequirement struct {
 	Relation string
@@ -4714,9 +5013,15 @@ func ReadCatalog(ctx context.Context, db *sql.DB, scope CatalogScope) (Catalog, 
 func (c Catalog) Snapshots() map[string]string
     Snapshots renders each catalog section as independently comparable JSON.
 
-type CatalogScope struct{ Schemas, Roles []string }
+type CatalogScope struct {
+	Schemas     []string
+	Roles       []string
+	Granularity GrantGranularity `json:",omitempty"`
+}
     CatalogScope names the complete set of schemas and direct grantees in an
-    audit. PUBLIC includes privileges granted to everyone.
+    audit. PUBLIC includes privileges granted to everyone. Granularity defaults
+    to GranularityAll (including column ACLs) and may be set to GranularityTable
+    to audit table, sequence and function grants only.
 
 type ColumnInfo struct {
 	DataType string
@@ -4774,7 +5079,22 @@ func CompareGrants(manifest GrantManifest, actual []Grant) (GrantDiff, error)
     CompareGrants computes exact direct ACL differences, including grant
     options. PostgreSQL revokes same-privilege column ACLs when revoking from
     a table; surviving explicit column grants are restored in the generated
-    script.
+    script. Under GranularityTable, COLUMN grants in the manifest or actual
+    slice are rejected.
+
+type GrantGranularity string
+    GrantGranularity selects which PostgreSQL ACL object kinds are included in
+    catalog reads, grant comparisons and grant minimization.
+
+const (
+	// GranularityAll audits TABLE, COLUMN, SEQUENCE and FUNCTION direct grants (default).
+	GranularityAll GrantGranularity = ""
+	// GranularityTable audits TABLE, SEQUENCE and FUNCTION direct grants, omitting column ACLs.
+	GranularityTable GrantGranularity = "table"
+)
+func ParseGrantGranularity(raw string) (GrantGranularity, error)
+    ParseGrantGranularity parses a configuration or CLI granularity value ("all"
+    or "table").
 
 type GrantManifest struct {
 	CatalogScope
@@ -4819,17 +5139,21 @@ type LoginRoleExpectation struct {
     CREATE in the selected schemas.
 
 type MinimizeConfig struct {
-	Role       string
-	Schemas    []string
-	Statements []Statement
-	Keep       []Grant
+	Role        string
+	Schemas     []string
+	Granularity GrantGranularity `json:",omitempty"`
+	Statements  []Statement
+	Keep        []Grant
 	// Current, if supplied, must match the live direct ACL exactly.
 	Current []Grant
 	// Runtime probes supplement planning for specified privileges.
 	Runtime []RuntimeProbe
 }
-    MinimizeConfig selects one role and its complete planning workload. Keep
-    pins runtime requirements, including requirements from outside the workload.
+    MinimizeConfig selects one role and its complete planning workload.
+    Keep pins runtime requirements, including requirements from outside the
+    workload. Granularity defaults to GranularityAll (TABLE, COLUMN, SEQUENCE,
+    FUNCTION) and may be set to GranularityTable to trial only TABLE, SEQUENCE
+    and FUNCTION grants.
 
 type Minimum struct {
 	Kept, Removed, Unverified []Grant
@@ -4938,6 +5262,10 @@ type RLSMatrix struct {
 type ReadinessNeeds struct {
 	Privileges      PrivilegeNeeds
 	SchemaUsage     []string
+	TableSelect     []string                        // table-level SELECT via has_table_privilege
+	TableInsert     []string                        // table-level INSERT via has_table_privilege
+	TableUpdate     []string                        // table-level UPDATE via has_table_privilege
+	TableDelete     []string                        // table-level DELETE via has_table_privilege
 	AnyColumnSelect []string                        // SELECT on at least one column of each relation
 	AnyColumnUpdate []string                        // UPDATE on at least one column of each locked relation
 	Routines        []tabula.RoutineRequirement     // exact function catalog contracts
@@ -5600,6 +5928,8 @@ Usage of grants:
         path to command-specific JSON configuration
   -dsn string
         disposable PostgreSQL connection string (or TABULA_DSN)
+  -granularity string
+        grant audit granularity: all or table (default "all")
 ```
 
 ### tabula minimize
@@ -5610,6 +5940,8 @@ Usage of minimize:
         path to command-specific JSON configuration
   -dsn string
         disposable PostgreSQL connection string (or TABULA_DSN)
+  -granularity string
+        grant audit granularity: all or table (default "all")
 ```
 
 ### tabula catalog
@@ -5622,6 +5954,8 @@ Usage of catalog:
         path to command-specific JSON configuration
   -dsn string
         disposable PostgreSQL connection string (or TABULA_DSN)
+  -granularity string
+        grant audit granularity: all or table (default "all")
   -section string
         emit one named snapshot file
 ```

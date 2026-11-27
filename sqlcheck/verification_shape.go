@@ -14,6 +14,12 @@ func checkVerificationShape(ctx context.Context, tx VerificationTx, name, query 
 		return fmt.Errorf("prepared statement has %d inputs, expected %d", params, len(s.Inputs))
 	}
 	for i, in := range s.Inputs {
+		if len(in.AllowedTypes) > 0 {
+			if err := checkPreparedParamAllowed(ctx, tx, name, i+1, in); err != nil {
+				return err
+			}
+			continue
+		}
 		var matches bool
 		err := tx.Scan(ctx, `SELECT parameter_types[$2] IS NOT DISTINCT FROM pg_catalog.to_regtype($3)
 FROM pg_catalog.pg_prepared_statements WHERE name = $1`, []any{name, i + 1, in.Type}, &matches)
@@ -49,7 +55,11 @@ WHERE attrelid = pg_catalog.to_regclass($1) AND attname = $2 AND attnum > 0 AND 
 	if errors.Is(err, ErrDescribeRequired) && !descriptionNeedsProtocol(query, s) {
 		if old, ok := tx.(sqlVerificationTx); ok {
 			if s.Effects&tabula.EffectRowLock != 0 {
-				query, err = lockProjectionQuery(query)
+				if s.StructSQL {
+					query, err = stripSQLRowLock(query)
+				} else {
+					query, err = lockProjectionQuery(query)
+				}
 				if err != nil {
 					return err
 				}

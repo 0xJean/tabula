@@ -25,7 +25,7 @@ if len(missing) > 0 {
 }
 ```
 
-One read-only query checks effective grants for the named role, including inherited and PUBLIC grants. It reads PostgreSQL catalogs without assuming that role or executing the named functions. Use qualified relation names and function signatures such as `public.find_item(integer, public.item_kind[])`. Supply schema and column names as they appear in the catalog. Use `Privileges.Columns` for named column grants. `AnyColumnSelect` requires access to at least one column. `ForceRLS` checks the ENABLE and FORCE flags independently of SELECT access. Owned-sequence requirements come from `Privileges.Sequences`.
+One read-only query checks effective grants for the named role, including inherited and PUBLIC grants. It reads PostgreSQL catalogs without assuming that role or executing the named functions. Use qualified relation names and function signatures such as `public.find_item(integer, public.item_kind[])`. Supply schema and column names as they appear in the catalog. Use `Privileges.Columns` for named column grants, or `TableSelect`, `TableInsert`, `TableUpdate` and `TableDelete` for table-level privileges (`pg_catalog.has_table_privilege`). `AnyColumnSelect` requires access to at least one column. `ForceRLS` checks the ENABLE and FORCE flags independently of SELECT access. Owned-sequence requirements come from `Privileges.Sequences`.
 
 A registered existence check requires access to its scope, soft-delete and predicate columns. A check that references no columns needs SELECT on any one column of its table.
 
@@ -51,7 +51,7 @@ Use the same field on `pgxdriver.RunnerOptions`. For a read-only pool, use `stds
 
 The registry signs each call for the receiving session, method, statement and ordered parameters. Registered executions still pass through the session guard, method policy, role and observability hooks. Streams returning rows from a write use the Returning policy. Direct rejects writes, row locks and transaction-level advisory locks before acquiring a connection.
 
-Fixed generated operations include primary-key reads and locks, insert, save, soft delete, physical delete, declared single-row upserts, and declared scalar and grouped aggregates. A baseline list or find uses the default ordering and the session's live-row predicate. Strict declarations accept table and column identifiers and default ordering over declared columns with optional direction and null placement. Filter callbacks, run-time string order, dynamic column lists and batch sizes require an explicitly compiled alternative. A fragment-based upsert, `QuerySpec`, hand-written `Statement`, and raw transaction entry are rejected. `ErrLegacySQL` matches `ErrCapabilityDenied`.
+Fixed generated operations include primary-key reads and locks, insert, save, soft delete, physical delete, declared single-row upserts, and declared scalar and grouped aggregates. Registered named-parameter SQL declarations (`DefineSQL`, `DefineSQLExec`, `DefineSQLReturning`, `DefineSQLList`) also sign through the registry's `SQLAuthority` and execute under `DenyLegacySQL`, carrying `AllowedTypes` metadata for bidirectional parameter and result verification. A baseline list or find uses the default ordering and the session's live-row predicate. Strict declarations accept table and column identifiers and default ordering over declared columns with optional direction and null placement. Filter callbacks, run-time string order, dynamic column lists and batch sizes require an explicitly compiled alternative. A fragment-based upsert, `QuerySpec`, hand-written `Statement`, and raw transaction entry are rejected. `ErrLegacySQL` matches `ErrCapabilityDenied`.
 
 PostgreSQL grants and RLS still apply. A separately acquired database connection has its own privileges. The binary COPY protocol retains its descriptor and session checks, including the independent `DenyCopy` capability.
 
@@ -208,6 +208,14 @@ A grant manifest contains the same scope plus its expected entries. This small d
 `CheckGrantManifest` reports `Missing` and `Extra` and generates SQL to reconcile them. It compares direct ACLs on tables, views, columns, sequences and overloaded functions. A function's `Arguments` uses the catalog's qualified type names, such as `pg_catalog.int4`. Grant options participate in equality. The generated order restores surviving column grants after a table-level revoke. Grantors are aggregated. Ownership, role membership, schema `USAGE`, database `CONNECT` and future-object default privileges are separate inputs to effective access. Use the role's planning and behavior probes to measure that access.
 
 The `FUNCTION` entries in `grants.json` cover ordinary, aggregate and window functions. Procedure `EXECUTE` grants are outside the scope of grant comparison and minimization in v0.3.
+
+### Table-level grant granularity
+
+By default, `GrantGranularity` is `GranularityAll` (`""`), which audits `TABLE`, `COLUMN`, `SEQUENCE` and `FUNCTION` ACLs. Projects that manage privileges at table granularity instead of maintaining per-column ACL manifests can select `GranularityTable` (`"table"`):
+
+- Set `"Granularity": "table"` in `CatalogScope` (`scope.json` / `privileges.json`) or pass `--granularity=table` to `tabula catalog` and `tabula grants`. `ReadCatalog` skips `pg_attribute.attacl`, and `CompareGrants` / `CheckGrantManifest` reject manifests containing `Kind == "COLUMN"` entries.
+- Set `"Granularity": "table"` in `MinimizeConfig` (`trials.json`) or pass `--granularity=table` to `tabula minimize`. Trial revocation minimizes direct `TABLE`, `SEQUENCE` and `FUNCTION` grants without expanding column-level grants.
+- For startup readiness checks at table granularity, declare required relations in `ReadinessNeeds.TableSelect`, `TableInsert`, `TableUpdate` and `TableDelete`, which check `pg_catalog.has_table_privilege` alongside `SchemaUsage`, `SequenceUsage`, `ForceRLS` and `Routines`.
 
 ## Trial each revocation
 

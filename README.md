@@ -18,9 +18,13 @@ An explicit join names both relations and describes their match. A view decodes 
 
 The integration guide maps each task to its package or command. The API and CLI reference is generated from this checkout. [Integration guide](docs/INTEGRATION.md) · [Go API and CLI reference](docs/REFERENCE.md)
 
-Read the README at the Git tag or commit your application builds. The [migration guide](docs/MIGRATION.md) covers upgrading to v0.4 and earlier releases. The [changelog](CHANGELOG.md) records release status.
+Read the README at the Git tag or commit your application builds. The [migration guide](docs/MIGRATION.md) covers upgrading to v0.5 and earlier releases. The [changelog](CHANGELOG.md) records release status.
 
 A registry can restrict selected runners and Direct pools to the SQL shapes it issued. Pass its `SQLAuthority` to each role that needs this policy. [Registered execution](docs/AUTHORIZATION.md#registered-execution)
+
+For everyday queries and writes without building a full AST, `DefineSQL`, `DefineSQLExec`, `DefineSQLReturning` and `DefineSQLList` register named-parameter (`@name`) PostgreSQL statements directly with `[Row, Args]` Go structs on the same `Registry`, `SQLAuthority`, `SessionGuard` and observability pipeline. Go type families (`RegisterTypeFamily` / `TypeFamilyOf`) derive compatible PostgreSQL types so `sqlcheck` verifies parameter OIDs, exact positional column names, and domain-unwrapped column OIDs against PostgreSQL without executing writes. [Named-parameter SQL examples](docs/COOKBOOK.md#named-parameter-sql-with-struct-scanning)
+
+`sqlcheck` supports both column-level (`GranularityAll`, default) and table-level (`GranularityTable`) grant auditing, minimization, and startup readiness (`ReadinessNeeds.TableSelect`, `TableInsert`, `TableUpdate`, `TableDelete`), plus `--granularity=all|table` on `tabula catalog`, `tabula grants` and `tabula minimize`. [Table-level grant granularity](docs/AUTHORIZATION.md#table-level-grant-granularity)
 
 The [v0.4 design](docs/DESIGN-v0.4.md) describes typed predicates, per-shape verification and the driver interface for registered queries.
 
@@ -44,9 +48,9 @@ Window functions keep their input rows and expose explicit partitions, orders an
 
 `InsertInto`, `UpdateOf` and `DeleteFrom` declare typed writes with defaults, conflicts, matching sources and returned rows. Register count results with `DefineWrite` or row results with `DefineReturning`; batch and returning operations use a guarded operation savepoint. Verify write results with the non-executing `pgxdriver.SQLVerifier` backend, including when execution uses `stdsql`. [Typed writes](docs/TYPED-WRITES.md)
 
-## Install v0.4.4
+## Install v0.5.0
 
-Run `go get github.com/0xJean/tabula@v0.4.4` in your application module with Go 1.26 or later. For the native driver and telemetry modules, use the matching version with `go get github.com/0xJean/tabula/pgxdriver@v0.4.4` and/or `go get github.com/0xJean/tabula/oteltabula@v0.4.4`.
+Run `go get github.com/0xJean/tabula@v0.5.0` in your application module with Go 1.26 or later. For the native driver and telemetry modules, use the matching version with `go get github.com/0xJean/tabula/pgxdriver@v0.5.0` and/or `go get github.com/0xJean/tabula/oteltabula@v0.5.0`.
 
 ## Read a row by primary key
 
@@ -98,7 +102,7 @@ go -C benchmarks test -run='^$' -bench='^BenchmarkSelect100$' -benchmem -count=5
 
 ## Fuzz tests
 
-CI fuzzes `db` tag parsing, `Filter`, `OrderSpec`, `GuardNoSessionEscape`, composed query fragment compilation, and `sqlcheck.ParseSnapshot`.
+CI fuzzes `db` tag parsing, `Filter`, `OrderSpec`, `GuardNoSessionEscape`, composed query fragment compilation, named-parameter SQL rewriting and declaration validation (`DefineSQL`), and `sqlcheck.ParseSnapshot`.
 
 ```sh
 go test -fuzz=FuzzParseColumnTag -fuzztime=5s .
@@ -106,6 +110,8 @@ go test -fuzz=FuzzFilterAnd -fuzztime=5s .
 go test -fuzz=FuzzOrderSpecResolve -fuzztime=5s .
 go test -fuzz=FuzzGuardNoSessionEscape -fuzztime=5s .
 go test -fuzz=FuzzCompileQueryFragment -fuzztime=5s .
+go test -fuzz=FuzzDefineSQL -fuzztime=5s .
+go test -fuzz=FuzzRewriteNamedSQL -fuzztime=5s ./internal/pgstmt
 go test -fuzz=FuzzParseSnapshot -fuzztime=5s ./sqlcheck
 ```
 

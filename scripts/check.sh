@@ -86,9 +86,10 @@ go test -race -count=1 ./...
 (cd oteltabula && go test -race -count=1 ./...)
 
 echo "==> Running fuzz targets (1s each)"
-for target in FuzzParseColumnTag FuzzFilterAnd FuzzOrderSpecResolve FuzzGuardNoSessionEscape FuzzCompileQueryFragment; do
+for target in FuzzParseColumnTag FuzzFilterAnd FuzzOrderSpecResolve FuzzGuardNoSessionEscape FuzzCompileQueryFragment FuzzDefineSQL; do
   go test -run='^$' -fuzz="^${target}$" -fuzztime=1s .
 done
+go test -run='^$' -fuzz='^FuzzRewriteNamedSQL$' -fuzztime=1s ./internal/pgstmt
 go test -run='^$' -fuzz='^FuzzParseSnapshot$' -fuzztime=1s ./sqlcheck
 
 if [[ "$mode" == --unit ]]; then

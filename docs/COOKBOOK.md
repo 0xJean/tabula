@@ -7,6 +7,137 @@ For nested reads, use the [query composition guide](QUERY-COMPOSITION.md). The
 targets. The [typed write guide](TYPED-WRITES.md) covers defaults, conflicts,
 matching sources, modifying common tables, returned rows and finite batches.
 
+## Named-parameter SQL with struct scanning
+
+Register explicit PostgreSQL statements using `@name` placeholders and typed `[Row, Args]` structs. These declarations share the same `Registry`, `SQLAuthority` (`DenyLegacySQL`), `SessionGuard`, observability redaction (`db:",secret"`), and `sqlcheck` verification chain as typed plans while keeping boilerplate minimal.
+
+```go
+type GroupID int64
+
+type ItemRow struct {
+	ID      int64    `db:"id"`
+	Code    string   `db:"code"`
+	Name    string   `db:"name"`
+	Status  string   `db:"status"`
+	Rank    int32    `db:"rank"`
+	Note    string   `db:"note,zero"`
+	Tags    []string `db:"tags,array"`
+}
+
+type InsertItemArgs struct {
+	Code   string   `db:"code"`
+	Name   string   `db:"name"`
+	Status string   `db:"status"`
+	Rank   int32    `db:"rank"`
+	Note   *string  `db:"note,secret"`
+	Tags   []string `db:"tags,array"`
+}
+
+type ItemIDArgs struct {
+	ID int64 `db:"id"`
+}
+
+type ListItemsArgs struct {
+	Status   *string `db:"status"`
+	MinRank  *int32  `db:"min_rank"`
+	HighOnly bool    `db:"high_only"`
+}
+
+type LockKeyArgs struct {
+	Key int64 `db:"lock_key"`
+}
+
+// Register optional custom Go type families on the registry before DefineSQL*.
+tabula.RegisterTypeFamily[GroupID](reg, "bigint")
+
+var (
+	insertItem = tabula.DefineSQLReturning[ItemRow, InsertItemArgs](reg, tabula.SQLSpec{
+		Name: "items.insert",
+		SQL: `INSERT INTO public.items (group_id, code, name, status, rank, note, tags)
+VALUES (@group_id, @code, @name, @status, @rank, @note, @tags)
+RETURNING id, code, name, status, rank, note, tags`,
+		Scope: tabula.ScopeParam("group_id"),
+	})
+
+	getItem = tabula.DefineSQL[ItemRow, ItemIDArgs](reg, tabula.SQLSpec{
+		Name:  "items.get",
+		SQL:   `SELECT id, code, name, status, rank, note, tags FROM public.items WHERE group_id = @group_id AND id = @id`,
+		Scope: tabula.ScopeParam("group_id"),
+	})
+
+	// FOR UPDATE is detected automatically and marks EffectRowLock (rejected on WithinReadOnly and Direct).
+	lockItem = tabula.DefineSQL[ItemRow, ItemIDArgs](reg, tabula.SQLSpec{
+		Name:  "items.lock",
+		SQL:   `SELECT id, code, name, status, rank, note, tags FROM public.items WHERE id = @id FOR UPDATE`,
+		Scope: tabula.ScopeByRLS(),
+	})
+
+	// Transaction-level advisory locks opt into DefineSQLExec via AdvisoryLock: true.
+	acquireItemLock = tabula.DefineSQLExec[LockKeyArgs](reg, tabula.SQLSpec{
+		Name:         "items.xact_lock",
+		SQL:          `SELECT pg_advisory_xact_lock(@lock_key)`,
+		Scope:        tabula.ScopeGlobal(),
+		AdvisoryLock: true,
+	})
+
+	// Modifying CTEs returning rows use DefineSQLReturning (admitted under StatementPolicy.AllowAuthorizedWriteCTE).
+	archiveItem = tabula.DefineSQLReturning[ItemRow, ItemIDArgs](reg, tabula.SQLSpec{
+		Name: "items.archive",
+		SQL: `WITH moved AS (
+	DELETE FROM public.items WHERE group_id = @group_id AND id = @id
+	RETURNING id, code, name, status, rank, note, tags
+)
+SELECT id, code, name, status, rank, note, tags FROM moved`,
+		Scope: tabula.ScopeParam("group_id"),
+	})
+
+	// Dynamic lists register finite SQL variants for sqlcheck and execute solely via AuthorizedSession.
+	listItems = tabula.DefineSQLList[ItemRow, ListItemsArgs](reg, tabula.SQLListSpec{
+		Name:      "items.list",
+		Select:    `SELECT id, code, name, status, rank, note, tags FROM public.items`,
+		Where:     `group_id = @group_id`,
+		CountBase: `SELECT count(*) FROM public.items`,
+		Scope:     tabula.ScopeParam("group_id"),
+		Filters: []tabula.SQLFilter{
+			{Name: "status", SQL: `status = @status`},      // auto-inferred from *string @status
+			{Name: "min_rank", SQL: `rank >= @min_rank`},   // auto-inferred from *int32 @min_rank
+			{Name: "high", SQL: `rank >= 50`, When: "high_only"},
+		},
+		Order: tabula.QueryOrderSpec{
+			Default:          "id",
+			DefaultDirection: tabula.SortAsc,
+			Sorts: []tabula.QuerySort{
+				{Key: "id", Expr: "id", Column: "id"},
+				{Key: "rank", Expr: "rank", Column: "rank"},
+			},
+			TieBreaker: []tabula.QuerySortTerm{{Expr: "id", Column: "id"}},
+		},
+		MaxLimit: 100,
+		Keyset:   true,
+	})
+)
+```
+
+Execute bound handles against either `stdsql` or `pgxdriver`, including under `DenyLegacySQL`:
+
+```go
+created, err := insertItem.Bind(sess).One(ctx, InsertItemArgs{
+	Code: "A-1", Name: "Alpha", Status: "open", Rank: 10, Tags: []string{"blue"},
+})
+found, ok, err := getItem.Bind(sess).First(ctx, ItemIDArgs{ID: created.ID})
+status := "open"
+rows, total, err := listItems.Bind(sess).List(ctx, ListItemsArgs{Status: &status}, tabula.QueryPage{
+	Sort: "rank", Direction: tabula.SortDesc, Size: 20,
+})
+```
+
+All `DefineSQL*` registrations appear in `reg.DefinedViews()` and each handle's `.Definition()`. Verify every registered statement—including parameter OIDs, exact positional column names, and domain-unwrapped column OIDs—against PostgreSQL with `pgxdriver.SQLVerifier` (non-executing for writes and returning statements):
+
+```go
+defs := sqlcheck.ViewsToDefinitions(reg.DefinedViews())
+failures, err := sqlcheck.VerifyStatementsUsing(ctx, pgxdriver.SQLVerifier(pool), defs, "scope_reader")
+```
+
 ## Operation savepoints
 
 Both transaction sessions implement `tabula.OperationSession[S]`. `WithinOperation` receives a sealed child and a fresh callback context. Execute the whole operation through that child; returning an error or panicking rolls its changes back while preserving earlier transaction work. Parent and sibling handles remain reserved until the operation ends. Nested operations use nested savepoints.
