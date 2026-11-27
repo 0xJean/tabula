@@ -3,7 +3,7 @@
 All notable changes are listed here. The project follows semantic versioning; before
 v1.0 a minor version may contain breaking changes.
 
-## v0.5.1 — Unreleased
+## v0.5.1 — 2026-11-27
 
 - Separate input (Go to PostgreSQL) and result (PostgreSQL to Go) integer type families for `DefineSQL`, `DefineSQLExec`, `DefineSQLReturning` and `DefineSQLList` verification: Go `int8`, `int16`, `int32`, `uint8`, `uint16` (plus pointer, `sql.NullInt16`, `sql.NullByte`, `sql.NullInt32`, `sql.Null[T]`, `,array` slice, `ScopeParam` and keyset cursor input paths) now allow lossless integer widening to `smallint`, `integer` and `bigint` as input parameters, while result columns retain narrow scanning bounds to prevent integer overflow.
 
