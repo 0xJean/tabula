@@ -102,22 +102,23 @@ func compileSQLRow[Row, S any](r *Registry[S], name string, fail func(string, ..
 		if err != nil {
 			return fail("row column %s: %w", colName, err)
 		}
-		allowed, err := r.allowedTypes(f.Type, options["json"], options["array"])
+		allowed, err := r.allowedTypes(f.Type, options["json"], options["array"], sqlTypeResult)
 		if err != nil {
 			return fail("row column %s: %w", colName, err)
 		}
 		field := fieldAccessor[Row](rt, idx)
 		nullable := networkType(f.Type) || f.Type.Kind() == reflect.Pointer || options["zero"] || options["array"]
 		if err := v.add(column[Row]{
-			name:      colName,
-			fieldName: f.Name,
-			secret:    options["secret"],
-			field:     field,
-			goType:    f.Type,
-			nullable:  nullable,
-			target:    func(row *Row) any { return wrap(field(row)) },
-			wrap:      wrap,
-			prefix:    prefix,
+			name:            colName,
+			fieldName:       f.Name,
+			secret:          options["secret"],
+			field:           field,
+			goType:          f.Type,
+			nullable:        nullable,
+			needsColumnType: options["json"] || options["array"],
+			target:          func(row *Row) any { return wrap(field(row)) },
+			wrap:            wrap,
+			prefix:          prefix,
 		}, fail); err != nil {
 			return err
 		}
@@ -225,7 +226,7 @@ func compileSQLArgs[Args, S any](r *Registry[S], fail func(string, ...any) error
 		if err != nil {
 			return fail("args parameter %q: %w", name, err)
 		}
-		allowed, err := r.allowedTypes(f.Type, options["json"], options["array"])
+		allowed, err := r.allowedTypes(f.Type, options["json"], options["array"], sqlTypeInput)
 		if err != nil {
 			return fail("args parameter %q: %w", name, err)
 		}

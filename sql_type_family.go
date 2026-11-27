@@ -87,13 +87,20 @@ func normalizePGTypeNames(pgTypes []string) ([]string, error) {
 	return out, nil
 }
 
-func (r *Registry[S]) allowedTypes(ft reflect.Type, isJSON, isArray bool) ([]string, error) {
+type sqlTypeDirection uint8
+
+const (
+	sqlTypeResult sqlTypeDirection = iota
+	sqlTypeInput
+)
+
+func (r *Registry[S]) allowedTypes(ft reflect.Type, isJSON, isArray bool, dir sqlTypeDirection) ([]string, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.allowedTypesLocked(ft, isJSON, isArray)
+	return r.allowedTypesLocked(ft, isJSON, isArray, dir)
 }
 
-func (r *Registry[S]) allowedTypesLocked(ft reflect.Type, isJSON, isArray bool) ([]string, error) {
+func (r *Registry[S]) allowedTypesLocked(ft reflect.Type, isJSON, isArray bool, dir sqlTypeDirection) ([]string, error) {
 	if isJSON {
 		return []string{"json", "jsonb"}, nil
 	}
@@ -111,7 +118,7 @@ func (r *Registry[S]) allowedTypesLocked(ft reflect.Type, isJSON, isArray bool) 
 		if elem.Kind() == reflect.Pointer {
 			elem = elem.Elem()
 		}
-		elemTypes, err := r.allowedTypesLocked(elem, false, false)
+		elemTypes, err := r.allowedTypesLocked(elem, false, false, dir)
 		if err != nil {
 			return nil, err
 		}
@@ -156,8 +163,14 @@ func (r *Registry[S]) allowedTypesLocked(ft reflect.Type, isJSON, isArray bool) 
 	case reflect.TypeFor[sql.NullBool]():
 		return []string{"boolean"}, nil
 	case reflect.TypeFor[sql.NullInt16](), reflect.TypeFor[sql.NullByte]():
+		if dir == sqlTypeInput {
+			return []string{"smallint", "integer", "bigint"}, nil
+		}
 		return []string{"smallint"}, nil
 	case reflect.TypeFor[sql.NullInt32]():
+		if dir == sqlTypeInput {
+			return []string{"smallint", "integer", "bigint"}, nil
+		}
 		return []string{"smallint", "integer"}, nil
 	case reflect.TypeFor[sql.NullInt64]():
 		return []string{"smallint", "integer", "bigint"}, nil
@@ -166,7 +179,7 @@ func (r *Registry[S]) allowedTypesLocked(ft reflect.Type, isJSON, isArray bool) 
 	}
 	if base.Kind() == reflect.Struct && base.PkgPath() == "database/sql" && strings.HasPrefix(base.Name(), "Null[") {
 		if vf, ok := base.FieldByName("V"); ok {
-			return r.allowedTypesLocked(vf.Type, false, false)
+			return r.allowedTypesLocked(vf.Type, false, false, dir)
 		}
 	}
 	switch base.Kind() {
@@ -175,12 +188,21 @@ func (r *Registry[S]) allowedTypesLocked(ft reflect.Type, isJSON, isArray bool) 
 	case reflect.Bool:
 		return []string{"boolean"}, nil
 	case reflect.Int8, reflect.Int16:
+		if dir == sqlTypeInput {
+			return []string{"smallint", "integer", "bigint"}, nil
+		}
 		return []string{"smallint"}, nil
 	case reflect.Int32:
+		if dir == sqlTypeInput {
+			return []string{"smallint", "integer", "bigint"}, nil
+		}
 		return []string{"smallint", "integer"}, nil
 	case reflect.Int, reflect.Int64:
 		return []string{"smallint", "integer", "bigint"}, nil
 	case reflect.Uint8, reflect.Uint16:
+		if dir == sqlTypeInput {
+			return []string{"smallint", "integer", "bigint"}, nil
+		}
 		return []string{"smallint", "integer"}, nil
 	case reflect.Uint32:
 		return []string{"oid", "smallint", "integer", "bigint"}, nil
@@ -197,14 +219,14 @@ func (r *Registry[S]) allowedTypesLocked(ft reflect.Type, isJSON, isArray bool) 
 }
 
 func (r *Registry[S]) scopeAllowedTypes() ([]string, error) {
-	types, err := r.allowedTypes(r.scopeType, false, false)
+	types, err := r.allowedTypes(r.scopeType, false, false, sqlTypeInput)
 	if err == nil {
 		return types, nil
 	}
 	if r.scopeID != nil {
 		var zero S
 		if v := r.scopeID(zero); v != nil {
-			if derived, derr := r.allowedTypes(reflect.TypeOf(v), false, false); derr == nil {
+			if derived, derr := r.allowedTypes(reflect.TypeOf(v), false, false, sqlTypeInput); derr == nil {
 				return derived, nil
 			}
 		}

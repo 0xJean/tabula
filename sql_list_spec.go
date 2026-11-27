@@ -354,7 +354,16 @@ func compileSQLListOrder[Row, S any](
 				return compiledSQLListSortTerm{}, fmt.Errorf("keyset sort Column %q is nullable; project a non-null expression and bind that column", colName)
 			}
 			colIdx = idx
-			colTypes = slices.Clone(resultFields[idx].AllowedTypes)
+			col := rowDesc.cols[idx]
+			if keyset && !col.needsColumnType {
+				var err error
+				colTypes, err = r.allowedTypes(col.goType, false, false, sqlTypeInput)
+				if err != nil {
+					return compiledSQLListSortTerm{}, fmt.Errorf("keyset sort Column %q: %w", colName, err)
+				}
+			} else {
+				colTypes = slices.Clone(resultFields[idx].AllowedTypes)
+			}
 		} else if keyset {
 			return compiledSQLListSortTerm{}, errors.New("keyset sort term requires matching Row Column")
 		}
