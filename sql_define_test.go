@@ -127,6 +127,10 @@ func (s *fakeAuthSession[S]) EachAuthorized(_ context.Context, call tabula.Autho
 						v := row[i].(string)
 						*p = &v
 					}
+				case sql.Scanner:
+					if err := p.Scan(row[i]); err != nil {
+						return err
+					}
 				}
 			}
 			return nil

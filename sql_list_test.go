@@ -1,6 +1,9 @@
 package tabula_test
 
 import (
+	"database/sql/driver"
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/0xJean/tabula"
@@ -68,15 +71,19 @@ func TestDefineSQLListVariantsAndExecution(t *testing.T) {
 	} {
 		require.Contains(t, def.Statements, key)
 		require.Contains(t, def.StatementShapes, key)
+		require.True(t, def.StatementShapes[key].StructSQL)
 		require.Equal(t, "items.search", def.StatementQueries[key])
 	}
 
-	// Snapshot round-trip succeeds cleanly.
+	// Snapshot round-trip succeeds cleanly and preserves StructSQL.
 	snap := sqlcheck.RenderAllSnapshot(reg.Defined(), reg.DefinedViews())
 	parsed, err := sqlcheck.ParseSnapshot(snap)
 	require.NoError(t, err)
 	require.Len(t, parsed, 1)
 	require.Len(t, parsed[0].StatementShapes, len(def.StatementShapes))
+	for _, shape := range parsed[0].StatementShapes {
+		require.True(t, shape.StructSQL)
+	}
 
 	// Execute List with subset of filters {status, active} via AuthorizedSession (never text!).
 	status := "open"
@@ -129,4 +136,64 @@ func TestDefineSQLListVariantsAndExecution(t *testing.T) {
 		MaxLimit: 50,
 	})
 	require.ErrorContains(t, err, "specify When explicitly")
+}
+
+type defaultEncodedKey struct {
+	raw string
+}
+
+func (k defaultEncodedKey) Value() (driver.Value, error) {
+	return nil, errors.New("defaultEncodedKey must be encoded through RegistryConfig.DefaultTypes")
+}
+
+func (k *defaultEncodedKey) Scan(src any) error {
+	switch v := src.(type) {
+	case string:
+		k.raw = v
+		return nil
+	default:
+		return fmt.Errorf("unexpected %T", src)
+	}
+}
+
+func TestDefineSQLListKeysetDefaultTypesEncoder(t *testing.T) {
+	type keyRow struct {
+		ID  int64             `db:"id"`
+		Key defaultEncodedKey `db:"key"`
+	}
+	reg := tabula.NewRegistry(tabula.RegistryConfig[struct{}]{
+		Deny: tabula.DenyLegacySQL,
+		DefaultTypes: []tabula.TypeDefault{
+			tabula.TypeMapping(tabula.CatalogType("pg_catalog", "text", func(v defaultEncodedKey) any {
+				return "enc:" + v.raw
+			})),
+		},
+	})
+	list := tabula.DefineSQLList[keyRow, tabula.NoArgs](reg, tabula.SQLListSpec{
+		Name:   "items.by_key",
+		Select: "SELECT id, key FROM public.items",
+		Order: tabula.QueryOrderSpec{
+			Default:          "key",
+			DefaultDirection: tabula.SortAsc,
+			Sorts:            []tabula.QuerySort{{Key: "key", Expr: "key", Column: "key"}},
+			TieBreaker:       []tabula.QuerySortTerm{{Expr: "id", Column: "id"}},
+		},
+		MaxLimit: 10,
+		Keyset:   true,
+	})
+	sess := &fakeAuthSession[struct{}]{
+		authority: reg.SQLAuthority(),
+		eachRows:  [][]any{{int64(2), "beta"}},
+	}
+	page, err := list.Bind(sess).ListKeyset(t.Context(), tabula.NoArgs{}, tabula.QueryKeyset{
+		Sort:      "key",
+		Direction: tabula.SortAsc,
+		Limit:     5,
+		After:     []any{defaultEncodedKey{raw: "alpha"}, int64(1)},
+	})
+	require.NoError(t, err)
+	require.False(t, page.HasMore)
+	require.Len(t, page.Items, 1)
+	require.Equal(t, defaultEncodedKey{raw: "beta"}, page.Items[0].Key)
+	require.Equal(t, []any{"enc:alpha", int64(1), 6}, sess.lastSQL.Args)
 }

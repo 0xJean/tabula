@@ -87,6 +87,9 @@ type StatementShape struct {
 	// UnscopedOnly marks a shape that omits a declared column-scope predicate.
 	// It can be bound only to an unscoped session.
 	UnscopedOnly bool
+	// StructSQL marks a named-parameter SQL declaration registered via DefineSQL,
+	// DefineSQLExec, DefineSQLReturning or DefineSQLList.
+	StructSQL bool `json:",omitempty"`
 }
 
 // The renderer produces these values, including all applicable scope and

@@ -59,6 +59,29 @@ func (d *sqlTestDecimal) Scan(src any) error {
 	}
 }
 
+// encodedCursorCode fails if passed raw via driver.Valuer, proving ListKeyset
+// cursor encoding uses the RegistryConfig.DefaultTypes encoder.
+type encodedCursorCode struct {
+	raw string
+}
+
+func (c encodedCursorCode) Value() (driver.Value, error) {
+	return nil, errors.New("encodedCursorCode must be encoded through RegistryConfig.DefaultTypes")
+}
+
+func (c *encodedCursorCode) Scan(src any) error {
+	switch v := src.(type) {
+	case string:
+		c.raw = v
+		return nil
+	case []byte:
+		c.raw = string(v)
+		return nil
+	default:
+		return fmt.Errorf("cannot scan %T into encodedCursorCode", src)
+	}
+}
+
 func TestStructSQLDualDriverAndSQLCheck(t *testing.T) {
 	dsn := os.Getenv("TABULA_TEST_DSN")
 	require.NotEmpty(t, dsn, "TABULA_TEST_DSN is required for integration tests")
@@ -175,6 +198,10 @@ func TestStructSQLDualDriverAndSQLCheck(t *testing.T) {
 		Item nestedItemPart `db:"i_"`
 		Name string         `db:"name"`
 	}
+	type cursorCodeRow struct {
+		ID   int64             `db:"id"`
+		Code encodedCursorCode `db:"code"`
+	}
 
 	buildRegistry := func(driverName string, logBuf *bytes.Buffer) (*tabula.Registry[int64], tabula.SessionKey) {
 		key := tabula.NewSessionKey()
@@ -183,9 +210,13 @@ func TestStructSQLDualDriverAndSQLCheck(t *testing.T) {
 			SessionKey: key,
 			DefaultTypes: []tabula.TypeDefault{
 				tabula.TypeMapping(pgtype.UUID[sqlTestUUID]()),
+				tabula.TypeMapping(tabula.CatalogType("pg_catalog", "varchar", func(v encodedCursorCode) any {
+					return v.raw
+				})),
 			},
 			TypeFamilies: []tabula.TypeFamily{
 				tabula.TypeFamilyOf[sqlTestDecimal]("numeric"),
+				tabula.TypeFamilyOf[encodedCursorCode]("text", "character varying"),
 			},
 			Log: tabula.LogConfig{
 				Logger: slog.New(slog.NewTextHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelDebug})),
@@ -245,6 +276,11 @@ SELECT id, code, name FROM ins`,
 			Scope:        tabula.ScopeGlobal(),
 			AdvisoryLock: true,
 		})
+		qCleanupNoArgs := tabula.DefineSQLExec[tabula.NoArgs](reg, tabula.SQLSpec{
+			Name:  "items.cleanup_negative",
+			SQL:   `DELETE FROM ` + itemsTable + ` WHERE rank < 0`,
+			Scope: tabula.ScopeByRLS(),
+		})
 		qList := tabula.DefineSQLList[itemRow, listArgs](reg, tabula.SQLListSpec{
 			Name:      "items.list",
 			Select:    `SELECT id, uid, code, name, status, rank, amount, note, tags, meta, created_at FROM ` + itemsTable,
@@ -269,13 +305,29 @@ SELECT id, code, name FROM ins`,
 			MaxLimit: 100,
 			Keyset:   true,
 		})
+		qCursorCodeList := tabula.DefineSQLList[cursorCodeRow, tabula.NoArgs](reg, tabula.SQLListSpec{
+			Name:   "items.cursor_code_list",
+			Select: `SELECT id, code FROM ` + itemsTable,
+			Where:  `group_id = @group_id`,
+			Scope:  tabula.ScopeParam("group_id"),
+			Order: tabula.QueryOrderSpec{
+				Default:          "code",
+				DefaultDirection: tabula.SortAsc,
+				Sorts:            []tabula.QuerySort{{Key: "code", Expr: "code", Column: "code"}},
+				TieBreaker:       []tabula.QuerySortTerm{{Expr: "id", Column: "id"}},
+			},
+			MaxLimit: 50,
+			Keyset:   true,
+		})
 		_ = qInsertRet
 		_ = qGet
 		_ = qLock
 		_ = qRename
 		_ = qMoveRet
 		_ = qAdvLock
+		_ = qCleanupNoArgs
 		_ = qList
+		_ = qCursorCodeList
 
 		// Full registry passes pgxdriver.SQLVerifier with zero execution!
 		allDefs := sqlcheck.ViewsToDefinitions(reg.DefinedViews())
@@ -283,13 +335,45 @@ SELECT id, code, name FROM ins`,
 		require.NoError(t, err)
 		require.Empty(t, failures)
 
-		// Snapshot round-trip also passes pgxdriver.SQLVerifier!
+		// Snapshot round-trip preserves StructSQL and passes pgxdriver.SQLVerifier!
 		snap := sqlcheck.RenderAllSnapshot(reg.Defined(), reg.DefinedViews())
 		parsed, err := sqlcheck.ParseSnapshot(snap)
 		require.NoError(t, err)
 		failures, err = sqlcheck.VerifyStatementsUsing(ctx, pgxdriver.SQLVerifier(pool), parsed, appRole)
 		require.NoError(t, err)
 		require.Empty(t, failures)
+
+		// Regression: zero-arg, zero-result DefineSQLExec[NoArgs] preserves StructSQL across
+		// snapshot round-trip and passes CheckPolicyCoverage via inferred table access (no false
+		// "typed statement requires reviewed Access or NoAccess" error).
+		var parsedCleanup tabula.Definition
+		for _, d := range parsed {
+			if d.Name == "items.cleanup_negative" {
+				parsedCleanup = d
+				break
+			}
+		}
+		require.Equal(t, "items.cleanup_negative", parsedCleanup.Name)
+		require.True(t, parsedCleanup.StatementShapes["sql"].StructSQL)
+		cleanupShape := parsedCleanup.StatementShapes["sql"]
+		cleanupStmt := sqlcheck.Statement{
+			Name:  parsedCleanup.Name + "/sql",
+			SQL:   parsedCleanup.Statements["sql"],
+			Shape: &cleanupShape,
+		}
+		covFindings, err := sqlcheck.CheckPolicyCoverage(ctx, db, sqlcheck.RoleStatements{
+			appRole: {cleanupStmt},
+		})
+		require.NoError(t, err)
+		require.Empty(t, covFindings)
+
+		// Negative coverage check: role without DELETE policy on itemsTable is flagged.
+		noCovFindings, err := sqlcheck.CheckPolicyCoverage(ctx, db, sqlcheck.RoleStatements{
+			noPrivRole: {cleanupStmt},
+		})
+		require.NoError(t, err)
+		require.NotEmpty(t, noCovFindings)
+		require.NotContains(t, noCovFindings[0], "typed statement requires reviewed Access or NoAccess")
 
 		// Read-only statements + Exec + List + FOR UPDATE also pass standard database/sql verifier.
 		readOnlyDefs := []tabula.Definition{
@@ -475,6 +559,20 @@ SELECT id, code, name FROM ins`,
 				MaxLimit: 100,
 				Keyset:   true,
 			})
+			qCursorCodeList := tabula.DefineSQLList[cursorCodeRow, tabula.NoArgs](reg, tabula.SQLListSpec{
+				Name:   "rt.cursor_code_list",
+				Select: `SELECT id, code FROM ` + itemsTable,
+				Where:  `group_id = @group_id`,
+				Scope:  tabula.ScopeParam("group_id"),
+				Order: tabula.QueryOrderSpec{
+					Default:          "code",
+					DefaultDirection: tabula.SortAsc,
+					Sorts:            []tabula.QuerySort{{Key: "code", Expr: "code", Column: "code"}},
+					TieBreaker:       []tabula.QuerySortTerm{{Expr: "id", Column: "id"}},
+				},
+				MaxLimit: 50,
+				Keyset:   true,
+			})
 
 			stmtPolicy := tabula.StatementPolicy{
 				Read:                    []string{"select", "values", "with"},
@@ -644,6 +742,19 @@ SELECT id, code, name FROM ins`,
 				require.False(t, p2.HasMore)
 				require.Len(t, p2.Items, 1)
 				require.Equal(t, secondID, p2.Items[0].ID)
+
+				// Regression: ListKeyset cursor After column encoded via RegistryConfig.DefaultTypes.
+				cp1, err := qCursorCodeList.Bind(s).ListKeyset(c, tabula.NoArgs{}, tabula.QueryKeyset{Sort: "code", Direction: tabula.SortAsc, Limit: 1})
+				require.NoError(t, err)
+				require.True(t, cp1.HasMore)
+				require.Len(t, cp1.Items, 1)
+				require.Equal(t, encodedCursorCode{raw: "A-1"}, cp1.Items[0].Code)
+
+				cp2, err := qCursorCodeList.Bind(s).ListKeyset(c, tabula.NoArgs{}, tabula.QueryKeyset{Sort: "code", Direction: tabula.SortAsc, Limit: 1, After: cp1.Next})
+				require.NoError(t, err)
+				require.False(t, cp2.HasMore)
+				require.Len(t, cp2.Items, 1)
+				require.Equal(t, encodedCursorCode{raw: "B-2"}, cp2.Items[0].Code)
 				return nil
 			}))
 

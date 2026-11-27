@@ -55,7 +55,7 @@ WHERE attrelid = pg_catalog.to_regclass($1) AND attname = $2 AND attnum > 0 AND 
 	if errors.Is(err, ErrDescribeRequired) && !descriptionNeedsProtocol(query, s) {
 		if old, ok := tx.(sqlVerificationTx); ok {
 			if s.Effects&tabula.EffectRowLock != 0 {
-				if shapeHasAllowedTypes(s) {
+				if s.StructSQL {
 					query, err = stripSQLRowLock(query)
 				} else {
 					query, err = lockProjectionQuery(query)

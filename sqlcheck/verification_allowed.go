@@ -11,23 +11,6 @@ import (
 	"github.com/0xJean/tabula/internal/pgstmt"
 )
 
-func shapeHasAllowedTypes(s *tabula.StatementShape) bool {
-	if s == nil {
-		return false
-	}
-	for _, in := range s.Inputs {
-		if len(in.AllowedTypes) > 0 {
-			return true
-		}
-	}
-	for _, f := range s.Result {
-		if len(f.AllowedTypes) > 0 {
-			return true
-		}
-	}
-	return false
-}
-
 const allowedTypeOIDSQL = `WITH RECURSIVE actual_chain AS (
  SELECT oid, typbasetype, typelem FROM pg_catalog.pg_type WHERE oid = $1::oid
  UNION ALL
