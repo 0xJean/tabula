@@ -61,15 +61,19 @@ func (s inventorySource) rowPlan(expr ast.Expr, depth int) (definition, key stri
 	case *ast.Ident:
 		return s.rowPlan(s.initializers[s.info.Uses[e]], depth+1)
 	case *ast.CallExpr:
-		if typedPlanSiteKind(tabulaPkgPath, tabulaCallName(s.info, e)) != "" && len(e.Args) >= 2 {
-			key, _ = s.constantString(e.Args[1])
-			return s.definitionName(e.Args[0]), key
+		name := tabulaCallName(s.info, e)
+		ownerArg, keyArg := planOwnerArguments(name)
+		if typedPlanSiteKind(tabulaPkgPath, name) != "" && len(e.Args) > keyArg {
+			key, _ = s.constantString(e.Args[keyArg])
+			return s.definitionName(e.Args[ownerArg]), key
 		}
 		if selector, ok := unwrapCallTarget(e.Fun).(*ast.SelectorExpr); ok && selector.Sel.Name == "Bind" {
 			if sel := s.info.Selections[selector]; sel != nil {
 				_, recv := methodReceiverNames(sel)
 				switch recv {
 				case tabulaPkgPath + ".RowsPlan", tabulaPkgPath + ".ReadPlan", tabulaPkgPath + ".ExistsPlan", tabulaPkgPath + ".MutationPlan", tabulaPkgPath + ".RoutinePlan", tabulaPkgPath + ".AdvisoryLockPlan":
+					return s.rowPlan(methodReceiver(selector, sel, e), depth+1)
+				case tabulaPkgPath + ".WritePlan", tabulaPkgPath + ".ReturningPlan", tabulaPkgPath + ".MutationReturningPlan":
 					return s.rowPlan(methodReceiver(selector, sel, e), depth+1)
 				}
 			}

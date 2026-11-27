@@ -89,7 +89,16 @@ The same registry records row locks, transaction advisory locks and calls to dec
 
 In v0.4.3, reads and conditional updates share typed PostgreSQL expressions. Queries can group, sort and aggregate computed values. An explicit join can register filtered pages, exact counts and keyset orders whose uniqueness is checked against the catalog. [Release sequence](docs/DESIGN-v0.4.md#release-sequence-and-acceptance)
 
-The advanced-read milestone will add distinct row-lock strengths and wait options for separate occurrences in one joined SELECT. Each target will have its own grant and policy checks. The existing `ReadSelect.Lock` method selects a single target and a later call replaces it. The same milestone will cover row-local materialization for volatile array expressions used as the first operand of `NullIf`.
+Tabula v0.4.4 adds composable query sources, subqueries, set operations,
+read and recursive common tables, windows and final-result pagination. Multiple
+row-lock clauses retain per-target grants and wait modes. Explicit materialized
+result fields support row-local reuse of volatile arrays without treating them
+as stable cursor keys. Typed write plans cover defaults, conflicts, batches,
+matching sources, RETURNING and modifying common tables, with guarded operation
+savepoints and non-executing result verification. [M3 contracts](docs/DESIGN-M3.md)
+
+Explicit expression-level COLLATE provenance, recursive SEARCH/CYCLE decorators
+and native record paths remain separate future work.
 
 ## v1.0 — stability and ecosystem adapters
 

@@ -23,18 +23,26 @@ type expressionPart interface {
 }
 
 type typedCompiler struct {
-	sources    map[*occurrence]bool // true after rendering the occurrence's scope predicate
-	from       []*occurrence
-	params     *parameterLayout
-	reads      map[physicalColumn]catalogType
-	selectCols map[physicalName]map[string]bool
-	hasSecret  bool
-	scopeType  catalogType
-	functions  map[string]bool
+	queryReads   map[physicalName]bool
+	queryShapes  []StatementShape
+	block        *queryBlock
+	inputPrefix  string
+	inputAliases map[*typedInput]*typedInput
+	querySerial  int
+	sources      map[*occurrence]bool // true after rendering the occurrence's scope predicate
+	from         []*occurrence
+	params       *parameterLayout
+	reads        map[physicalColumn]catalogType
+	selectCols   map[physicalName]map[string]bool
+	hasSecret    bool
+	scopeType    catalogType
+	functions    map[string]bool
 	// New SQL forms include native aggregates in their grant inventory.
 	// Legacy-only forms retain their original snapshots.
 	extendedForm     bool
 	legacyAggregates []aggregateCall
+
+	conflictTarget *occurrence
 }
 
 // requireNative records the exact pg_proc identity selected by a closed
@@ -92,7 +100,15 @@ func (c *typedCompiler) scopePredicate(src *occurrence, kind catalogType) (strin
 	c.selectCols[src.table][src.scopeColumn] = true
 	c.sources[src] = true
 	c.hasSecret = c.hasSecret || src.scopeSecret
-	return "(" + typedQuote(src.alias) + "." + typedQuote(src.scopeColumn) + " = " + kind.cast("$1") + ")", nil
+	alias := src.alias
+	if c.block != nil && c.block.physicalAliases[src] != "" {
+		alias = c.block.physicalAliases[src]
+	}
+	op, err := c.comparisonOperator(kind, "=")
+	if err != nil {
+		return "", err
+	}
+	return "(" + typedQuote(alias) + "." + typedQuote(src.scopeColumn) + " " + op + " " + kind.cast("$1") + ")", nil
 }
 
 // readRequirements records each physical table once, even if two aliases
@@ -102,6 +118,9 @@ func (c *typedCompiler) readRequirements() (StatementShape, error) {
 	s.Effects = EffectRead
 	tables := make(map[string]physicalName)
 	for _, src := range c.from {
+		if c.queryReads != nil && !c.queryReads[src.table] && len(c.selectCols[src.table]) == 0 {
+			continue
+		}
 		if err := src.checkCommand("SELECT"); err != nil {
 			return StatementShape{}, err
 		}
@@ -134,6 +153,11 @@ func (c *typedCompiler) read(f *fieldRef) error {
 	if _, ok := c.sources[f.source]; !ok {
 		return fmt.Errorf("tabula: field is outside the statement's relation scope")
 	}
+	if c.block != nil {
+		if err := c.block.resolvePhysical(f.source, 0); err != nil {
+			return err
+		}
+	}
 	column := physicalColumn{f.source.table, f.name}
 	if err := column.record(c.reads, f.kind); err != nil {
 		return err
@@ -147,7 +171,11 @@ func (f *fieldRef) render(c *typedCompiler) (string, error) {
 	if err := c.read(f); err != nil {
 		return "", err
 	}
-	return typedQuote(f.source.alias) + "." + typedQuote(f.name), nil
+	alias := f.source.alias
+	if c.block != nil && c.block.physicalAliases[f.source] != "" {
+		alias = c.block.physicalAliases[f.source]
+	}
+	return typedQuote(alias) + "." + typedQuote(f.name), nil
 }
 
 // Expr references a bound value. Its value never enters the SQL text.
@@ -159,6 +187,14 @@ func (s Slot[V]) Expr() Expr[V] {
 }
 
 func (i *typedInput) render(c *typedCompiler) (string, error) {
+	if c.inputAliases != nil && c.inputPrefix != "" && i.fixed == nil && c.inputAliases[i] == nil {
+		alias := *i
+		alias.name = c.inputPrefix + i.name
+		c.inputAliases[i] = &alias
+	}
+	if alias := c.inputAliases[i]; alias != nil {
+		i = alias
+	}
 	slot, err := c.params.parameter(i)
 	if err != nil {
 		return "", err
@@ -177,6 +213,7 @@ type comparison struct {
 	op           string
 	left, right  expressionPart
 	matchingType bool
+	kind         catalogType
 }
 
 func (v comparison) render(c *typedCompiler) (string, error) {
@@ -194,11 +231,31 @@ func (v comparison) render(c *typedCompiler) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return "(" + left + " " + v.op + " " + right + ")", nil
+	op, err := c.comparisonOperator(v.kind, v.op)
+	if err != nil {
+		return "", err
+	}
+	return "(" + left + " " + op + " " + right + ")", nil
+}
+
+func (c *typedCompiler) comparisonOperator(kind catalogType, op string) (string, error) {
+	if !c.params.graph {
+		return op, nil
+	}
+	operation := map[string]string{"=": "eq", "<>": "ne", "<": "lt", "<=": "le", ">": "gt", ">=": "ge"}[op]
+	if operation == "" {
+		return op, nil
+	}
+	if readComparable(kind) {
+		if err := requireReadComparison(c, kind, operation); err != nil {
+			return "", err
+		}
+	}
+	return "OPERATOR(pg_catalog." + op + ")", nil
 }
 
 func typedComparison[V any](op string, left, right Expr[V], nullable bool) Pred {
-	return Pred{comparison{op, left.part, right.part, sameSQLType(left.kind.id, right.kind.id)}, Bool(), nullable}
+	return Pred{comparison{op, left.part, right.part, sameSQLType(left.kind.id, right.kind.id), left.kind.id}, Bool(), nullable}
 }
 
 // Eq compares two expressions of the same PostgreSQL type.

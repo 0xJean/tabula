@@ -16,7 +16,7 @@ func (p *readListPlan) render(c *typedCompiler, owner *registration, indexes []i
 	unordered := q
 	unordered.order = nil
 	orderAggregates := len(q.group) == 0 && readHasAggregate(q) && !readHasAggregate(unordered)
-	wrapped := len(q.distinctOn) > 0 && data.order != nil || data.page == AfterPage && (grouped || q.distinct) || orderAggregates && data.order != nil
+	wrapped := len(q.distinctOn) > 0 && data.order != nil || data.page == AfterPage && (grouped || q.distinct || q.hasWindows()) || orderAggregates && data.order != nil
 	if data.order != nil && !wrapped {
 		q.order = data.order.terms
 	}
@@ -31,7 +31,7 @@ func (p *readListPlan) render(c *typedCompiler, owner *registration, indexes []i
 		return "", StatementShape{}, err
 	}
 	if wrapped {
-		if q.lock.declared {
+		if q.hasRowLocks() {
 			return "", StatementShape{}, fmt.Errorf("tabula: a wrapped result cannot be row locked")
 		}
 		cols := make([]string, len(q.project))
@@ -59,8 +59,8 @@ func (p *readListPlan) render(c *typedCompiler, owner *registration, indexes []i
 		return "", StatementShape{}, err
 	}
 	// Row locks must follow LIMIT/OFFSET. q.render already emitted the lock.
-	if q.lock.declared {
-		lock, err := q.lock.clause(c, &StatementShape{})
+	if q.hasRowLocks() {
+		lock, err := q.rowLockClauses(c, &StatementShape{})
 		if err != nil {
 			return "", StatementShape{}, err
 		}

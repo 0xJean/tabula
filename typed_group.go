@@ -91,6 +91,9 @@ func groupDetermined(p expressionPart, groups []scalarOperand) error {
 	if t.aggregate {
 		return nil
 	}
+	if _, ok := p.(queryResultRef); ok {
+		return fmt.Errorf("tabula: ungrouped exported result field")
+	}
 	if f, ok := p.(*fieldRef); ok {
 		return fmt.Errorf("tabula: ungrouped field %q on occurrence %q", f.name, f.source.alias)
 	}
@@ -108,6 +111,9 @@ func groupingExpressions(project []Projection, having []Pred, order []RowTerm, g
 		parts = append(parts, p.part)
 	}
 	for _, p := range having {
+		if err := checkRowExpr(p.part, func(expressionPart) error { return nil }); err != nil {
+			return false, err
+		}
 		parts = append(parts, p.part)
 	}
 	for _, term := range order {
@@ -115,7 +121,7 @@ func groupingExpressions(project []Projection, having []Pred, order []RowTerm, g
 	}
 	aggregate := len(groups) > 0 || len(having) > 0 || slices.ContainsFunc(parts, hasAggregate)
 	for _, part := range parts {
-		if err := checkRowExpr(part, func(expressionPart) error { return nil }); err != nil {
+		if err := checkResultExpr(part, func(expressionPart) error { return nil }); err != nil {
 			return false, err
 		}
 		if aggregate {

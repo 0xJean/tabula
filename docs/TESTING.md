@@ -48,6 +48,8 @@ The full gate also runs the workspace integration package in `testdata/integrati
 
 The typed read tests compare projected fields and PostgreSQL parameter types, exercise zero, one and multiple matching rows, and run existence checks under narrow column grants. They reuse a single binding across statements and separate sessions with both drivers.
 
+Composable-query tests cover lexical correlation, sets, recursion, array sources, windows, multiple locks and final-result pages. Typed-write tests verify defaults, actual conflict arbiters, minimum grants, matching sources, batches and returned rows with both drivers. Protocol verification tests describe write results without executing them and distinguish logical domain identity from wire OIDs. Operation tests exercise savepoint recovery, retained handles, interrupted iteration, completion cancellation and failures that must prevent the enclosing transaction from committing. Run all five lint scopes with integration tags so the independent workspace integration package is included.
+
 CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) additionally runs:
 
 - **Matrix**: Go `1.26.x` and `1.27.x` × PostgreSQL `14`, `15`, `16`, `17`

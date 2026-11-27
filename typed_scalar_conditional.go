@@ -18,8 +18,10 @@ func Least[V any](first Expr[V], rest ...Expr[V]) Expr[V] {
 
 // NullIf returns SQL NULL when its operands compare equal, or the first value.
 // Its operands require a reviewed built-in equality operator.
-// An array-valued first operand must not contain a volatile expression; scalar
-// operands and a volatile second array operand are evaluated once per row.
+// An array-valued first operand must be stable within the row, or refer to an
+// explicitly materialized result field. Materialization does not make a value
+// stable across rows or pages. Scalar operands and a volatile second array
+// operand are evaluated once per row.
 func NullIf[V any](a, b Expr[V]) Expr[V] {
 	v := conditional("NULLIF", a, []Expr[V]{b}, nullAlways, true)
 	if a.kind.id.element != nil && !statementStableScalar(a.part) {
@@ -31,6 +33,11 @@ func NullIf[V any](a, b Expr[V]) Expr[V] {
 }
 
 func statementStableScalar(p expressionPart) bool {
+	if ref, ok := p.(queryResultRef); ok {
+		if field, found := ref.field(); found && field.stored {
+			return true
+		}
+	}
 	t, ok := expressionStructure(p)
 	if !ok || t.stability == expressionVolatile {
 		return false

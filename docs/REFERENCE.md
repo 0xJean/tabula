@@ -97,6 +97,13 @@ const ErrStatementAuthority staticError = "tabula: statement authority or sessio
     ErrStatementAuthority reports an unregistered call, a different registry's
     credential, or a call delivered to a different session.
 
+const ErrUnobservedWrite staticError = "tabula: write failed after result consumption stopped"
+    ErrUnobservedWrite marks a write failure discovered while draining results
+    after an iterator's consumer has stopped. The operation is rolled back
+    and the enclosing transaction must fail, because the iterator cannot yield
+    again. The wrapped database error retains its SQLSTATE and constraint
+    diagnostics.
+
 
 FUNCTIONS
 
@@ -278,6 +285,11 @@ func TryDefineAdvisoryLock[T, S any](view *View[T, S], key string, lock Advisory
 func TryDefineDeleteMany[T, S any](src RowSource[T, S], name string, spec MutationSpec) (*MutationPlan[T, S], error)
     TryDefineDeleteMany atomically registers a predicate-based DELETE.
 
+func TryDefineDeleteReturning[R, T, S any](source RowSource[R, S], out *View[T, S], name string,
+	spec MutationSpec, projections ...Projection,
+) (*MutationReturningPlan[T, S], error)
+    TryDefineDeleteReturning registers all DELETE RETURNING choices atomically.
+
 func TryDefineExists[T, S any](src RowSource[T, S], name string, filter RowFilter) (*ExistsPlan[S], error)
     TryDefineExists registers every allowed existence probe on the source table.
     A rejected declaration publishes no shapes.
@@ -291,6 +303,9 @@ func TryDefinePlanSource[T, K, S any](r *Registry[S], spec TableSpec[T, K]) (*Ta
 func TryDefineRead[T, S any](out *View[T, S], name string, query ReadSelect, observe ...StatementOption) (*ReadPlan[T, S], error)
     TryDefineRead registers every permitted scope variant together. No shape is
     published when a declaration fails.
+
+func TryDefineReturning[T, S any](out *View[T, S], name string, query ResultStatement, observe ...StatementOption) (*ReturningPlan[T, S], error)
+    TryDefineReturning atomically registers all write-result forms.
 
 func TryDefineRoutine[T, S, V any](view *View[T, S], key string, r *Routine[V], args ...RoutineArgument) (*RoutinePlan[T, S], error)
     TryDefineRoutine registers the complete call or returns a declaration error.
@@ -307,6 +322,11 @@ func TryDefineTableRead[T, S any](src RowSource[T, S], name string, columns Tabl
     TryDefineTableRead registers the complete table-backed read or returns a
     declaration error. The source and selection already define FROM and SELECT.
 
+func TryDefineTableReturning[T, S any](source RowSource[T, S], name string, query WriteStatement,
+	selection TableSelection, observe ...StatementOption,
+) (*ReturningPlan[T, S], error)
+    TryDefineTableReturning registers a partial mapped write result atomically.
+
 func TryDefineTableRows[T, S any](src RowSource[T, S], name string, spec RowsSpec, columns TableSelection, forms ...ReadForms) (*RowsPlan[T, S], error)
     TryDefineTableRows registers every shape of a table-backed read together.
     An invalid source, selection or plan leaves the registry untouched.
@@ -314,8 +334,16 @@ func TryDefineTableRows[T, S any](src RowSource[T, S], name string, spec RowsSpe
 func TryDefineUpdateMany[T, S any](src RowSource[T, S], name string, spec MutationSpec, sets ...RowSet) (*MutationPlan[T, S], error)
     TryDefineUpdateMany atomically registers a predicate-based UPDATE.
 
+func TryDefineUpdateReturning[R, T, S any](source RowSource[R, S], out *View[T, S], name string,
+	spec MutationSpec, sets []RowSet, projections ...Projection,
+) (*MutationReturningPlan[T, S], error)
+    TryDefineUpdateReturning registers all UPDATE RETURNING choices atomically.
+
 func TryDefineView[T, S any](r *Registry[S], spec ViewSpec[T]) (*View[T, S], error)
     TryDefineView validates v without recording it in r.
+
+func TryDefineWrite[T, S any](owner RowSource[T, S], name string, query WriteStatement, observe ...StatementOption) (*WritePlan[S], error)
+    TryDefineWrite atomically registers all declared scope and batch forms.
 
 func TryMapTable[T, K, S any](table *Table[T, K, S], overrides ...ColumnMapping) (*TableLayout[T, S], error)
     TryMapTable checks column overrides and resolves conventional types. Fields
@@ -472,6 +500,23 @@ func (b *BoundMutationPlan[T, S]) UpdateMany(ctx context.Context, set string, fi
     affected row count, including zero. The filter list selects optional
     predicates.
 
+type BoundMutationReturningPlan[T, S any] struct {
+	// Has unexported fields.
+}
+    BoundMutationReturningPlan executes the permitted set/filter choices.
+
+func (b *BoundMutationReturningPlan[T, S]) DeleteIter(ctx context.Context, filters []string, values ...Binding) iter.Seq2[T, error]
+    DeleteIter streams old rows from the selected physical DELETE.
+
+func (b *BoundMutationReturningPlan[T, S]) DeleteMany(ctx context.Context, filters []string, values ...Binding) ([]T, error)
+    DeleteMany returns the old rows deleted by the selected filter choice.
+
+func (b *BoundMutationReturningPlan[T, S]) UpdateIter(ctx context.Context, set string, filters []string, values ...Binding) iter.Seq2[T, error]
+    UpdateIter streams new rows from the selected UPDATE with operation cleanup.
+
+func (b *BoundMutationReturningPlan[T, S]) UpdateMany(ctx context.Context, set string, filters []string, values ...Binding) ([]T, error)
+    UpdateMany returns the new rows from the selected assignment/filter choice.
+
 type BoundReadPlan[T, S any] struct {
 	rowExecution[T, S]
 
@@ -512,6 +557,30 @@ func (b *BoundReadPlan[T, S]) One(ctx context.Context, values ...Binding) (T, er
 
 func (b *BoundReadPlan[T, S]) Page(ctx context.Context, choice RowChoice, values ...Binding) ([]T, error)
     Page executes one registered list data shape. Find retains the fixed read.
+
+type BoundReturningPlan[T, S any] struct {
+	rowExecution[T, S]
+	// Has unexported fields.
+}
+    BoundReturningPlan executes one registered write result using an operation
+    savepoint. It requires OperationSession before any database I/O.
+
+func (b *BoundReturningPlan[T, S]) All(ctx context.Context, values ...Binding) ([]T, error)
+    All decodes every returned row or returns no partial result on failure. The
+    operation rolls back on database, cancellation or client decoding errors.
+
+func (b *BoundReturningPlan[T, S]) AllBatch(ctx context.Context, rows [][]Binding, values ...Binding) ([]T, error)
+    AllBatch returns every batch result with all-or-error rollback. Results have
+    no promised order or positional association with input rows; conflicts and
+    triggers can suppress rows. Project an explicit input key when needed.
+
+func (b *BoundReturningPlan[T, S]) Iter(ctx context.Context, values ...Binding) iter.Seq2[T, error]
+    Iter streams the one write result. Early break stops decoding and yielding,
+    then drains the statement to observe completion or failure. It never
+    narrows the affected rows. A failure discovered after break rolls back the
+    operation and fails the enclosing transaction with ErrUnobservedWrite.
+    A suspended pull iterator must be stopped before its enclosing runner ends;
+    the session lifecycle closes and poisons leaked work.
 
 type BoundRoutinePlan[T, S any] struct {
 	// Has unexported fields.
@@ -564,6 +633,21 @@ func (b *BoundRowsPlan[T, S]) One(ctx context.Context, choice RowChoice, values 
     One returns the only matching row. It returns ErrNotFound on an empty result
     and ErrMultipleRows on a second match. Declare Exact to limit PostgreSQL to
     two rows. Unlocked, unpaged reads can reuse their existing data statement.
+
+type BoundWritePlan[S any] struct {
+	// Has unexported fields.
+}
+    BoundWritePlan executes a registered write on one session.
+
+func (b *BoundWritePlan[S]) Exec(ctx context.Context, values ...Binding) (int64, error)
+    Exec executes the one declared statement and reports the outer command's
+    affected count. A declared batch uses ExecBatch instead.
+
+func (b *BoundWritePlan[S]) ExecBatch(ctx context.Context, rows [][]Binding, values ...Binding) (int64, error)
+    ExecBatch validates every original row before I/O, chooses only declared
+    row-count forms, and rolls all chunks back on any execution failure. Values
+    supplies common inputs outside the VALUES template, such as conflict inputs.
+    An empty batch performs no I/O and does not require OperationSession.
 
 type CallMethod uint8
     CallMethod is the driver operation authorized for one execution.
@@ -653,6 +737,49 @@ func ColumnType[V any](name string, kind PGType[V]) ColumnMapping
     ColumnType declares the exact PostgreSQL type and input codec of a column.
     Its Go type must match the field or the element of a pointer field.
 
+type CommonTable struct {
+	// Has unexported fields.
+}
+    CommonTable is an immutable named query declaration. Attach it using With.
+
+func CTE(name string, query ReadSelect, mode Materialization) CommonTable
+    CTE declares a read common table without registering a separate statement.
+
+func EffectCTE(name string, query WriteStatement) CommonTable
+    EffectCTE declares an effect-only modifying common table. It executes even
+    when unreferenced and cannot be used as a FROM source.
+
+func RecursiveCTE(name string, seed ReadSelect, combine RecursiveUnion, step func(QuerySource) ReadSelect) CommonTable
+    RecursiveCTE declares a bounded-by-query recursive relation. The self token
+    is legal only once in its own step, with explicit termination predicates.
+    SEARCH, CYCLE and native record path decorators are not exposed.
+
+func WriteCTE(name string, query ResultStatement) CommonTable
+    WriteCTE declares a modifying common table whose RETURNING schema may be
+    referenced by later common tables and the outer statement. Reuse preserves
+    the same effect identity; independent writes to one physical table fail.
+
+func (c CommonTable) As(alias string) QuerySource
+    As exposes the common table's exact exported fields under a new occurrence.
+    An effect-only common table cannot be used as a result source.
+
+type ComparisonOp uint8
+    ComparisonOp is a closed native comparison used by ANY and ALL subqueries.
+
+const (
+	// CompareEqual selects native equality.
+	CompareEqual ComparisonOp = iota + 1
+	// CompareNotEqual selects native inequality.
+	CompareNotEqual
+	// CompareLess selects native less-than.
+	CompareLess
+	// CompareLessEqual selects native less-than-or-equal.
+	CompareLessEqual
+	// CompareGreater selects native greater-than.
+	CompareGreater
+	// CompareGreaterEqual selects native greater-than-or-equal.
+	CompareGreaterEqual
+)
 type ComparisonRequirement struct {
 	Relation, Column         string
 	WithRelation, WithColumn string `json:",omitempty"`
@@ -671,6 +798,24 @@ type ConflictRequirement struct {
     clause. Constraint and Columns are alternative targets. The original SQL
     and its EXPLAIN arbiter indexes supply the inference evidence, including a
     partial index predicate. DoUpdate requires a nondeferrable unique arbiter.
+
+type ConflictTarget struct {
+	// Has unexported fields.
+}
+    ConflictTarget identifies inferred columns or a named catalog constraint.
+    Partial inference predicates use the separate closed IndexPredicate grammar.
+
+func ConflictColumns(first RowColumn, rest ...RowColumn) ConflictTarget
+    ConflictColumns selects an immediate unique index inferred by PostgreSQL.
+    Readiness checks its actual EXPLAIN arbiter and catalog properties.
+
+func ConflictConstraint(name string) ConflictTarget
+    ConflictConstraint selects a named constraint on the insertion target.
+    The name is an identifier, never SQL text.
+
+func (t ConflictTarget) WhereIndex(predicate IndexPredicate) ConflictTarget
+    WhereIndex adds a fixed schema predicate for partial-index inference. It
+    accepts no request inputs; ordinary runtime predicates remain fully bound.
 
 type CountMode int
     CountMode controls how Rows.List obtains the total row count.
@@ -782,6 +927,34 @@ type Definition struct {
 }
     Definition is one defined table as Registry.Defined lists it.
 
+type DeleteStatement struct {
+	// Has unexported fields.
+}
+    DeleteStatement declares a physical DELETE on a descriptor permitting it.
+
+func DeleteFrom[T, S any](src RowSource[T, S]) DeleteStatement
+    DeleteFrom starts a physical deletion. It requires AllowDelete and a fixed
+    predicate or AllRows; the descriptor's live-row filter remains in force.
+
+func (q DeleteStatement) AllRows() DeleteStatement
+    AllRows explicitly permits deleting every authorized live row.
+
+func (q DeleteStatement) UnscopedOnly() DeleteStatement
+    UnscopedOnly declares a deletion without column-scope predicates.
+
+func (q DeleteStatement) Using(source ReadSource, on Pred) DeleteStatement
+    Using adds an explicitly matched DELETE source. Matching uniqueness is
+    required when returned expressions depend on that source.
+
+func (q DeleteStatement) Version(version RowVersion) DeleteStatement
+    Version adds the descriptor's optimistic version check to a physical DELETE.
+
+func (q DeleteStatement) Where(first Pred, rest ...Pred) DeleteStatement
+    Where appends fixed predicates to the DELETE.
+
+func (q DeleteStatement) With(tables ...CommonTable) DeleteStatement
+    With attaches common tables to the outer DELETE.
+
 type EncodeFormat uint8
     EncodeFormat selects one of PostgreSQL's built-in byte encodings.
 
@@ -834,6 +1007,29 @@ func DefineExists[T, S any](src RowSource[T, S], name string, filter RowFilter) 
 func (p *ExistsPlan[S]) Bind(s Session[S]) *BoundExistsPlan[S]
     Bind attaches the probe to a session issued for the source registry.
 
+type Exported[V any] struct {
+	// Has unexported fields.
+}
+    Exported identifies one intermediate output without a registered View.
+
+func Export[V any](name string, value Expr[V]) Exported[V]
+    Export names an intermediate output and retains its type, codec and origin.
+
+func UnnestColumn[A, V any](name string, array Expr[A], element PGType[V]) Exported[V]
+    UnnestColumn declares one array and its exact scalar element mapping.
+    Outputs are nullable because parallel arrays pad shorter inputs with NULL.
+
+func UnnestOrdinality(name string) Exported[int64]
+    UnnestOrdinality declares the non-null int8 position within one expansion.
+    Ordinality does not prove uniqueness of values or persistent row identity.
+
+func (f Exported[V]) From(source QuerySource) Expr[V]
+    From references this export on a result occurrence that actually supplies
+    it.
+
+func (f Exported[V]) Project() Projection
+    Project selects this exact exported identity into an intermediate result.
+
 type Expr[V any] struct {
 	// Has unexported fields.
 }
@@ -870,6 +1066,14 @@ func ArrayExprAs[R, V any](result PGType[R], first Expr[V], rest ...Expr[V]) Exp
 func ArrayRemove[A, V any](array Expr[A], element Expr[V]) Expr[A]
     ArrayRemove removes every matching element using null-aware equality. A NULL
     element removes NULL elements; only a NULL array makes the result NULL.
+
+func ArraySubquery[V any](query ValueSelect[V]) Expr[[]V]
+    ArraySubquery builds an ordered one-dimensional array. Empty input produces
+    a non-NULL empty array. Nullable elements require ArraySubqueryAs.
+
+func ArraySubqueryAs[R, V any](result PGType[R], query ValueSelect[V]) Expr[R]
+    ArraySubqueryAs supplies an exact array mapping, including nullable
+    elements.
 
 func AvgOf[V, R any](f Expr[V], result PGType[R]) Expr[R]
     AvgOf averages a numeric field. PostgreSQL returns numeric for integer and
@@ -919,6 +1123,9 @@ func CountDistinct[V any](value Expr[V]) Expr[int64]
 func CountOf[V any](f Expr[V]) Expr[int64]
     CountOf counts non-null values of the input expression.
 
+func CumeDist() Expr[float64]
+    CumeDist returns the fraction of partition rows preceding or peer to a row.
+
 func CurrentDate() Expr[time.Time]
     CurrentDate returns CURRENT_DATE in the session time zone. It is
     transaction-stable.
@@ -932,6 +1139,9 @@ func DateTrunc[V any](unit DatePart, value Expr[V]) Expr[V]
 
 func DateTruncAt(unit DatePart, value Expr[time.Time], zone Expr[string]) Expr[time.Time]
     DateTruncAt truncates timestamptz in an explicit, bound time zone.
+
+func DenseRank() Expr[int64]
+    DenseRank ranks peer groups without gaps, starting at one. It requires Over.
 
 func DistinctInputs[V any](aggregate Expr[V]) Expr[V]
     DistinctInputs removes duplicate argument tuples before aggregation. It
@@ -947,6 +1157,11 @@ func DivideAs[R, A, B any](result PGType[R], a Expr[A], b Expr[B]) Expr[R]
 func Encode(value Expr[[]byte], format EncodeFormat) Expr[string]
     Encode renders bytea in the selected closed format. SQL NULL remains NULL.
 
+func Excluded[V any](field Field[V]) Expr[V]
+    Excluded reads the proposed value of a target column after BEFORE INSERT
+    triggers. It is legal only inside that exact target's ON CONFLICT update
+    arm.
+
 func Extract[R, V any](result PGType[R], unit DatePart, value Expr[V]) Expr[R]
     Extract returns the selected numeric field. Declare the numeric result's Go
     mapping explicitly, for example pgtype.Numeric[string]().
@@ -955,6 +1170,9 @@ func FilterWhere[V any](aggregate Expr[V], condition Pred) Expr[V]
     FilterWhere applies SQL FILTER to one aggregate, including existing CountOf,
     SumOf and AvgOf expressions. Filtering preserves the native empty-input
     result.
+
+func FirstValue[V any](value Expr[V]) Expr[V]
+    FirstValue reads the first frame row, or NULL for an empty frame.
 
 func GenRandomUUID() Expr[string]
     GenRandomUUID generates a non-null UUID with its string Go representation.
@@ -967,6 +1185,19 @@ func GenRandomUUIDAs[V any](result PGType[V]) Expr[V]
 
 func Greatest[V any](first Expr[V], rest ...Expr[V]) Expr[V]
     Greatest returns the greatest non-NULL operand using native ordering.
+
+func HashTextExtended[T, S any](value Expr[T], seed Expr[S]) Expr[int64]
+    HashTextExtended returns PostgreSQL's native seeded text hash as int8. It
+    accepts the reviewed text family and an exact int8 seed, preserves SQL NULL,
+    and records pg_catalog.hashtextextended(text,int8) EXECUTE. Its value is
+    the server's hash, suitable for composing with AdvisoryXactLock; it is not a
+    cryptographic digest or a promise of stability across PostgreSQL versions.
+
+func Host[V any](value Expr[V]) Expr[string]
+    Host returns the address of an exact PostgreSQL inet value as text,
+    without its network prefix. It accepts either inet Go mapping and preserves
+    SQL NULL. The native pg_catalog.host(inet) EXECUTE requirement is recorded
+    in the plan.
 
 func JSONAgg[R, V any](result PGType[R], value Expr[V]) Expr[R]
     JSONAgg collects typed values, including SQL NULL as JSON null, using the
@@ -1020,6 +1251,20 @@ func JSONTypeOf[J any](document Expr[J]) Expr[string]
     JSONTypeOf returns the native JSON value kind. JSON null yields text "null";
     SQL NULL remains SQL NULL. Both json and jsonb are accepted.
 
+func Lag[V any](value Expr[V], offset Expr[int32], fallback Expr[V]) Expr[V]
+    Lag reads value at the explicit int4 offset before this row, or fallback
+    when no such row exists. SQL NULL offsets and values retain native
+    semantics.
+
+func LastValue[V any](value Expr[V]) Expr[V]
+    LastValue reads the last frame row, or NULL for an empty frame. The default
+    frame ends at the last peer of the current row, not the partition's last
+    row.
+
+func Lead[V any](value Expr[V], offset Expr[int32], fallback Expr[V]) Expr[V]
+    Lead reads value at the explicit int4 offset after this row, or fallback
+    when no such row exists. PostgreSQL RESPECT NULLS semantics apply.
+
 func Least[V any](first Expr[V], rest ...Expr[V]) Expr[V]
     Least returns the least non-NULL operand using native ordering.
 
@@ -1043,27 +1288,67 @@ func Minus[V any](a, b Expr[V]) Expr[V]
 func MinusAs[R, A, B any](result PGType[R], a Expr[A], b Expr[B]) Expr[R]
     MinusAs selects a checked native subtraction overload and exact result type.
 
+func NTile(buckets Expr[int32]) Expr[int32]
+    NTile divides the partition into the supplied positive int4 bucket count.
+    A NULL count produces NULL; a nonpositive runtime count retains SQLSTATE
+    22014.
+
 func Now() Expr[time.Time]
     Now returns the PostgreSQL transaction start instant, not a client clock.
+
+func NthValue[V any](value Expr[V], position Expr[int32]) Expr[V]
+    NthValue reads the one-based int4 position in the frame, or NULL if absent.
+    A nonpositive runtime position retains PostgreSQL SQLSTATE 22016.
 
 func NullIf[V any](a, b Expr[V]) Expr[V]
     NullIf returns SQL NULL when its operands compare equal, or the first value.
     Its operands require a reviewed built-in equality operator. An array-valued
-    first operand must not contain a volatile expression; scalar operands and a
-    volatile second array operand are evaluated once per row.
+    first operand must be stable within the row, or refer to an explicitly
+    materialized result field. Materialization does not make a value stable
+    across rows or pages. Scalar operands and a volatile second array operand
+    are evaluated once per row.
+
+func Outer[V any](value Expr[V]) Expr[V]
+    Outer moves all references in value exactly one lexical query level outward.
+    Nest it explicitly for a grandparent. Aggregate ownership is never inferred.
+
+func Over[V any](function Expr[V], spec WindowSpec) Expr[V]
+    Over applies a window to a ranking/value function or an ordinary aggregate.
+    Aggregate FILTER is supported; DISTINCT and aggregate-local ORDER BY are not
+    supported by PostgreSQL window aggregates. Window results are legal only
+    in a SELECT projection and its final ORDER BY; filter an exported result
+    outside the query that computes it. Every supplied slice is copied.
+
+func PercentRank() Expr[float64]
+    PercentRank returns (rank-1)/(partition size-1), or zero for a singleton.
 
 func Plus[V any](a, b Expr[V]) Expr[V]
     Plus adds operands only when PostgreSQL returns their declared type.
 
 func PlusAs[R, A, B any](result PGType[R], a Expr[A], b Expr[B]) Expr[R]
     PlusAs selects a checked native addition overload and its exact result type.
+    Native date + time and time + date return timestamp without time zone.
+
+func Rank() Expr[int64]
+    Rank ranks peer groups with gaps, starting at one. It requires Over.
 
 func RegexpReplace[V ~string](value Expr[V], pattern, replacement Expr[string], flags ...Expr[string]) Expr[string]
     RegexpReplace replaces matches using the PostgreSQL 14 three/four-argument
     overload. Pattern, replacement and optional flags are bound expressions.
 
+func ResultOf[V any](source QuerySource, field OutputField[V]) Expr[V]
+    ResultOf references a projected output handle on an intermediate source.
+
+func RowNumber() Expr[int64]
+    RowNumber numbers rows from one within each partition. Use Over to supply
+    the partition and order; a row number alone is not a result-key proof.
+
 func SHA256(value Expr[[]byte]) Expr[[]byte]
     SHA256 hashes bytea using PostgreSQL's core sha256(bytea) function.
+
+func ScalarSubquery[V any](query ValueSelect[V]) Expr[V]
+    ScalarSubquery returns the sole value or SQL NULL for an empty result.
+    Multiple result rows retain PostgreSQL's cardinality error.
 
 func StringAgg[A, B ~string](value Expr[A], delimiter Expr[B]) Expr[string]
     StringAgg concatenates non-NULL text values with the bound text delimiter.
@@ -1189,12 +1474,163 @@ type Formal[V any] struct {
 func FormalOf[R, V any](r *Routine[R], name string, kind PGType[V]) Formal[V]
     FormalOf resolves a named parameter on this exact signature.
 
+type FrameBound struct {
+	// Has unexported fields.
+}
+    FrameBound is a sealed window-frame endpoint; construct it with one of the
+    bound functions. Offsets cannot refer to rows, subqueries, aggregates or
+    windows.
+
+func CurrentRow() FrameBound
+    CurrentRow selects the current row, or its peer boundary for RANGE/GROUPS.
+
+func Following[V any](offset Expr[V]) FrameBound
+    Following declares a typed nonnegative frame distance after the current row.
+
+func Preceding[V any](offset Expr[V]) FrameBound
+    Preceding declares a typed nonnegative frame distance before the current
+    row.
+
+func UnboundedFollowing() FrameBound
+    UnboundedFollowing ends at the last partition row.
+
+func UnboundedPreceding() FrameBound
+    UnboundedPreceding starts at the first partition row.
+
+type FrameExclusion uint8
+    FrameExclusion removes rows from the frame after determining its bounds.
+
+const (
+	// ExcludeNoOthers is the default: retain all rows within the bounds.
+	ExcludeNoOthers FrameExclusion = iota
+	// ExcludeCurrentRow removes only the current row.
+	ExcludeCurrentRow
+	// ExcludeGroup removes the current row and its peers.
+	ExcludeGroup
+	// ExcludeTies removes peers but retains the current row when within bounds.
+	ExcludeTies
+)
+type FrameMode uint8
+    FrameMode selects the native window-frame unit.
+
+const (
+	// FrameRows counts individual rows in the partition's window order.
+	FrameRows FrameMode = iota + 1
+	// FrameRange groups peers; offsets use one native ordering value.
+	FrameRange
+	// FrameGroups counts peer groups and requires a window ORDER BY.
+	FrameGroups
+)
 type GroupField interface {
 	// Has unexported methods.
 }
     GroupField is a sealed grouping expression. Pass field.Expr(),
     field.Column(), or a computed expression. Definitions validate its type and
     occurrence scope.
+
+type IndexPredicate struct {
+	// Has unexported fields.
+}
+    IndexPredicate is a sealed schema predicate used exclusively for ON CONFLICT
+    index inference. Its values are fixed schema facts, never runtime inputs.
+    Only reviewed native integer, boolean and text comparisons are accepted.
+
+func IndexAnd(first, second IndexPredicate, rest ...IndexPredicate) IndexPredicate
+    IndexAnd combines schema predicates with SQL AND.
+
+func IndexEq[V any](field Field[V], schemaValue V) IndexPredicate
+    IndexEq compares a target field to a fixed schema value for index inference.
+
+func IndexFalse(field Field[bool]) IndexPredicate
+    IndexFalse tests a boolean target column for FALSE in index inference.
+
+func IndexGe[V any](field Field[V], schemaValue V) IndexPredicate
+    IndexGe compares a target field to a fixed schema value for index inference.
+
+func IndexGt[V any](field Field[V], schemaValue V) IndexPredicate
+    IndexGt compares a target field to a fixed schema value for index inference.
+
+func IndexLe[V any](field Field[V], schemaValue V) IndexPredicate
+    IndexLe compares a target field to a fixed schema value for index inference.
+
+func IndexLt[V any](field Field[V], schemaValue V) IndexPredicate
+    IndexLt compares a target field to a fixed schema value for index inference.
+
+func IndexNe[V any](field Field[V], schemaValue V) IndexPredicate
+    IndexNe compares a target field to a fixed schema value for index inference.
+
+func IndexNot(predicate IndexPredicate) IndexPredicate
+    IndexNot negates one schema predicate with SQL NOT.
+
+func IndexNotNull[V any](field Field[V]) IndexPredicate
+    IndexNotNull tests a target column for a non-NULL value in index inference.
+
+func IndexNull[V any](field Field[V]) IndexPredicate
+    IndexNull tests a target column for SQL NULL in index inference.
+
+func IndexOr(first, second IndexPredicate, rest ...IndexPredicate) IndexPredicate
+    IndexOr combines schema predicates with SQL OR.
+
+func IndexTrue(field Field[bool]) IndexPredicate
+    IndexTrue tests a boolean target column for TRUE in index inference.
+
+type InsertStatement struct {
+	// Has unexported fields.
+}
+    InsertStatement declares a fixed INSERT without executing it. Values appends
+    one row; DefaultValues and FromSelect select the other native input forms.
+
+func InsertInto[T, S any](src RowSource[T, S]) InsertStatement
+    InsertInto starts a typed insertion into exactly this physical occurrence.
+
+func (q InsertStatement) Batch(first int, rest ...int) InsertStatement
+    Batch declares the finite VALUES row counts accepted by ExecBatch/AllBatch.
+    It requires one Values template and a size of 1 for every possible
+    remainder. All chunks execute within one operation savepoint.
+
+func (q InsertStatement) Columns(first RowColumn, rest ...RowColumn) InsertStatement
+    Columns names the ordered targets of FromSelect.
+
+func (q InsertStatement) DefaultValues() InsertStatement
+    DefaultValues requests PostgreSQL DEFAULT VALUES, including its native
+    generated/default/identity behavior. Column-scoped insertion supplies scope.
+
+func (q InsertStatement) DoNothing() InsertStatement
+    DoNothing ignores conflicts. With no OnConflict target it retains the
+    INSERT-only path, requiring no SELECT privilege on the target.
+
+func (q InsertStatement) DoUpdate(first RowAssignment, rest ...RowAssignment) InsertStatement
+    DoUpdate updates conflicts using one fixed ordered assignment list.
+    It requires an explicit immediate unique arbiter and preserves protected
+    fields.
+
+func (q InsertStatement) FromSelect(query ReadSelect) InsertStatement
+    FromSelect inserts the entire typed SELECT result. The declared SQL types,
+    codecs, nullability and arity must agree with Columns before registration.
+
+func (q InsertStatement) OnConflict(target ConflictTarget) InsertStatement
+    OnConflict selects an inference target. Follow it with DoNothing or
+    DoUpdate.
+
+func (q InsertStatement) UnscopedOnly() InsertStatement
+    UnscopedOnly declares an insertion usable only on an unscoped session.
+    A column-scoped target then requires an explicit assignment to its scope
+    column.
+
+func (q InsertStatement) UpdateWhere(first Pred, rest ...Pred) InsertStatement
+    UpdateWhere restricts the conflict update. A false/NULL condition leaves the
+    existing row untouched and produces no RETURNING row for that input.
+
+func (q InsertStatement) Values(values ...RowAssignment) InsertStatement
+    Values appends one fixed VALUES row. Every row names the same ordered target
+    columns. Repeated Slot identities within a row share one parameter.
+
+func (q InsertStatement) Version(version RowVersion) InsertStatement
+    Version applies an optimistic version premise to an ON CONFLICT update. The
+    insertion's initializer remains an explicit assignment or database default.
+
+func (q InsertStatement) With(tables ...CommonTable) InsertStatement
+    With attaches common tables to the outer INSERT.
 
 type JSONMember struct {
 	// Has unexported fields.
@@ -1343,6 +1779,17 @@ const (
 	// statements marked with Secret(), which are always replaced by "[redacted]".
 	ValuesAllowed
 )
+type Materialization uint8
+    Materialization selects PostgreSQL's explicit common-table strategy.
+
+const (
+	// DefaultMaterialization uses PostgreSQL's normal planning behavior.
+	DefaultMaterialization Materialization = iota
+	// Materialized provides a stored result slot, without upgrading volatility.
+	Materialized
+	// NotMaterialized permits inlining and provides no repeatability proof.
+	NotMaterialized
+)
 type Metrics interface {
 	Observe(ctx context.Context, info TraceInfo, duration time.Duration, rows int64, errClass ErrorClass)
 }
@@ -1365,6 +1812,27 @@ func DefineUpdateMany[T, S any](src RowSource[T, S], name string, spec MutationS
 
 func (p *MutationPlan[T, S]) Bind(s Session[S]) *BoundMutationPlan[T, S]
     Bind attaches this mutation plan to one session.
+
+type MutationReturningPlan[T, S any] struct {
+	// Has unexported fields.
+}
+    MutationReturningPlan owns a finite set/filter family and one result
+    decoder. Each choice executes exactly one UPDATE or DELETE with RETURNING.
+
+func DefineDeleteReturning[R, T, S any](source RowSource[R, S], out *View[T, S], name string,
+	spec MutationSpec, projections ...Projection,
+) *MutationReturningPlan[T, S]
+    DefineDeleteReturning registers physical deletion with finite filter
+    choices.
+
+func DefineUpdateReturning[R, T, S any](source RowSource[R, S], out *View[T, S], name string,
+	spec MutationSpec, sets []RowSet, projections ...Projection,
+) *MutationReturningPlan[T, S]
+    DefineUpdateReturning registers finite assignment/filter choices with a
+    result projection. Sets is a slice; projections are the sole variadic input.
+
+func (p *MutationReturningPlan[T, S]) Bind(session Session[S]) *BoundMutationReturningPlan[T, S]
+    Bind attaches a finite mutation result family to one session.
 
 type MutationSpec struct {
 	RowFilter
@@ -1428,9 +1896,12 @@ type OperationSession[S any] interface {
     OperationSession provides a savepoint-scoped operation within an existing
     transaction. The callback receives a sealed child session and its context.
     An error or panic rolls back the operation; cleanup failures must prevent
-    the enclosing transaction from committing. The parent cannot execute
-    concurrently with the child, and the child is closed when the operation
-    ends.
+    the enclosing transaction from committing. Cancellation first observed after
+    a successful callback is a completion failure and must also prevent commit.
+    The parent cannot execute concurrently with the child, and the child is
+    closed when the operation ends. A callback error matching ErrUnobservedWrite
+    must also prevent the enclosing transaction from committing, after the
+    operation has been rolled back.
 
     Plans requiring atomic batches or rollback on a result-decoding failure
     test for this optional capability before I/O. Ordinary Session and
@@ -1516,12 +1987,18 @@ type Pred = Expr[bool]
     predicate projects SQL UNKNOWN as NULL and follows three-valued logic in
     WHERE.
 
+func AllQuery[V any](op ComparisonOp, value Expr[V], query ValueSelect[V]) Pred
+    AllQuery compares against every row. Empty input yields true.
+
 func And(first, second Pred, rest ...Pred) Pred
     And combines two or more typed predicates in declaration order.
 
 func Any[V any](value Expr[V], array Expr[[]V]) Pred
     Any tests equality with any element of a PostgreSQL array declared with
     ArrayOf. An empty array yields false and a NULL array yields NULL.
+
+func AnyQuery[V any](op ComparisonOp, value Expr[V], query ValueSelect[V]) Pred
+    AnyQuery compares against any row. Empty input yields false.
 
 func ArrayContainedBy[A any](a, b Expr[A]) Pred
     ArrayContainedBy tests whether every element in a occurs in b.
@@ -1536,6 +2013,9 @@ func ArrayOverlaps[A any](a, b Expr[A]) Pred
 func Eq[V any](left, right Expr[V]) Pred
     Eq compares two expressions of the same PostgreSQL type.
 
+func ExistsQuery(query ReadSelect) Pred
+    ExistsQuery reports whether the declared query has any result row.
+
 func Ge[V any](a, b Expr[V]) Pred
     Ge compares two expressions using PostgreSQL greater-than-or-equal
     semantics.
@@ -1549,6 +2029,10 @@ func ILike[V, P ~string](value Expr[V], pattern Expr[P]) Pred
 func In[V any](value, first Expr[V], rest ...Expr[V]) Pred
     In tests membership in a nonempty, fixed list of typed expressions. Use Any
     with an array input when the list length varies between calls.
+
+func InQuery[V any](value Expr[V], query ValueSelect[V]) Pred
+    InQuery tests native equality against a one-column query, retaining SQL
+    NULL.
 
 func IsDistinct[V any](left, right Expr[V]) Pred
     IsDistinct compares values using PostgreSQL's null-safe inequality.
@@ -1783,6 +2267,25 @@ type QuerySortTerm struct {
     QuerySortTerm pairs a parameter-free SQL ordering expression with its
     matching View column.
 
+type QuerySource struct {
+	// Has unexported fields.
+}
+    QuerySource is an occurrence of a typed query result. Its fields retain
+    their declaration identities; its alias never creates a physical table or
+    grant.
+
+func Derived(alias string, query ReadSelect) QuerySource
+    Derived exposes a SELECT as a typed result occurrence. Correlation requires
+    an explicit lateral join and Outer references.
+
+func Unnest(alias string, first UnnestInput, rest ...UnnestInput) QuerySource
+    Unnest expands parallel heterogeneous arrays using qualified native
+    overloads. It retains SQL NULL padding, nullable elements and optional
+    ordinality.
+
+func (q QuerySource) As(alias string) QuerySource
+    As creates a distinct occurrence of the same result schema.
+
 type QuerySpec struct {
 	Select    string
 	Where     string
@@ -1852,8 +2355,27 @@ type ReadSelect struct {
     ReadSelect is an immutable declaration of one explicit SELECT. Each method
     returns a new value. DefineRead freezes its SQL and verification metadata.
 
+func Except(a, b ReadSelect, rest ...ReadSelect) ReadSelect
+    Except removes matching rows from the first input and eliminates duplicates.
+
+func ExceptAll(a, b ReadSelect, rest ...ReadSelect) ReadSelect
+    ExceptAll subtracts matching multiplicities, in declared arm order.
+
+func Intersect(a, b ReadSelect, rest ...ReadSelect) ReadSelect
+    Intersect returns distinct rows present in every input.
+
+func IntersectAll(a, b ReadSelect, rest ...ReadSelect) ReadSelect
+    IntersectAll preserves the minimum multiplicity of matching rows.
+
 func Select(fields ...Projection) ReadSelect
-    Select projects expressions into the declared output view in field order.
+    Select projects expressions into a final output view or intermediate
+    exports. Without From, it selects self-contained expressions and subqueries.
+
+func Union(a, b ReadSelect, rest ...ReadSelect) ReadSelect
+    Union removes duplicates from the combined query results.
+
+func UnionAll(a, b ReadSelect, rest ...ReadSelect) ReadSelect
+    UnionAll preserves every input row and its multiplicity.
 
 func (q ReadSelect) AllowUnscoped() ReadSelect
     AllowUnscoped also registers the form that omits column-scope predicates.
@@ -1861,6 +2383,10 @@ func (q ReadSelect) AllowUnscoped() ReadSelect
 
 func (q ReadSelect) CrossJoin(right ReadSource) ReadSelect
     CrossJoin returns the product of the visible rows of both sides.
+
+func (q ReadSelect) CrossLateral(source QuerySource) ReadSelect
+    CrossLateral declares a lateral product. No per-row execution is promised
+    unless the source has an actual explicit outer dependency.
 
 func (q ReadSelect) Distinct() ReadSelect
     Distinct removes duplicates of the complete projection. ORDER BY must use
@@ -1873,7 +2399,7 @@ func (q ReadSelect) DistinctOn(first Scalar, rest ...Scalar) ReadSelect
     key.
 
 func (q ReadSelect) From(source ReadSource) ReadSelect
-    From names the first physical occurrence.
+    From names the first physical or query-result occurrence.
 
 func (q ReadSelect) GroupBy(fields ...GroupField) ReadSelect
     GroupBy groups rows by declared typed expressions.
@@ -1885,18 +2411,45 @@ func (q ReadSelect) InnerJoin(right ReadSource, on Pred) ReadSelect
     InnerJoin adds matching rows from an explicitly named right occurrence.
     The predicate can reference the right occurrence and preceding sources.
 
+func (q ReadSelect) InnerLateral(source QuerySource, on Pred) ReadSelect
+    InnerLateral joins a result whose Outer references see preceding inputs
+    only.
+
 func (q ReadSelect) LeftJoin(right ReadSource, on Pred) ReadSelect
     LeftJoin preserves left rows when the right occurrence has no visible match.
     Its scope and live-row conditions are part of ON.
 
+func (q ReadSelect) LeftLateral(source QuerySource, on Pred) ReadSelect
+    LeftLateral preserves left rows and makes an empty right result nullable.
+
+func (q ReadSelect) Limit(input Slot[int64], ceiling int64) ReadSelect
+    Limit bounds rows with an int8 input and a nonnegative declared maximum.
+    NULL, negative and excessive runtime values fail before execution.
+
 func (q ReadSelect) Lock(lock RowLock) ReadSelect
     Lock applies a row lock to one eligible occurrence of an ungrouped read.
+
+func (q ReadSelect) Locks(first RowLock, rest ...RowLock) ReadSelect
+    Locks replaces the query's locks with this ordered list of distinct physical
+    occurrence targets. Each target keeps its own strength and wait mode. A
+    duplicate, hidden or nullable target fails before registration; no implicit
+    strongest-mode merge occurs. Lock replaces this entire list with one lock.
+    Aggregate, distinct, window and set results cannot be locked. Exact counts
+    and paired List calls are unavailable on locking reads.
 
 func (q ReadSelect) OrderBy(terms ...RowTerm) ReadSelect
     OrderBy declares the typed ordering expressions of this result.
 
+func (q ReadSelect) Take(n int64) ReadSelect
+    Take bounds rows with an internal parameter. Negative bounds fail
+    definition.
+
 func (q ReadSelect) Where(terms ...Pred) ReadSelect
     Where restricts rows before grouping. Multiple terms are combined with AND.
+
+func (q ReadSelect) With(tables ...CommonTable) ReadSelect
+    With attaches declarations in lexical dependency order. A later declaration
+    may reference an earlier one; a name alone never supplies a binding.
 
 func (q ReadSelect) WithForms(forms ReadForms) ReadSelect
     WithForms selects the permitted bounded reads. OrderedFirst requires OrderBy
@@ -1910,10 +2463,19 @@ func (q ReadSelect) WithList(spec ReadListSpec) ReadSelect
 type ReadSource interface {
 	// Has unexported methods.
 }
-    ReadSource identifies a physical occurrence in an explicit SELECT. FromTable
-    and RowsFrom provide sources. Use RowsFrom to specify a scope or soft-delete
-    column with a custom PostgreSQL type.
+    ReadSource identifies a physical or query-result occurrence in an explicit
+    SELECT. FromTable, RowsFrom and QuerySource provide sources. Use RowsFrom to
+    specify a scope or soft-delete column with a custom PostgreSQL type.
 
+type RecursiveUnion uint8
+    RecursiveUnion selects the supported recursive combination.
+
+const (
+	// RecursiveUnionDistinct removes duplicates during recursive evaluation.
+	RecursiveUnionDistinct RecursiveUnion = iota + 1
+	// RecursiveUnionAll preserves recursive multiplicity.
+	RecursiveUnionAll
+)
 type Registry[S any] struct {
 	// Has unexported fields.
 }
@@ -2048,6 +2610,10 @@ type ResultStatement interface {
     command is SELECT. A read declaration cannot obtain write authority through
     this type.
 
+func WithReturning(query WriteStatement, fields ...Projection) ResultStatement
+    WithReturning adds one ordered result projection to a write. No read limit
+    or extra execution is introduced. Exported fields support intermediate CTEs.
+
 type RetryConfig struct {
 	// MaxAttempts is the total number of attempts including the initial run
 	// (defaults to 3 when <= 0).
@@ -2063,6 +2629,25 @@ type RetryConfig struct {
 }
     RetryConfig controls explicit retries for transient PostgreSQL transaction
     conflicts (serialization failure 40001 and deadlock 40P01).
+
+type ReturningPlan[T, S any] struct {
+	// Has unexported fields.
+}
+    ReturningPlan owns a complete write and its ordered result decoder. It
+    offers All and Iter without rewriting the mutation with a read-style LIMIT.
+
+func DefineReturning[T, S any](out *View[T, S], name string, query ResultStatement, observe ...StatementOption) *ReturningPlan[T, S]
+    DefineReturning registers a write result. A read-only SELECT is rejected,
+    even if supplied through the sealed ResultStatement interface.
+
+func DefineTableReturning[T, S any](source RowSource[T, S], name string, query WriteStatement,
+	selection TableSelection, observe ...StatementOption,
+) *ReturningPlan[T, S]
+    DefineTableReturning decodes selected target fields into the mapped table's
+    row type. Unselected fields retain their Go zero values.
+
+func (p *ReturningPlan[T, S]) Bind(session Session[S]) *BoundReturningPlan[T, S]
+    Bind attaches a returning plan to one authorized session.
 
 type Routine[V any] struct {
 	// Has unexported fields.
@@ -2140,6 +2725,11 @@ type RowAssignment struct {
 
 func Assign[V any](field Field[V], value Expr[V]) RowAssignment
     Assign sets a column to a compatible expression, evaluated on the old row.
+
+func DefaultOf[V any](field Field[V]) RowAssignment
+    DefaultOf assigns PostgreSQL DEFAULT to this exact column. It is
+    deliberately not an Expr and cannot escape into predicates or general SQL
+    expressions.
 
 type RowChoice struct {
 	Filters       []string
@@ -2685,6 +3275,13 @@ func (g StatementGuard) Check(method, query string) error
     data-modifying CTEs. Access inside functions still depends on database
     grants.
 
+func (g StatementGuard) CheckAuthorized(authority SQLAuthority, owner any, method CallMethod, call AuthorizedStatement) error
+    CheckAuthorized verifies the registry, receiving session and method before
+    applying the policy to a registered call. Opt-in exceptions inspect the
+    immutable compiled effects, never an application-editable AuthorizedSQL.
+    Drivers also Open the call and enforce transaction, context and session
+    guards.
+
 func (g StatementGuard) Enabled() bool
     Enabled reports whether the guard enforces statement boundaries.
 
@@ -2722,14 +3319,22 @@ type StatementPolicy struct {
 	Read, Write []string
 	// RequireReturning requires an outer RETURNING clause for the Returning method.
 	RequireReturning bool
+	// AllowAuthorizedWriteCTE admits a signed modifying CTE with an outer read
+	// result. The write list must include with and every native write command.
+	// Direct SQL and unsigned calls retain the ordinary command policy.
+	AllowAuthorizedWriteCTE bool
+	// AllowAuthorizedWriteRoutine admits exact signed write routine calls under
+	// Returning even though their SQL starts with SELECT. It grants no database
+	// privilege and does not change read-only or session-escape checks.
+	AllowAuthorizedWriteRoutine bool
 }
     StatementPolicy lists the PostgreSQL commands accepted by session methods.
     Read applies to Scan and Each (select, table, values). Write applies to
     Exec and Returning (insert, update, delete, merge). Include with in the
     corresponding list to permit a WITH prefix on an otherwise allowed command.
     Command names are case-insensitive. With an active policy, an empty list
-    permits no methods on that side. Empty lists with RequireReturning false
-    leave both sides unrestricted.
+    permits no methods on that side. With no flags or command lists, both sides
+    are unrestricted.
 
 func (p StatementPolicy) Compile(singleStatement bool) (StatementGuard, error)
     Compile validates the allowlists and takes a copy of their contents.
@@ -2953,6 +3558,44 @@ type UniqueMatchRequirement struct {
     columns are NOT NULL. A table name or an application assertion is not
     evidence of uniqueness.
 
+type UnnestInput interface {
+	// Has unexported methods.
+}
+    UnnestInput is a sealed array-column or ordinality declaration.
+
+type UpdateStatement struct {
+	// Has unexported fields.
+}
+    UpdateStatement declares an UPDATE with explicit assignments and matching.
+
+func UpdateOf[T, S any](src RowSource[T, S]) UpdateStatement
+    UpdateOf starts a typed update. Where or AllRows is required.
+
+func (q UpdateStatement) AllRows() UpdateStatement
+    AllRows explicitly permits updating every authorized live row.
+
+func (q UpdateStatement) From(source ReadSource, on Pred) UpdateStatement
+    From adds an explicitly matched UPDATE source. Value-bearing matches require
+    an immediate non-null unique catalog key or a proven relational result key.
+
+func (q UpdateStatement) Set(first RowAssignment, rest ...RowAssignment) UpdateStatement
+    Set declares the complete ordered UPDATE assignment list. Expressions
+    read the old row. Protected keys, once, scope and version fields cannot be
+    assigned.
+
+func (q UpdateStatement) UnscopedOnly() UpdateStatement
+    UnscopedOnly declares an update without column-scope predicates.
+
+func (q UpdateStatement) Version(version RowVersion) UpdateStatement
+    Version adds the descriptor's optimistic version check and automatic
+    increment.
+
+func (q UpdateStatement) Where(first Pred, rest ...Pred) UpdateStatement
+    Where appends fixed predicates to the UPDATE.
+
+func (q UpdateStatement) With(tables ...CommonTable) UpdateStatement
+    With attaches common tables to the outer UPDATE.
+
 type UpsertPlan[T, K, S any] struct {
 	// Has unexported fields.
 }
@@ -2977,6 +3620,60 @@ type UpsertSpec struct {
     WriteInsertOnly accepts an empty spec for targetless ON CONFLICT DO NOTHING.
     An explicit conflict target or RETURNING list would require SELECT on its
     columns.
+
+type ValueSelect[V any] struct {
+	// Has unexported fields.
+}
+    ValueSelect is a one-column query with an implicit exported identity.
+    It is composed without creating a View or registering an executable plan.
+
+func SelectValue[V any](value Expr[V]) ValueSelect[V]
+    SelectValue starts a scalar-result query.
+
+func (q ValueSelect[V]) CrossJoin(source ReadSource) ValueSelect[V]
+    CrossJoin declares a product.
+
+func (q ValueSelect[V]) CrossLateral(source QuerySource) ValueSelect[V]
+    CrossLateral declares an explicit lateral product.
+
+func (q ValueSelect[V]) Distinct() ValueSelect[V]
+    Distinct removes duplicate values.
+
+func (q ValueSelect[V]) From(source ReadSource) ValueSelect[V]
+    From declares the first query occurrence.
+
+func (q ValueSelect[V]) GroupBy(fields ...GroupField) ValueSelect[V]
+    GroupBy declares grouping expressions.
+
+func (q ValueSelect[V]) Having(terms ...Pred) ValueSelect[V]
+    Having filters aggregate groups.
+
+func (q ValueSelect[V]) InnerJoin(source ReadSource, on Pred) ValueSelect[V]
+    InnerJoin declares an explicit matching occurrence.
+
+func (q ValueSelect[V]) InnerLateral(source QuerySource, on Pred) ValueSelect[V]
+    InnerLateral joins a query using explicitly declared preceding references.
+
+func (q ValueSelect[V]) LeftJoin(source ReadSource, on Pred) ValueSelect[V]
+    LeftJoin preserves unmatched left rows.
+
+func (q ValueSelect[V]) LeftLateral(source QuerySource, on Pred) ValueSelect[V]
+    LeftLateral preserves left rows when the lateral result is empty.
+
+func (q ValueSelect[V]) Limit(input Slot[int64], ceiling int64) ValueSelect[V]
+    Limit applies a caller-bound limit with a finite ceiling checked before I/O.
+
+func (q ValueSelect[V]) OrderBy(terms ...RowTerm) ValueSelect[V]
+    OrderBy declares result ordering.
+
+func (q ValueSelect[V]) Take(n int64) ValueSelect[V]
+    Take applies a nonnegative fixed bound through a private parameter.
+
+func (q ValueSelect[V]) Where(terms ...Pred) ValueSelect[V]
+    Where filters input rows.
+
+func (q ValueSelect[V]) With(tables ...CommonTable) ValueSelect[V]
+    With attaches common-table declarations.
 
 type View[T, S any] struct {
 	descriptor[T, S]
@@ -3061,6 +3758,33 @@ type ViewSpec[T any] struct {
     Array, custom Scanner/Valuer) and supports nested struct column prefixes
     (e.g. `Job JobRow` tagged `db:"j_"` maps j_id, j_code, ...).
 
+type WindowFrame struct {
+	Mode    FrameMode
+	Start   FrameBound
+	End     FrameBound
+	Exclude FrameExclusion
+}
+    WindowFrame declares an explicit BETWEEN frame. A zero value preserves the
+    PostgreSQL default. Dynamic negative or NULL offsets retain PostgreSQL's
+    native error; offsets never interpolate a value into SQL. ROWS/GROUPS use an
+    exact int8 expression; RANGE uses a reviewed native ordering/offset pair.
+
+func RunningRows() WindowFrame
+    RunningRows includes the partition's rows through the current ordered row.
+
+func WholePartition() WindowFrame
+    WholePartition explicitly includes every row of the partition.
+
+type WindowSpec struct {
+	Name      string
+	Partition []Scalar
+	Order     []RowTerm
+	Frame     WindowFrame
+}
+    WindowSpec declares partitioning, peer order and an optional frame. A zero
+    Frame retains PostgreSQL's default RANGE frame. Name optionally shares this
+    complete specification within the SELECT; repeated names must agree exactly.
+
 type WriteMode uint8
     WriteMode selects the operations a table derives and accepts on bound Rows.
     A PostgreSQL role enforces access for SQL issued through other handles.
@@ -3074,6 +3798,18 @@ const (
 	// Inserts leave a generated serial key in PostgreSQL and never read it back.
 	WriteInsertOnly
 )
+type WritePlan[S any] struct {
+	// Has unexported fields.
+}
+    WritePlan is a registered count-only write. Binding never changes its SQL.
+
+func DefineWrite[T, S any](owner RowSource[T, S], name string, query WriteStatement, observe ...StatementOption) *WritePlan[S]
+    DefineWrite registers a write owned by its outer physical target. It panics
+    on declaration errors; the Try partner publishes nothing on failure.
+
+func (p *WritePlan[S]) Bind(session Session[S]) *BoundWritePlan[S]
+    Bind attaches the write to a session from the declaring registry.
+
 type WriteStatement interface {
 	// Has unexported methods.
 }
@@ -3565,7 +4301,8 @@ func (s *Session[S]) Unscoped() bool
 func (s *Session[S]) WithinOperation(ctx context.Context, fn func(context.Context, tabula.Session[S]) error) (err error)
     WithinOperation runs fn in an operation savepoint. Its sealed child is
     the only usable handle until fn returns. Errors and panics roll back the
-    operation; cleanup failure prevents the enclosing runner from committing.
+    operation; cleanup failure or cancellation discovered after a successful
+    callback prevents the enclosing runner from committing.
 
 type Shared[S any] struct {
 	// Has unexported fields.
@@ -4721,7 +5458,8 @@ func (s *Session[S]) Unscoped() bool
 func (s *Session[S]) WithinOperation(ctx context.Context, fn func(context.Context, tabula.Session[S]) error) (err error)
     WithinOperation runs fn in an operation savepoint. Its sealed child is
     the only usable handle until fn returns. Errors and panics roll back the
-    operation; cleanup failure prevents the enclosing runner from committing.
+    operation; cleanup failure or cancellation discovered after a successful
+    callback prevents the enclosing runner from committing.
 
 type Shared[S any] struct {
 	// Has unexported fields.

@@ -1,6 +1,6 @@
 # M3 acceptance and evidence
 
-This is the required implementation matrix. Except for the separately recorded SQL reference probes, the tests below are planned and have not run. Design examples are not compiler verification. Implementation starts from the approved shared contract; only completed tests count as evidence.
+This matrix defines the implementation and release checks. Compiler, driver and catalog tests implement these cases; candidate reviews identify the completed runs and exact revisions. SQL reference probes remain separate design evidence and do not replace the implementation gates.
 
 ## Matrix and final gate
 
@@ -41,7 +41,7 @@ This is the required implementation matrix. Except for the separately recorded S
 | Assignment and matching | Literal/bound/column/CASE/subquery values; UPDATE-only target with no SELECT on overwritten column; RHS-only SELECT; unique FROM proof; ambiguous multi-match refusal; DELETE predicate-only existence; joined RETURNING with and without matching proof. |
 | Protected columns | Key/once/scope/version, serial generation and sequence grants; version increment/check; soft delete exclusion; explicit physical deletion; unscoped insert requiring its own declared scope form. |
 | Returning | Correct old/new target semantics, nullable fields, joined columns, triggers changing values/suppressing rows, zero/many rows, permission failures; no positional association claim for batch results. |
-| Operation failure | Scan/decoder error, binding failure, callback error, cancellation, iterator break/stop, Close failure, savepoint cleanup and role restoration. Verify rollback of partial batch/client failure and that reusing the session has the documented outcome. |
+| Operation failure | Scan/decoder error, binding failure, callback error, cancellation, iterator break/stop, Close failure, savepoint cleanup and role restoration. Verify rollback of partial batch/client failure and that reusing the session has the documented outcome. Include drain failure after break, `ErrUnobservedWrite` plus original SQLSTATE/constraint, callback-error joins, successful break and recoverable visible failures on both drivers. |
 | Batch | Declared sizes including remainder, zero-row short circuit, parameter limit, same Binding reused across shapes and chunks, arrays/JSON/UUID/NULL, input slice mutation after binding, chunk failure and rollback. |
 | Write CTE | Changed rows feeding another table; outer SELECT returning rows; result-less effect node; unreferenced write still has EffectWrite; SELECT snapshot visibility; simultaneous same-table targets rejected; final outer count semantics. |
 | Authorization | CallReturningEach for any write result, matching issuer/session/method, DenyLegacySQL rejection even for copied text, closed/busy/callback context; Direct and read-only fail closed. |
@@ -69,10 +69,12 @@ This is the required implementation matrix. Except for the separately recorded S
 
 `reference-cases.sql` exercises PostgreSQL semantics independently of the proposed Go API: materialization and correlation counts, per-target locks, ROWS frames, scalar cardinality/NULL, quantified comparisons, bounded recursion, set multiplicity, modifying CTE under LIMIT 0, and partial-index inference under generic planning.
 
-The design reference probes passed on disposable PostgreSQL 14.25, 15.19, 16.14 and 17.12. Their raw logs remain outside the repository. These probes are design evidence only. The compiler, protocol backend and complete dual-driver acceptance matrix remain unimplemented.
+The design reference probes passed on disposable PostgreSQL 14.25, 15.19, 16.14 and 17.12. Their raw logs remain outside the repository. These probes are design evidence only; they do not replace the compiler, protocol backend and complete dual-driver acceptance matrix required for the release candidate.
 
 ## Existing-family acceptance additions
 
 - Shared advisory: both bigint and int4-pair overloads, Wait/Try, two concurrent shared holders, conflicting exclusive holder, read-only transaction success, Direct refusal, commit/rollback release and exact EXECUTE revocation. Preserve all existing APIs; no unproven acquisition order.
 - Network Host: Inet and InetPrefix, IPv4/IPv6 and prefix removal, SQL NULL, unsupported type rejection, exact native EXECUTE revocation, output text OID and both driver decoders.
+- Text hashing: HashTextExtended matches native SQL for empty strings, SQL NULL, non-ASCII text and negative seeds. Verify contention against a native advisory lock on the same calculated key, exact EXECUTE revocation, bigint result OID and STRICT/IMMUTABLE metadata. Do not assert hash portability across major versions.
+- Date/time addition: both argument orders return timestamp with native operator identity; verify midnight, SQL NULL, incompatible input/result rejection and exact EXECUTE revocation on both drivers and every supported PostgreSQL version.
 - Multi-array UNNEST must not manufacture a unique matching flag for UPDATE FROM. Prove a Derived grouped/distinct result key, and reject a duplicate value-bearing match without that proof.

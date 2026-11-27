@@ -188,7 +188,7 @@ func validateOrderTerm(t RowTerm) error {
 	if t.nulls > lastNulls || !groupOrderComparable(v) {
 		return fmt.Errorf("tabula: ORDER BY requires a comparable native type, got %s", v.kind.qualified())
 	}
-	return checkRowExpr(v.part, func(expressionPart) error { return nil })
+	return checkResultExpr(v.part, func(expressionPart) error { return nil })
 }
 
 func orderDirection(t RowTerm) string {

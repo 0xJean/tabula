@@ -22,7 +22,7 @@ Acceptance includes zero/many scalar results, SQL NULL truth tables, alias/issue
 
 ## B — windows, lock clauses and result proofs
 
-Own window functions/frame grammar and phase legality, multiple explicit row locks, query-boundary key proofs, and list/count behavior over the new result graph. Maintain independent data/count bindings and v0.4.3 byte-level compatibility. Also own Host and the existing shared advisory-lock regression matrix. Consume A's result-source hooks; do not reimplement query composition or write execution.
+Own window functions/frame grammar and phase legality, multiple explicit row locks, query-boundary key proofs, and list/count behavior over the new result graph. Maintain independent data/count bindings and v0.4.3 byte-level compatibility. Also own Host, HashTextExtended, the symmetric date/time addition overloads and the existing shared advisory-lock regression matrix. Consume A's result-source hooks; do not reimplement query composition or write execution.
 
 Acceptance includes all native window families/frames, invalid phase use, ties/NULL/collation, count cardinality across nesting, no seek pushdown through semantic boundaries, per-target lock contention and missing grants. Export required readiness premises. Materialized volatile values must be repeatable within a row but still excluded from inappropriate key/winner proofs.
 
@@ -49,4 +49,4 @@ Workers supply their own focused unit and disposable PG tests, lint and evidence
 
 Total estimate: 10–15 working days to a reviewable release candidate, assuming access to the shared test host. External audit turnaround and extended host queues are not hidden inside that estimate. Do not shorten it by dropping a named family, bypassing a result-description check or shipping a subset under the complete M3 label. If a review changes the verifier dependency or recursive scope, revise this estimate explicitly before implementation.
 
-The added array/query forms remain in A; shared advisory regression and Host remain in B. C consumes the same QuerySource contract. The 10–15 working-day estimate is unchanged; shared test-host queues and final audit remain external to it.
+The added array/query forms remain in A; shared advisory regression and the closed native scalar additions remain in B. C consumes the same QuerySource contract. Explicit COLLATE requires a separate later design and is not part of these packages. The 10–15 working-day estimate is unchanged; shared test-host queues and final audit remain external to it.

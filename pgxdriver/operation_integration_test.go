@@ -80,7 +80,8 @@ func TestOperationAdapterBoundaries(t *testing.T) {
 			_, err := child.Exec(childCtx, "INSERT INTO "+ns+".items VALUES(2)")
 			require.NoError(t, err)
 			cancel()
-			return nil
+			// Returning the observed cancellation keeps this operation recoverable.
+			return childCtx.Err()
 		})
 		require.ErrorIs(t, err, context.Canceled)
 		_, err = raw.Exec(parentCtx, "INSERT INTO "+ns+".items VALUES(3)")

@@ -12,6 +12,7 @@ type OutputField[V any] struct {
 	index  int
 	kind   PGType[V]
 	null   bool
+	id     *queryFieldIdentity
 }
 
 // Output resolves a view column and checks its Go type at definition time.
@@ -27,7 +28,7 @@ func Output[T, S, V any](view *View[T, S], name string, kind PGType[V]) OutputFi
 	if col.goType != kind.id.goType && (col.goType.Kind() != reflect.Pointer || col.goType.Elem() != kind.id.goType) {
 		panic(fmt.Sprintf("tabula.Output: output %q holds %v, declared %v", name, col.goType, kind.id.goType))
 	}
-	return OutputField[V]{view.entry, name, i, kind, col.nullable}
+	return OutputField[V]{view.entry, name, i, kind, col.nullable, new(queryFieldIdentity)}
 }
 
 // Projection assigns a typed expression to one output column.
@@ -38,6 +39,7 @@ type Projection struct {
 	part       expressionPart
 	compatible bool
 	kind       catalogType
+	id         *queryFieldIdentity
 }
 
 // Project pairs an output target with an expression of the same Go value type.
@@ -45,7 +47,7 @@ type Projection struct {
 func Project[V any](target OutputField[V], value Expr[V]) Projection {
 	field := ShapeField{Name: target.name, Type: target.kind.id.qualified(), Nullable: value.nullable}
 	compatible := sameSQLType(target.kind.id, value.kind.id) && (!value.nullable || target.null)
-	return Projection{target.target, target.index, field, value.part, compatible, value.kind.id}
+	return Projection{target.target, target.index, field, value.part, compatible, value.kind.id, target.id}
 }
 
 func (t catalogType) qualified() string {

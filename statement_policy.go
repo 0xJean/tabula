@@ -12,19 +12,28 @@ import (
 // and Returning (insert, update, delete, merge). Include with in the
 // corresponding list to permit a WITH prefix on an otherwise allowed command.
 // Command names are case-insensitive. With an active policy, an empty list
-// permits no methods on that side. Empty lists with RequireReturning false leave both sides unrestricted.
+// permits no methods on that side. With no flags or command lists, both sides are unrestricted.
 type StatementPolicy struct {
 	Read, Write []string
 	// RequireReturning requires an outer RETURNING clause for the Returning method.
 	RequireReturning bool
+	// AllowAuthorizedWriteCTE admits a signed modifying CTE with an outer read
+	// result. The write list must include with and every native write command.
+	// Direct SQL and unsigned calls retain the ordinary command policy.
+	AllowAuthorizedWriteCTE bool
+	// AllowAuthorizedWriteRoutine admits exact signed write routine calls under
+	// Returning even though their SQL starts with SELECT. It grants no database
+	// privilege and does not change read-only or session-escape checks.
+	AllowAuthorizedWriteRoutine bool
 }
 
 // StatementGuard is the compiled, immutable policy for driver sessions and
 // offline inventories. Its zero value leaves SQL unrestricted.
 type StatementGuard struct {
-	single           bool
-	read, write      map[string]bool
-	requireReturning bool
+	single                           bool
+	read, write                      map[string]bool
+	requireReturning                 bool
+	allowWriteCTE, allowWriteRoutine bool
 }
 
 // Enabled reports whether the guard enforces statement boundaries.
@@ -34,7 +43,7 @@ func (g StatementGuard) Enabled() bool { return g.single }
 // configured policy implies singleStatement. With only singleStatement enabled,
 // the guard checks statement boundaries without restricting the method.
 func (p StatementPolicy) Compile(singleStatement bool) (StatementGuard, error) {
-	if len(p.Read) == 0 && len(p.Write) == 0 && !p.RequireReturning {
+	if len(p.Read) == 0 && len(p.Write) == 0 && !p.RequireReturning && !p.AllowAuthorizedWriteCTE && !p.AllowAuthorizedWriteRoutine {
 		return StatementGuard{single: singleStatement}, nil
 	}
 	verbs := func(names []string, allowed func(string) bool) (map[string]bool, error) {
@@ -62,7 +71,7 @@ func (p StatementPolicy) Compile(singleStatement bool) (StatementGuard, error) {
 	if p.RequireReturning && len(write) == 0 {
 		return StatementGuard{}, fmt.Errorf("tabula: RequireReturning needs an allowed write command")
 	}
-	return StatementGuard{single: true, read: read, write: write, requireReturning: p.RequireReturning}, nil
+	return StatementGuard{single: true, read: read, write: write, requireReturning: p.RequireReturning, allowWriteCTE: p.AllowAuthorizedWriteCTE, allowWriteRoutine: p.AllowAuthorizedWriteRoutine}, nil
 }
 
 type statementDenial string

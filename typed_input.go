@@ -151,6 +151,7 @@ type typedInput struct {
 	name   string
 	kind   catalogType
 	secret bool
+	fixed  *int64
 }
 
 // Input declares one named input at definition time.
@@ -185,6 +186,8 @@ type parameterLayout struct {
 	positions map[*typedInput]int
 	names     map[string]*typedInput
 	order     []*typedInput
+	graph     bool
+	limits    map[*typedInput]int64
 }
 
 func newParameterLayout(scoped bool) *parameterLayout {
@@ -195,7 +198,7 @@ func (l *parameterLayout) parameter(input *typedInput) (string, error) {
 	if input == nil {
 		return "", fmt.Errorf("tabula: undeclared input")
 	}
-	if existing := l.names[input.name]; existing != nil && existing != input {
+	if existing := l.names[input.name]; !l.graph && existing != nil && existing != input {
 		return "", fmt.Errorf("tabula: distinct inputs share the name %q", input.name)
 	}
 	position, ok := l.positions[input]
@@ -215,7 +218,7 @@ func (l *parameterLayout) parameter(input *typedInput) (string, error) {
 }
 
 func (l *parameterLayout) frozen() *parameterLayout {
-	return &parameterLayout{scoped: l.scoped, scopeType: l.scopeType, positions: maps.Clone(l.positions), order: slices.Clone(l.order)}
+	return &parameterLayout{scoped: l.scoped, scopeType: l.scopeType, positions: maps.Clone(l.positions), order: slices.Clone(l.order), graph: l.graph, limits: maps.Clone(l.limits)}
 }
 
 func (l *parameterLayout) bind(scope any, bindings []Binding) ([]any, error) {
@@ -243,8 +246,18 @@ func (l *parameterLayout) bind(scope any, bindings []Binding) ([]any, error) {
 		args[index] = b.input.kind.snapshot(b.value)
 	}
 	for _, input := range l.order {
+		if input.fixed != nil {
+			args[l.positions[input]] = *input.fixed
+			seen[l.positions[input]] = true
+		}
 		if !seen[l.positions[input]] {
 			return nil, fmt.Errorf("tabula: missing binding for %q", input.name)
+		}
+	}
+	for input, ceiling := range l.limits {
+		value, ok := args[l.positions[input]].(int64)
+		if !ok || value < 0 || value > ceiling {
+			return nil, fmt.Errorf("tabula: limit %q must be between zero and %d", input.name, ceiling)
 		}
 	}
 	return args, nil

@@ -81,6 +81,16 @@ func (v rowNull) render(c *typedCompiler) (string, error) {
 // checkRowExpr traverses non-aggregate children and treats an aggregate as a
 // result boundary. Its arguments are checked separately to forbid nesting.
 func checkRowExpr(p expressionPart, visit func(expressionPart) error) error {
+	return checkPhaseExpr(p, visit, false)
+}
+
+// checkResultExpr admits the final window phase in projections and ordering.
+// A query subexpression supplies its own lexical/phase boundary.
+func checkResultExpr(p expressionPart, visit func(expressionPart) error) error {
+	return checkPhaseExpr(p, visit, true)
+}
+
+func checkPhaseExpr(p expressionPart, visit func(expressionPart) error, windows bool) error {
 	switch n := p.(type) {
 	case conjunction:
 		for _, term := range n {
@@ -106,6 +116,9 @@ func checkRowExpr(p expressionPart, visit func(expressionPart) error) error {
 	if traits.aggregate && visit == nil {
 		return fmt.Errorf("tabula: aggregate outside result projection")
 	}
+	if traits.window && !windows {
+		return fmt.Errorf("tabula: window outside result projection or final ordering")
+	}
 	if visit != nil {
 		if err := visit(p); err != nil {
 			return err
@@ -116,7 +129,7 @@ func checkRowExpr(p expressionPart, visit func(expressionPart) error) error {
 		if traits.aggregate {
 			next = nil
 		}
-		if err := checkRowExpr(child, next); err != nil {
+		if err := checkPhaseExpr(child, next, windows && !traits.aggregate && !traits.window); err != nil {
 			return err
 		}
 	}

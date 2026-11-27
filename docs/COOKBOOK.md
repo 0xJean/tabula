@@ -2,11 +2,16 @@
 
 Practical recipes showing how applications bind and use Tabula without an ORM.
 
+For nested reads, use the [query composition guide](QUERY-COMPOSITION.md). The
+[window guide](WINDOWS.md) covers frames, result pagination and multiple lock
+targets. The [typed write guide](TYPED-WRITES.md) covers defaults, conflicts,
+matching sources, modifying common tables, returned rows and finite batches.
+
 ## Operation savepoints
 
 Both transaction sessions implement `tabula.OperationSession[S]`. `WithinOperation` receives a sealed child and a fresh callback context. Execute the whole operation through that child; returning an error or panicking rolls its changes back while preserving earlier transaction work. Parent and sibling handles remain reserved until the operation ends. Nested operations use nested savepoints.
 
-A decoder error must be returned from the operation callback. A result iterator must be finished before returning from the runner; when using `iter.Pull2`, call `stop`. An unfinished operation or failed cleanup makes the enclosing runner roll back instead of committing partial work. Direct pools do not provide this write capability.
+A decoder error must be returned from the operation callback. A result iterator must be finished before returning from the runner; when using `iter.Pull2`, call `stop`. An unfinished operation or failed cleanup makes the enclosing runner roll back instead of committing partial work. A write error encountered while draining after an iterator break matches `ErrUnobservedWrite` and also prevents commit. Successful draining after a break keeps the declared write intact; use `All` when all returned rows and errors must be consumed directly. Direct pools do not provide this write capability.
 
 ## 1. Setup with `stdsql` and a row-scope / RLS plug-in
 
@@ -631,7 +636,7 @@ lookup := q.DefineRoutine(entries, "lookup_item", find,
 row, err := lookup.Bind(session).One(ctx, q.BindValue(key, int64(7)))
 ```
 
-Use `RoutineSet` and `All` for a set of values. Declare `Nullable` and a nullable view column for results that can be SQL NULL. The default function effect requires write authorization. A write call returning one or many results runs under the session's `Returning` policy. A command allowlist for writes rejects its outer `SELECT`. Verify each overload under its executing role. [Role readiness](AUTHORIZATION.md#check-a-role-at-startup)
+Use `RoutineSet` and `All` for a set of values. Declare `Nullable` and a nullable view column for results that can be SQL NULL. The default function effect requires write authorization. A write call returning one or many results runs under the session's `Returning` policy. A command allowlist for writes rejects its outer `SELECT` unless `StatementPolicy.AllowAuthorizedWriteRoutine` explicitly admits the signed call. Direct SQL retains the command restriction, and read-only sessions still reject the write. Verify each overload under its executing role. [Role readiness](AUTHORIZATION.md#check-a-role-at-startup)
 
 ## Finite lists on explicit reads
 

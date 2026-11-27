@@ -23,7 +23,8 @@ type operationFailure struct{ err error }
 
 // WithinOperation runs fn in an operation savepoint. Its sealed child is the
 // only usable handle until fn returns. Errors and panics roll back the operation;
-// cleanup failure prevents the enclosing runner from committing.
+// cleanup failure or cancellation discovered after a successful callback prevents
+// the enclosing runner from committing.
 func (s *Session[S]) WithinOperation(ctx context.Context, fn func(context.Context, tabula.Session[S]) error) (err error) {
 	if s == nil {
 		return tabula.ErrSessionClosed
@@ -53,9 +54,14 @@ func (s *Session[S]) WithinOperation(ctx context.Context, fn func(context.Contex
 	s.mu.operation = lease
 	s.mu.Unlock()
 	succeeded := false
+	var completionErr error
 	defer func() {
 		recovered := recover()
-		cleanup := s.finishOperation(ctx, name, lease, succeeded)
+		var fatal error
+		if completionErr != nil || errors.Is(err, tabula.ErrUnobservedWrite) {
+			fatal = err
+		}
+		cleanup := s.finishOperation(ctx, name, lease, succeeded, fatal)
 		err = errors.Join(err, cleanup)
 		if recovered != nil {
 			panic(recovered)
@@ -63,7 +69,11 @@ func (s *Session[S]) WithinOperation(ctx context.Context, fn func(context.Contex
 	}()
 	err = fn(childCtx, child)
 	if err == nil {
-		err = ctx.Err()
+		completionErr = ctx.Err()
+		err = completionErr
+	}
+	if failure := s.mu.operationError(); failure != nil {
+		err = errors.Join(err, failure)
 	}
 	succeeded = err == nil
 	return err
@@ -81,7 +91,7 @@ func (s *Session[S]) operationChild(lease *operationLease) *Session[S] {
 	return child
 }
 
-func (s *Session[S]) finishOperation(ctx context.Context, name string, lease *operationLease, success bool) (err error) {
+func (s *Session[S]) finishOperation(ctx context.Context, name string, lease *operationLease, success bool, fatal error) (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	lease.closed.Store(true)
@@ -98,9 +108,9 @@ func (s *Session[S]) finishOperation(ctx context.Context, name string, lease *op
 	}
 	defer func() {
 		s.mu.operation = lease.parent
-		if err != nil {
-			s.mu.failOperation(err)
-		}
+		// Publish failure before unlocking the parent handle. The completed
+		// callback may no longer have a result consumer to report it to.
+		s.mu.failOperation(errors.Join(fatal, err))
 	}()
 	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
@@ -138,8 +148,21 @@ func (s *RawSession[S]) WithinOperation(ctx context.Context, fn func(context.Con
 }
 
 func (m *statementLock) failOperation(err error) {
-	if err != nil {
-		m.operationFailure.CompareAndSwap(nil, &operationFailure{err})
+	if err == nil {
+		return
+	}
+	for {
+		previous := m.operationFailure.Load()
+		combined := err
+		if previous != nil {
+			if errors.Is(previous.err, err) {
+				return
+			}
+			combined = errors.Join(err, previous.err)
+		}
+		if m.operationFailure.CompareAndSwap(previous, &operationFailure{combined}) {
+			return
+		}
 	}
 }
 

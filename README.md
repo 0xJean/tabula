@@ -38,9 +38,15 @@ Set `RowsSpec.Lock` on a filtered or ordered page, or enable `WithExists` on an 
 
 Use `DefineRead` for inner, left and cross joins. Give each side of a self-join its own occurrence. Use `In` for a fixed list, `Any` for an array parameter and `Like` or `ILike` for patterns. [Explicit join example](docs/COOKBOOK.md#explicit-joins) Add `WithList(ReadListSpec{...})` for finite joined pages and opt-in exact totals. `CursorFrom` uses the decoded projected order values. [Joined lists](docs/COOKBOOK.md#finite-lists-on-explicit-reads)
 
-## Install v0.4.3
+Compose nested reads with exported fields, explicit `Outer` references, derived and lateral sources, set operations, and read or recursive common tables. Array expansion and array subqueries preserve SQL NULL semantics. Only the final plan registers an executable statement. [Query composition](docs/QUERY-COMPOSITION.md)
 
-Run `go get github.com/0xJean/tabula@v0.4.3` in your application module with Go 1.26 or later. For the native driver and telemetry modules, use the matching version with `go get github.com/0xJean/tabula/pgxdriver@v0.4.3` and/or `go get github.com/0xJean/tabula/oteltabula@v0.4.3`.
+Window functions keep their input rows and expose explicit partitions, orders and frames. Pagination operates on the final result, retaining its key and comparison premises. Multiple row-lock clauses give each physical occurrence its own strength and wait option. [Windows and locks](docs/WINDOWS.md)
+
+`InsertInto`, `UpdateOf` and `DeleteFrom` declare typed writes with defaults, conflicts, matching sources and returned rows. Register count results with `DefineWrite` or row results with `DefineReturning`; batch and returning operations use a guarded operation savepoint. Verify write results with the non-executing `pgxdriver.SQLVerifier` backend, including when execution uses `stdsql`. [Typed writes](docs/TYPED-WRITES.md)
+
+## Install v0.4.4
+
+Run `go get github.com/0xJean/tabula@v0.4.4` in your application module with Go 1.26 or later. For the native driver and telemetry modules, use the matching version with `go get github.com/0xJean/tabula/pgxdriver@v0.4.4` and/or `go get github.com/0xJean/tabula/oteltabula@v0.4.4`.
 
 ## Read a row by primary key
 
@@ -145,4 +151,4 @@ See the [contributing guide](CONTRIBUTING.md) for local checks and the [code of 
 
 Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
-The next composable-statement development follows the [M3 design](docs/DESIGN-M3.md) and its explicit acceptance matrix. Design contracts are distinct from released capabilities.
+The [M3 design](docs/DESIGN-M3.md) records the query, write-effect and verification contracts. Check the changelog for this checkout's release status.

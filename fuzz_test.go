@@ -160,6 +160,9 @@ func FuzzGuardNoSessionEscape(f *testing.F) {
 	f.Add("WITH x AS (VALUES (1)) SELECT * FROM x; /* end */")
 	f.Add(`SELECT E'can\'t; finish', $note$one;two$note$`)
 	f.Add("SELECT (1) /* unfinished")
+	f.Add("WITH added AS (INSERT INTO items VALUES ($1) RETURNING id) SELECT id FROM added")
+	f.Add("WITH added AS (INSERT INTO items VALUES ($1) RETURNING id) SELECT id FROM added; COMMIT")
+	f.Add("WITH added AS (DELETE FROM items RETURNING id) SELECT id FROM added")
 	methods, err := (StatementPolicy{Read: []string{"select", "with"}, Write: []string{"insert"}, RequireReturning: true}).Compile(false)
 	if err != nil {
 		f.Fatal(err)
@@ -168,7 +171,15 @@ func FuzzGuardNoSessionEscape(f *testing.F) {
 	if err != nil {
 		f.Fatal(err)
 	}
+	signed, err := (StatementPolicy{Write: []string{"with", "insert"}, AllowAuthorizedWriteCTE: true}).Compile(false)
+	if err != nil {
+		f.Fatal(err)
+	}
 	f.Fuzz(func(t *testing.T, query string) {
+		authority, owner, call := signedPolicyCall(query, statementEffects{writeCTE: true, writes: []statementWrite{{command: "INSERT"}}})
+		if err := signed.CheckAuthorized(authority, owner, CallReturningEach, call); err == nil && GuardSingleStatement(query) != nil {
+			t.Fatal("signed statement policy admitted stacked or incomplete SQL")
+		}
 		single := GuardSingleStatement(query)
 		if single == nil && !errors.Is(GuardSingleStatement(query+"\n; SELECT 2"), ErrForbiddenStatement) {
 			t.Fatal("single statement guard admitted a second command")

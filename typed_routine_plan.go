@@ -70,6 +70,7 @@ func TryDefineRoutine[T, S, V any](view *View[T, S], key string, r *Routine[V], 
 	if err != nil {
 		return nil, err
 	}
+	shape.effects = statementEffects{bits: meta.Effects, writeRoutine: !r.spec.ReadOnly}
 	if err := view.registerShapes(key, []*compiledShape{shape}); err != nil {
 		return nil, err
 	}

@@ -97,6 +97,12 @@ func readResultProof(q ReadSelect, sources []rowSource, order []RowTerm) ([]KeyR
 		return nil, nil, err
 	}
 	comparisons, err := readOrderComparisons(order)
+	if err == nil {
+		windowKeys, windowComparisons, windowErr := readWindowProof(q, sources, order)
+		keys = appendKeyRequirements(keys, windowKeys...)
+		comparisons = appendComparisonRequirements(comparisons, windowComparisons...)
+		err = windowErr
+	}
 	return keys, comparisons, err
 }
 

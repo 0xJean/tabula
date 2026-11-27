@@ -1,6 +1,9 @@
 package tabula
 
-import "errors"
+import (
+	"errors"
+	"slices"
+)
 
 // RowLockStrength selects the PostgreSQL locking clause on a physical relation.
 type RowLockStrength uint8
@@ -48,6 +51,15 @@ func (l RowLock) clause(c *typedCompiler, meta *StatementShape) (string, error) 
 	if err := l.target.checkCommand("UPDATE"); err != nil {
 		return "", err
 	}
+	alias := l.target.alias
+	if c.block != nil {
+		if err := c.block.resolvePhysical(l.target, 0); err != nil {
+			return "", err
+		}
+		if c.block.physicalAliases[l.target] != "" {
+			alias = c.block.physicalAliases[l.target]
+		}
+	}
 	var strength, wait string
 	switch l.strength {
 	case ForUpdate:
@@ -71,6 +83,8 @@ func (l RowLock) clause(c *typedCompiler, meta *StatementShape) (string, error) 
 		return "", errors.New("tabula: a row lock requires Wait, SkipLocked or NoWait")
 	}
 	meta.Effects |= EffectRowLock
-	meta.AnyColumnUpdate = append(meta.AnyColumnUpdate, l.target.table.sql())
-	return " FOR " + strength + " OF " + typedQuote(l.target.alias) + wait, nil
+	if !slices.Contains(meta.AnyColumnUpdate, l.target.table.sql()) {
+		meta.AnyColumnUpdate = append(meta.AnyColumnUpdate, l.target.table.sql())
+	}
+	return " FOR " + strength + " OF " + typedQuote(alias) + wait, nil
 }

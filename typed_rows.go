@@ -81,8 +81,9 @@ func compileRowsPlan[T, R, S any](owner *descriptor[T, S], indexes []int, name s
 		return nil, err
 	}
 	locked := spec.Lock.declared
-	if locked && aggregate {
-		return nil, fmt.Errorf("tabula: a row lock requires a non-aggregate, ungrouped projection")
+	windowed := slices.ContainsFunc(project, func(p Projection) bool { return hasWindow(p.part) })
+	if locked && (aggregate || windowed) {
+		return nil, fmt.Errorf("tabula: a row lock requires a non-aggregate, ungrouped projection without windows")
 	}
 	if spec.WithExists && (aggregate || locked) {
 		return nil, fmt.Errorf("tabula: WithExists requires an unlocked, non-aggregate plan")
@@ -152,7 +153,7 @@ func (s RowsSpec) hasExpressionForms(project []Projection) bool {
 
 func hasNewScalarOrAggregate(p expressionPart) bool {
 	switch p.(type) {
-	case scalarNode, aggregateCall:
+	case scalarNode, aggregateCall, windowExpression, windowFunction:
 		return true
 	}
 	traits, ok := expressionStructure(p)
@@ -209,8 +210,16 @@ func (p *RowsPlan[T, S]) render(c *typedCompiler, src rowSource, project []Proje
 		return "", StatementShape{}, err
 	}
 	order := data.order
-	prove := (data.page == FirstPage || data.page == AfterPage) && order.needsResultProof(groups)
-	resultSeek := data.page == AfterPage && aggregate && complexRowOrder(data.order, groups)
+	selection := ReadSelect{project: project, group: rowGroupFields(groups)}
+	if data.order != nil {
+		selection.order = data.order.terms
+	}
+	windowed := selection.hasWindows()
+	if p.lock.declared && windowed {
+		return "", StatementShape{}, fmt.Errorf("tabula: a window result cannot be row locked")
+	}
+	prove := (data.page == FirstPage || data.page == AfterPage) && (windowed || order.needsResultProof(groups))
+	resultSeek := data.page == AfterPage && (windowed || aggregate && complexRowOrder(data.order, groups))
 	if data.page == AfterPage && !resultSeek {
 		after, err := order.afterSQL(c, prove)
 		if err != nil {
@@ -231,6 +240,13 @@ func (p *RowsPlan[T, S]) render(c *typedCompiler, src rowSource, project []Proje
 		from += " GROUP BY " + strings.Join(parts, ", ")
 	}
 	query := "SELECT " + selectSQL + from
+	if !count {
+		windows, err := selection.windowClause(c)
+		if err != nil {
+			return "", StatementShape{}, err
+		}
+		query += windows
+	}
 	if count && aggregate {
 		// A scalar aggregate yields one row even for an empty input. A
 		// grouped aggregate yields one row per group, including NULL groups.
@@ -266,7 +282,6 @@ func (p *RowsPlan[T, S]) render(c *typedCompiler, src rowSource, project []Proje
 	}
 	meta.Result = fields
 	if prove {
-		selection := ReadSelect{project: project, group: rowGroupFields(groups)}
 		meta.Keys, meta.Comparisons, err = readResultProof(selection, []rowSource{src}, order.terms)
 		if err != nil {
 			return "", StatementShape{}, err

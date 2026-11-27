@@ -352,6 +352,16 @@ parameter or mutable handle hides them, set `SQLBinding.Definition` and
 `Prefix` to select a registered shape or a dotted key prefix. A `List` site
 includes the matching count for each selected data shape.
 
+Typed writes follow the same owner and plan binding. `DefineWrite`,
+`DefineReturning`, `DefineTableReturning`, `DefineUpdateReturning` and
+`DefineDeleteReturning` register complete families, including their `Try`
+partners. `Exec` selects one statement; `ExecBatch` and `AllBatch` select only
+the declared row-count forms. `All` and `Iter` select a non-batch result, while
+the finite mutation methods select their assignment and filter alternatives.
+The output view owns a returned mutation's shapes even when it writes another
+physical relation. Intermediate write builders and common tables are not
+separate execution sites; the final shape carries every nested effect and grant.
+
 `BindRolesWithDefinitions` expands the registered keys from the live registry
 or a parsed SQL snapshot. A `Count` call adds only the count variants. A
 `Find` call adds only data variants. Each statement supplies its physical
@@ -402,3 +412,9 @@ plain summary needs join, filter, scope and live-row columns; grouped summaries
 also need group and HAVING inputs. DISTINCT summaries retain values determining
 the distinct classes. Cursor operators use qualified native implementations and
 record their function privileges without requiring internal sort support grants.
+
+## Signed write method policies
+
+`StatementPolicy.AllowAuthorizedWriteCTE` permits a registered write CTE whose outer result is SELECT. Include `with` and each physical DML command in the write allowlist. An upsert requires both INSERT and UPDATE in that list. `AllowAuthorizedWriteRoutine` permits a registered write routine's SELECT-shaped call through Returning; its exact signature and EXECUTE requirement remain part of the immutable shape.
+
+Both flags default to false. They are checked against the original registry-issued call, receiving session and method. Editing a SQL snapshot or `AuthorizedSQL` cannot enable them. SQL text APIs retain their normal command checks, and both drivers still enforce callback ownership, read-only state, session guards and database privileges. A custom driver calls `StatementGuard.CheckAuthorized` for its registered path before performing I/O.

@@ -14,11 +14,20 @@ type queryOccurrence struct {
 // an explicit depth, so matching spellings cannot capture another occurrence.
 // Join renderers construct visibility incrementally in declaration order.
 type queryBlock struct {
-	parent   *queryBlock
-	issuer   *statementIssuer
-	physical map[*occurrence]bool
-	results  map[*queryOccurrence]bool
-	aliases  map[string]bool
+	parent          *queryBlock
+	issuer          *statementIssuer
+	physical        map[*occurrence]bool
+	results         map[*queryOccurrence]bool
+	aliases         map[string]bool
+	physicalAliases map[*occurrence]string
+	resultAliases   map[*queryOccurrence]string
+	resultFields    map[*queryOccurrence][]queryResultField
+	resultKeys      map[*queryOccurrence][]queryResultKey
+	outerPhysical   map[*occurrence]bool
+	outerResults    map[*queryOccurrence]bool
+	common          map[*commonTableNode]statementResult
+	recursive       *commonTableNode
+	selfUses        int
 }
 
 func newQueryBlock(parent *queryBlock, issuer *statementIssuer) (*queryBlock, error) {
@@ -28,6 +37,10 @@ func newQueryBlock(parent *queryBlock, issuer *statementIssuer) (*queryBlock, er
 	return &queryBlock{
 		parent: parent, issuer: issuer, physical: make(map[*occurrence]bool),
 		results: make(map[*queryOccurrence]bool), aliases: make(map[string]bool),
+		physicalAliases: make(map[*occurrence]string), resultAliases: make(map[*queryOccurrence]string),
+		resultFields: make(map[*queryOccurrence][]queryResultField), resultKeys: make(map[*queryOccurrence][]queryResultKey),
+		outerPhysical: make(map[*occurrence]bool), outerResults: make(map[*queryOccurrence]bool),
+		common: make(map[*commonTableNode]statementResult),
 	}, nil
 }
 
@@ -104,7 +117,11 @@ func (b *queryBlock) resolveResult(src *queryOccurrence, field *queryFieldIdenti
 	if src == nil || field == nil || !outer.results[src] {
 		return queryResultField{}, fmt.Errorf("tabula: result occurrence is not visible at query depth %d", depth)
 	}
-	for _, found := range src.fields {
+	fields := src.fields
+	if compiled, ok := outer.resultFields[src]; ok {
+		fields = compiled
+	}
+	for _, found := range fields {
 		if found.id == field {
 			return cloneQueryFields([]queryResultField{found})[0], nil
 		}

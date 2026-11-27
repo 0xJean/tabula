@@ -29,6 +29,7 @@ type expressionTraits struct {
 	children  []expressionPart
 	stability expressionStability
 	aggregate bool
+	window    bool
 }
 
 type expressionStability uint8
@@ -88,6 +89,11 @@ func predicateParts(terms []Pred) []expressionPart {
 
 func sameExpression(a, b expressionPart) bool {
 	switch left := a.(type) {
+	case queryResultRef:
+		right, ok := b.(queryResultRef)
+		return ok && left.source == right.source && left.id == right.id
+	case queryExpression:
+		return false // Independent queries are not an expression equality proof.
 	case *fieldRef:
 		right, ok := b.(*fieldRef)
 		return ok && left != nil && right != nil && left.source == right.source &&
@@ -101,7 +107,7 @@ func sameExpression(a, b expressionPart) bool {
 		return false
 	}
 	right, ok := expressionStructure(b)
-	return ok && left.identity == right.identity && left.aggregate == right.aggregate &&
+	return ok && left.identity == right.identity && left.aggregate == right.aggregate && left.window == right.window &&
 		slices.EqualFunc(left.children, right.children, sameExpression)
 }
 

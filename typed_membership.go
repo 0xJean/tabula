@@ -72,5 +72,5 @@ func matchPattern[V, P ~string](op string, value Expr[V], pattern Expr[P]) Pred 
 	isText := func(t catalogType) bool {
 		return t.schema == "pg_catalog" && (t.name == "text" || t.name == "varchar" || t.name == "bpchar")
 	}
-	return Pred{comparison{op, value.part, pattern.part, isText(value.kind.id) && isText(pattern.kind.id)}, Bool(), value.nullable || pattern.nullable}
+	return Pred{comparison{op, value.part, pattern.part, isText(value.kind.id) && isText(pattern.kind.id), value.kind.id}, Bool(), value.nullable || pattern.nullable}
 }

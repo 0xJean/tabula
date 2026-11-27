@@ -263,6 +263,7 @@ func (d *descriptor[T, S]) registerShapes(plan string, shapes []*compiledShape) 
 		entry.StatementShapes = make(map[string]StatementShape)
 	}
 	for _, s := range shapes {
+		s.effects.writes = slices.Clone(s.effects.writes)
 		s.authority = r.statementIssuer
 		s.observationKey = d.name + "." + s.key
 		s.tableName, s.action = d.name, plan
@@ -338,7 +339,7 @@ func (c *typedCompiler) finishShape(key, query string, scopeType catalogType, me
 		meta.Inputs = append(meta.Inputs, ShapeInput{Name: "scope", Type: scopeType.qualified(), Scope: true, Secret: c.hasSecret})
 	}
 	for _, slot := range c.params.order {
-		meta.Inputs = append(meta.Inputs, ShapeInput{Name: slot.name, Type: slot.kind.qualified(), Secret: c.hasSecret || slot.secret})
+		meta.Inputs = append(meta.Inputs, ShapeInput{Name: c.params.snapshotName(slot), Type: slot.kind.qualified(), Secret: c.hasSecret || slot.secret})
 	}
 	return &compiledShape{
 		key: key, sql: query, shape: cloneShape(meta), layout: c.params.frozen(), columns: columnTypes,

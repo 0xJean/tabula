@@ -293,24 +293,7 @@ func (s *Session[S]) exec(ctx context.Context, query string, args []any) (int64,
 	if err := s.check("Exec", query, args); err != nil {
 		return 0, err
 	}
-	if err := s.tryLock(); err != nil {
-		return 0, err
-	}
-	defer s.mu.Unlock()
-	if err := s.applyScope(ctx); err != nil {
-		return 0, err
-	}
-	tagged := s.obs.TagSQL(ctx, query)
-	opCtx, done := s.obs.Start(ctx, s.scopeLabel(), query, args)
-	tag, err := s.tx.Exec(opCtx, tagged, args...)
-	if err != nil {
-		err = directReadError(err)
-		done(0, err)
-		return 0, err
-	}
-	n := tag.RowsAffected()
-	done(n, nil)
-	return n, nil
+	return s.execChecked(ctx, query, args)
 }
 
 func (s *Session[S]) scan(ctx context.Context, method, query string, args []any, dest ...any) error {
@@ -320,23 +303,7 @@ func (s *Session[S]) scan(ctx context.Context, method, query string, args []any,
 	if err := s.check(method, query, args); err != nil {
 		return err
 	}
-	if err := s.tryLock(); err != nil {
-		return err
-	}
-	defer s.mu.Unlock()
-	if err := s.applyScope(ctx); err != nil {
-		return err
-	}
-	tagged := s.obs.TagSQL(ctx, query)
-	opCtx, done := s.obs.Start(ctx, s.scopeLabel(), query, args)
-	err := s.tx.QueryRow(opCtx, tagged, args...).Scan(dest...)
-	if errors.Is(err, pgx.ErrNoRows) {
-		err = sql.ErrNoRows
-	} else {
-		err = directReadError(err)
-	}
-	done(-1, err)
-	return err
+	return s.scanChecked(ctx, query, args, dest...)
 }
 
 func (s *Session[S]) returning(ctx context.Context, query string, args []any, dest ...any) error {
@@ -359,22 +326,7 @@ func (s *Session[S]) each(ctx context.Context, method, query string, args []any,
 	if err := s.check(method, query, args); err != nil {
 		return err
 	}
-	if err := s.tryLock(); err != nil {
-		return err
-	}
-	defer s.mu.Unlock()
-	if err := s.applyScope(ctx); err != nil {
-		return err
-	}
-	tagged := s.obs.TagSQL(ctx, query)
-	opCtx, done := s.obs.Start(ctx, s.scopeLabel(), query, args)
-	rows, err := s.tx.Query(opCtx, tagged, args...)
-	if err != nil {
-		err = directReadError(err)
-		done(0, err)
-		return err
-	}
-	return s.mu.each(rows, decode, done)
+	return s.eachChecked(ctx, query, args, decode)
 }
 
 // Scan executes a single-row query on the direct read-only queryer.

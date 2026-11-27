@@ -61,10 +61,14 @@ type queryResultField struct {
 	value   scalarOperand
 	secret  bool
 	origins []physicalColumn
+	// Logical result evidence is separate from expression dependencies. A cast
+	// cannot simultaneously claim the physical origin of its operand.
+	lineage ResultLineage
 	// Stored values may be read twice within one result row. Stability still
 	// records their provenance and is not upgraded by materialization.
 	stored    bool
 	stability expressionStability
+	proof     queryValueProof
 }
 
 type queryResultKey struct {
@@ -77,6 +81,7 @@ func cloneQueryFields(fields []queryResultField) []queryResultField {
 	out := slices.Clone(fields)
 	for i := range out {
 		out[i].origins = slices.Clone(out[i].origins)
+		out[i].proof = out[i].proof.frozen()
 	}
 	return out
 }
