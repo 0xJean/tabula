@@ -68,7 +68,7 @@ func (site SQLSite) bindRowPlan(b SQLBinding, defs map[string][]tabula.Definitio
 		foundData := false
 		for key := range selected {
 			isData := matchesRowMethod(key, plan, "Find")
-			if site.Receiver == tabulaPkgPath+".BoundReadPlan" {
+			if site.Receiver == planPkgPath+".BoundReadPlan" {
 				isData = matchesReadList(key, plan, "Page")
 			}
 			if !isData {

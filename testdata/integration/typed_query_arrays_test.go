@@ -9,6 +9,7 @@ import (
 	q "github.com/0xJean/tabula"
 	pg "github.com/0xJean/tabula/pgtype"
 	"github.com/0xJean/tabula/pgxdriver"
+	tplan "github.com/0xJean/tabula/plan"
 	"github.com/0xJean/tabula/pqdriver"
 	"github.com/stretchr/testify/require"
 )
@@ -32,35 +33,35 @@ func TestQueryArraySourcesDrivers(t *testing.T) {
 			}
 			reg := q.NewRegistry(cfg)
 			calls := 0
-			numbersType := q.ArrayOfNullable(q.Int8()).WithEncoder(func(v []*int64) (any, error) { calls++; return v, nil })
-			numbers, labels := q.Input("array", numbersType), q.Input("array", q.ArrayOf(q.Text()))
-			n, l, o := q.UnnestColumn("number", numbers.Expr(), q.Int8()), q.UnnestColumn("label", labels.Expr(), q.Text()), q.UnnestOrdinality("position")
-			source := q.Unnest("u", o, n, l)
+			numbersType := q.ArrayOfNullable(tplan.Int8()).WithEncoder(func(v []*int64) (any, error) { calls++; return v, nil })
+			numbers, labels := tplan.Input("array", numbersType), tplan.Input("array", q.ArrayOf(tplan.Text()))
+			n, l, o := tplan.UnnestColumn("number", numbers.Expr(), tplan.Int8()), tplan.UnnestColumn("label", labels.Expr(), tplan.Text()), tplan.UnnestOrdinality("position")
+			source := tplan.Unnest("u", o, n, l)
 			out := q.DefineView(reg, q.ViewSpec[expanded]{Name: "entries"})
-			plan := q.DefineRead(out, "expand", q.Select(q.Project(q.Output(out, "number", q.Int8()), n.From(source)), q.Project(q.Output(out, "label", q.Text()), l.From(source)), q.Project(q.Output(out, "position", q.Int8()), o.From(source))).From(source).OrderBy(q.AscExpr(o.From(source))))
+			plan := tplan.DefineRead(out, "expand", tplan.Select(tplan.Project(tplan.Output(out, "number", tplan.Int8()), n.From(source)), tplan.Project(tplan.Output(out, "label", tplan.Text()), l.From(source)), tplan.Project(tplan.Output(out, "position", tplan.Int8()), o.From(source))).From(source).OrderBy(tplan.AscExpr(o.From(source))))
 			arrayOut := q.DefineView(reg, q.ViewSpec[arrays]{Name: "notes"})
-			array := q.DefineRead(arrayOut, "array", q.Select(q.Project(q.Output(arrayOut, "values", q.ArrayOfNullable(q.Int8())), q.ArraySubqueryAs(q.ArrayOfNullable(q.Int8()), q.SelectValue(n.From(source)).From(source).OrderBy(q.DescExpr(o.From(source)))))))
+			array := tplan.DefineRead(arrayOut, "array", tplan.Select(tplan.Project(tplan.Output(arrayOut, "values", q.ArrayOfNullable(tplan.Int8())), tplan.ArraySubqueryAs(q.ArrayOfNullable(tplan.Int8()), tplan.SelectValue(n.From(source)).From(source).OrderBy(tplan.DescExpr(o.From(source)))))))
 			run := authorizedEffectRunner(t, driver, db, pool, "", reg.SQLAuthority(), q.StatementPolicy{}, nil, false)
 			original := []*int64{new(int64(7)), nil, new(int64(9))}
-			binding := q.BindValue(numbers, original)
+			binding := tplan.BindValue(numbers, original)
 			*original[0] = 100
 			original[2] = new(int64(200))
 			require.Equal(t, 1, calls)
 			require.NoError(t, run(t.Context(), func(ctx context.Context, s session) error {
 				for range 2 {
-					rows, err := plan.Bind(s).Find(ctx, binding, q.BindValue(labels, []string{"a"}))
+					rows, err := plan.Bind(s).Find(ctx, binding, tplan.BindValue(labels, []string{"a"}))
 					require.NoError(t, err)
 					require.Equal(t, []expanded{{new(int64(7)), new("a"), 1}, {nil, nil, 2}, {new(int64(9)), nil, 3}}, rows)
-					values, err := array.Bind(s).Find(ctx, binding, q.BindValue(labels, []string{"a"}))
+					values, err := array.Bind(s).Find(ctx, binding, tplan.BindValue(labels, []string{"a"}))
 					require.NoError(t, err)
 					require.Equal(t, []arrays{{[]*int64{new(int64(9)), nil, new(int64(7))}}}, values)
 				}
 				require.Equal(t, 1, calls)
 				for _, empty := range [][]*int64{nil, {}} {
-					rows, err := plan.Bind(s).Find(ctx, q.BindValue(numbers, empty), q.BindValue(labels, []string{"a", "b"}))
+					rows, err := plan.Bind(s).Find(ctx, tplan.BindValue(numbers, empty), tplan.BindValue(labels, []string{"a", "b"}))
 					require.NoError(t, err)
 					require.Equal(t, []expanded{{nil, new("a"), 1}, {nil, new("b"), 2}}, rows)
-					values, err := array.Bind(s).Find(ctx, q.BindValue(numbers, empty), q.BindValue(labels, []string{}))
+					values, err := array.Bind(s).Find(ctx, tplan.BindValue(numbers, empty), tplan.BindValue(labels, []string{}))
 					require.NoError(t, err)
 					require.Len(t, values, 1)
 					require.NotNil(t, values[0].Values)
@@ -94,18 +95,18 @@ func TestQueryMaterializedVolatileArrayDrivers(t *testing.T) {
 			}
 			reg := q.NewRegistry(cfg)
 			table := q.DefinePlanSource(reg, q.TableSpec[item, int64]{Name: schema + ".items", RelationScope: q.Global()})
-			source := q.MapTable(table).As("i")
-			generated := q.Export("value", q.ArrayExpr(q.GenRandomUUID()))
-			common := q.CTE("notes", q.Select(generated.Project()).From(source), q.Materialized)
+			source := tplan.MapTable(table).As("i")
+			generated := tplan.Export("value", tplan.ArrayExpr(tplan.GenRandomUUID()))
+			common := tplan.CTE("notes", tplan.Select(generated.Project()).From(source), tplan.Materialized)
 			n := common.As("n")
 			kind := pg.ArrayOf(pg.UUID[string]())
-			other := q.Input("other", kind)
+			other := tplan.Input("other", kind)
 			out := q.DefineView(reg, q.ViewSpec[values]{Name: "entries"})
-			query := q.Select(q.Project(q.Output(out, "first", kind), generated.From(n)), q.Project(q.Output(out, "second", kind), generated.From(n)), q.Project(q.Output(out, "value", kind), q.NullIf(generated.From(n), other.Expr()))).From(n).With(common)
-			plan := q.DefineRead(out, "materialized", query)
+			query := tplan.Select(tplan.Project(tplan.Output(out, "first", kind), generated.From(n)), tplan.Project(tplan.Output(out, "second", kind), generated.From(n)), tplan.Project(tplan.Output(out, "value", kind), tplan.NullIf(generated.From(n), other.Expr()))).From(n).With(common)
+			plan := tplan.DefineRead(out, "materialized", query)
 			run := authorizedEffectRunner(t, driver, db, pool, "", reg.SQLAuthority(), q.StatementPolicy{}, nil, false)
 			require.NoError(t, run(t.Context(), func(ctx context.Context, s session) error {
-				rows, err := plan.Bind(s).Find(ctx, q.BindValue(other, []string{}))
+				rows, err := plan.Bind(s).Find(ctx, tplan.BindValue(other, []string{}))
 				require.NoError(t, err)
 				require.Len(t, rows, 3)
 				seen := make(map[string]bool)
@@ -119,26 +120,26 @@ func TestQueryMaterializedVolatileArrayDrivers(t *testing.T) {
 				return nil
 			}))
 
-			threshold := q.Input("threshold", q.Int8())
-			id := q.FieldOf(source.Rel(), "id", q.Int8())
-			lateralQuery := func(correlated bool) (q.ReadSelect, q.Exported[[]string]) {
-				seed := q.Select(generated.Project())
+			threshold := tplan.Input("threshold", tplan.Int8())
+			id := tplan.FieldOf(source.Rel(), "id", tplan.Int8())
+			lateralQuery := func(correlated bool) (tplan.ReadSelect, tplan.Exported[[]string]) {
+				seed := tplan.Select(generated.Project())
 				if correlated {
-					seed = seed.Where(q.Gt(q.Outer(q.Outer(id.Expr())), threshold.Expr()))
+					seed = seed.Where(tplan.Gt(tplan.Outer(tplan.Outer(id.Expr())), threshold.Expr()))
 				}
-				common := q.CTE("notes", seed, q.Materialized)
+				common := tplan.CTE("notes", seed, tplan.Materialized)
 				n := common.As("n")
-				stored := q.Export("stored", generated.From(n))
-				lateral := q.Derived("d", q.Select(stored.Project()).From(n).With(common))
-				result := q.Select(q.Project(q.Output(out, "first", kind), stored.From(lateral)), q.Project(q.Output(out, "second", kind), stored.From(lateral)), q.Project(q.Output(out, "value", kind), q.NullIf(stored.From(lateral), other.Expr()))).From(source).CrossLateral(lateral)
+				stored := tplan.Export("stored", generated.From(n))
+				lateral := tplan.Derived("d", tplan.Select(stored.Project()).From(n).With(common))
+				result := tplan.Select(tplan.Project(tplan.Output(out, "first", kind), stored.From(lateral)), tplan.Project(tplan.Output(out, "second", kind), stored.From(lateral)), tplan.Project(tplan.Output(out, "value", kind), tplan.NullIf(stored.From(lateral), other.Expr()))).From(source).CrossLateral(lateral)
 				return result, stored
 			}
 			correlatedQuery, _ := lateralQuery(true)
-			perRow := q.DefineRead(out, "per_row", correlatedQuery)
+			perRow := tplan.DefineRead(out, "per_row", correlatedQuery)
 			uncorrelatedQuery, _ := lateralQuery(false)
-			once := q.DefineRead(out, "uncorrelated", uncorrelatedQuery)
+			once := tplan.DefineRead(out, "uncorrelated", uncorrelatedQuery)
 			require.NoError(t, run(t.Context(), func(ctx context.Context, s session) error {
-				rows, err := perRow.Bind(s).Find(ctx, q.BindValue(threshold, int64(0)), q.BindValue(other, []string{}))
+				rows, err := perRow.Bind(s).Find(ctx, tplan.BindValue(threshold, int64(0)), tplan.BindValue(other, []string{}))
 				require.NoError(t, err)
 				require.Len(t, rows, 3)
 				seen := make(map[string]bool)
@@ -148,7 +149,7 @@ func TestQueryMaterializedVolatileArrayDrivers(t *testing.T) {
 					require.False(t, seen[row.First[0]])
 					seen[row.First[0]] = true
 				}
-				rows, err = once.Bind(s).Find(ctx, q.BindValue(other, []string{}))
+				rows, err = once.Bind(s).Find(ctx, tplan.BindValue(other, []string{}))
 				require.NoError(t, err)
 				require.Len(t, rows, 3)
 				require.Equal(t, rows[0], rows[1])
@@ -156,7 +157,7 @@ func TestQueryMaterializedVolatileArrayDrivers(t *testing.T) {
 				return nil
 			}))
 			before := out.Definition()
-			_, err = q.TryDefineRead(out, "direct", q.Select(q.Project(q.Output(out, "first", kind), q.ArrayExpr(q.GenRandomUUID())), q.Project(q.Output(out, "second", kind), q.ArrayExpr(q.GenRandomUUID())), q.Project(q.Output(out, "value", kind), q.NullIf(q.ArrayExpr(q.GenRandomUUID()), other.Expr()))))
+			_, err = tplan.TryDefineRead(out, "direct", tplan.Select(tplan.Project(tplan.Output(out, "first", kind), tplan.ArrayExpr(tplan.GenRandomUUID())), tplan.Project(tplan.Output(out, "second", kind), tplan.ArrayExpr(tplan.GenRandomUUID())), tplan.Project(tplan.Output(out, "value", kind), tplan.NullIf(tplan.ArrayExpr(tplan.GenRandomUUID()), other.Expr()))))
 			require.Error(t, err)
 			require.Equal(t, before, out.Definition())
 		})

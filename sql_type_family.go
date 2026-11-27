@@ -112,7 +112,7 @@ func (r *Registry[S]) allowedTypesLocked(ft reflect.Type, isJSON, isArray bool, 
 			return slices.Clone(fam), nil
 		}
 		if def, ok := r.defaultTypes[ft]; ok {
-			return []string{def.kind.qualified()}, nil
+			return []string{def.kind.Qualified()}, nil
 		}
 		elem := ft.Elem()
 		if elem.Kind() == reflect.Pointer {
@@ -137,11 +137,11 @@ func (r *Registry[S]) allowedTypesLocked(ft reflect.Type, isJSON, isArray bool, 
 		}
 	}
 	if def, ok := r.defaultTypes[ft]; ok {
-		return []string{def.kind.qualified()}, nil
+		return []string{def.kind.Qualified()}, nil
 	}
 	if ft.Kind() == reflect.Pointer {
 		if def, ok := r.defaultTypes[ft.Elem()]; ok {
-			return []string{def.kind.qualified()}, nil
+			return []string{def.kind.Qualified()}, nil
 		}
 	}
 

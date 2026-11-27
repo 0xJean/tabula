@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	q "github.com/0xJean/tabula"
+	tplan "github.com/0xJean/tabula/plan"
 	"github.com/stretchr/testify/require"
 )
 
@@ -24,11 +25,11 @@ CREATE UNIQUE INDEX items_rank ON ` + schema + `.items(rank) WHERE label=E'note'
 GRANT INSERT(id,rank,label), UPDATE(rank), SELECT(id,rank,label) ON ` + schema + ".items TO " + role)
 			reg := q.NewRegistry(q.RegistryConfig[struct{}]{Deny: q.DenyLegacySQL})
 			table := q.DefinePlanSource(reg, q.TableSpec[writeItem, int64]{Name: schema + ".items", RelationScope: q.Global()})
-			src := q.MapTable(table).As("i")
-			id, rank, label := q.FieldOf(src.Rel(), "id", q.Int8()), q.FieldOf(src.Rel(), "rank", q.Int4()), q.FieldOf(src.Rel(), "label", q.Text())
-			key, value, text := q.Input("id", q.Int8()), q.Input("rank", q.Int4()), q.Input("label", q.Text())
-			base := q.InsertInto(src).Values(q.Assign(id, key.Expr()), q.Assign(rank, value.Expr()), q.Assign(label, text.Expr()))
-			partial := q.DefineWrite(src, "partial", base.OnConflict(q.ConflictColumns(rank.Column()).WhereIndex(q.IndexEq(label, "note'\\entry"))).DoNothing())
+			src := tplan.MapTable(table).As("i")
+			id, rank, label := tplan.FieldOf(src.Rel(), "id", tplan.Int8()), tplan.FieldOf(src.Rel(), "rank", tplan.Int4()), tplan.FieldOf(src.Rel(), "label", tplan.Text())
+			key, value, text := tplan.Input("id", tplan.Int8()), tplan.Input("rank", tplan.Int4()), tplan.Input("label", tplan.Text())
+			base := tplan.InsertInto(src).Values(tplan.Assign(id, key.Expr()), tplan.Assign(rank, value.Expr()), tplan.Assign(label, text.Expr()))
+			partial := tplan.DefineWrite(src, "partial", base.OnConflict(tplan.ConflictColumns(rank.Column()).WhereIndex(tplan.IndexEq(label, "note'\\entry"))).DoNothing())
 			def := table.Definition()
 			statement := def.Statements["partial.global.write"]
 			conn, err := db.Conn(ctx)
@@ -55,10 +56,10 @@ GRANT INSERT(id,rank,label), UPDATE(rank), SELECT(id,rank,label) ON ` + schema +
 			require.NoError(t, err)
 			require.NoError(t, conn.Close())
 			run := authorizedEffectRunner(t, driver, db, pool, role, reg.SQLAuthority(), q.StatementPolicy{}, nil, false)
-			bindings := func(id int64, rank int32, label string) []q.Binding {
-				return []q.Binding{q.BindValue(key, id), q.BindValue(value, rank), q.BindValue(text, label)}
+			bindings := func(id int64, rank int32, label string) []tplan.Binding {
+				return []tplan.Binding{tplan.BindValue(key, id), tplan.BindValue(value, rank), tplan.BindValue(text, label)}
 			}
-			invoke := func(plan *q.WritePlan[struct{}], values ...q.Binding) (int64, error) {
+			invoke := func(plan *tplan.WritePlan[struct{}], values ...tplan.Binding) (int64, error) {
 				var count int64
 				err := run(ctx, func(ctx context.Context, s session) error {
 					var err error
@@ -77,8 +78,8 @@ GRANT INSERT(id,rank,label), UPDATE(rank), SELECT(id,rank,label) ON ` + schema +
 			_, err = invoke(partial, bindings(3, 5, "note'\\entry")...)
 			require.Equal(t, "42501", q.SQLState(err))
 			exec("GRANT SELECT(label) ON " + schema + ".items TO " + role)
-			update := base.OnConflict(q.ConflictConstraint("items_pkey")).DoUpdate(q.Assign(rank, q.Excluded(rank))).UpdateWhere(q.Lt(rank.Expr(), q.Excluded(rank)))
-			returned := q.DefineTableReturning(src, "upsert", update, q.SelectColumns(id.Column(), rank.Column()))
+			update := base.OnConflict(tplan.ConflictConstraint("items_pkey")).DoUpdate(tplan.Assign(rank, tplan.Excluded(rank))).UpdateWhere(tplan.Lt(rank.Expr(), tplan.Excluded(rank)))
+			returned := tplan.DefineTableReturning(src, "upsert", update, tplan.SelectColumns(id.Column(), rank.Column()))
 			require.NoError(t, run(ctx, func(ctx context.Context, s session) error {
 				rows, err := returned.Bind(s).All(ctx, bindings(1, 3, "note")...)
 				require.NoError(t, err)
@@ -88,8 +89,8 @@ GRANT INSERT(id,rank,label), UPDATE(rank), SELECT(id,rank,label) ON ` + schema +
 				require.Equal(t, []writeItem{{ID: 1, Rank: 8}}, rows)
 				return nil
 			}))
-			duplicate := q.DefineWrite(src, "duplicate", base.Values(q.Assign(id, key.Expr()), q.Assign(rank, value.Expr()), q.Assign(label, text.Expr())).
-				OnConflict(q.ConflictColumns(id.Column())).DoUpdate(q.Assign(rank, q.Excluded(rank))))
+			duplicate := tplan.DefineWrite(src, "duplicate", base.Values(tplan.Assign(id, key.Expr()), tplan.Assign(rank, value.Expr()), tplan.Assign(label, text.Expr())).
+				OnConflict(tplan.ConflictColumns(id.Column())).DoUpdate(tplan.Assign(rank, tplan.Excluded(rank))))
 			_, err = invoke(duplicate, bindings(1, 9, "note")...)
 			require.Equal(t, "21000", q.SQLState(err))
 			var current int32
@@ -109,16 +110,16 @@ func TestWriteNamedExclusionDoNothing(t *testing.T) {
 			require.NoError(t, err)
 			reg := q.NewRegistry(q.RegistryConfig[struct{}]{Deny: q.DenyLegacySQL})
 			table := q.DefinePlanSource(reg, q.TableSpec[writeItem, int64]{Name: schema + ".items", RelationScope: q.Global()})
-			src := q.MapTable(table).As("i")
-			id, rank := q.FieldOf(src.Rel(), "id", q.Int8()), q.FieldOf(src.Rel(), "rank", q.Int4())
-			key, value := q.Input("id", q.Int8()), q.Input("rank", q.Int4())
-			plan := q.DefineWrite(src, "append", q.InsertInto(src).Values(q.Assign(id, key.Expr()), q.Assign(rank, value.Expr())).OnConflict(q.ConflictConstraint("items_rank")).DoNothing())
+			src := tplan.MapTable(table).As("i")
+			id, rank := tplan.FieldOf(src.Rel(), "id", tplan.Int8()), tplan.FieldOf(src.Rel(), "rank", tplan.Int4())
+			key, value := tplan.Input("id", tplan.Int8()), tplan.Input("rank", tplan.Int4())
+			plan := tplan.DefineWrite(src, "append", tplan.InsertInto(src).Values(tplan.Assign(id, key.Expr()), tplan.Assign(rank, value.Expr())).OnConflict(tplan.ConflictConstraint("items_rank")).DoNothing())
 			run := authorizedEffectRunner(t, driver, db, pool, "", reg.SQLAuthority(), q.StatementPolicy{}, nil, false)
 			require.NoError(t, run(ctx, func(ctx context.Context, s session) error {
-				n, err := plan.Bind(s).Exec(ctx, q.BindValue(key, int64(1)), q.BindValue(value, int32(5)))
+				n, err := plan.Bind(s).Exec(ctx, tplan.BindValue(key, int64(1)), tplan.BindValue(value, int32(5)))
 				require.NoError(t, err)
 				require.EqualValues(t, 1, n)
-				n, err = plan.Bind(s).Exec(ctx, q.BindValue(key, int64(2)), q.BindValue(value, int32(5)))
+				n, err = plan.Bind(s).Exec(ctx, tplan.BindValue(key, int64(2)), tplan.BindValue(value, int32(5)))
 				require.NoError(t, err)
 				require.Zero(t, n)
 				return nil

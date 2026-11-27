@@ -12,6 +12,7 @@ import (
 	"time"
 
 	q "github.com/0xJean/tabula"
+	tplan "github.com/0xJean/tabula/plan"
 	"github.com/0xJean/tabula/pqdriver"
 	"github.com/0xJean/tabula/sqlcheck"
 	"github.com/stretchr/testify/require"
@@ -39,14 +40,14 @@ type listEntry struct {
 type listFixture struct {
 	reg             *q.Registry[itemScope]
 	schema, role    string
-	layout          *q.TableLayout[listItem, itemScope]
-	items           q.RowSource[listItem, itemScope]
-	notes           q.RowSource[listNote, itemScope]
-	id, nid, parent q.Field[int64]
-	rank            q.Field[int32]
-	label           q.Field[string]
+	layout          *tplan.TableLayout[listItem, itemScope]
+	items           tplan.RowSource[listItem, itemScope]
+	notes           tplan.RowSource[listNote, itemScope]
+	id, nid, parent tplan.Field[int64]
+	rank            tplan.Field[int32]
+	label           tplan.Field[string]
 	out             *q.View[listEntry, itemScope]
-	query           q.ReadSelect
+	query           tplan.ReadSelect
 }
 
 func newListFixture(t *testing.T, db *sql.DB, driver string) listFixture {
@@ -70,14 +71,14 @@ func newListFixture(t *testing.T, db *sql.DB, driver string) listFixture {
 		cfg.ArrayArg = pqdriver.Array
 	}
 	reg := q.NewRegistry(cfg)
-	layout := q.MapTable(q.DefinePlanSource(reg, q.TableSpec[listItem, int64]{Name: ns + ".items"}), q.ColumnType("scope_id", q.CatalogType[itemScope]("pg_catalog", "int8", nil)))
+	layout := tplan.MapTable(q.DefinePlanSource(reg, q.TableSpec[listItem, int64]{Name: ns + ".items"}), tplan.ColumnType("scope_id", q.CatalogType[itemScope]("pg_catalog", "int8", nil)))
 	items := layout.As("i")
-	notes := q.MapTable(q.DefinePlanSource(reg, q.TableSpec[listNote, int64]{Name: ns + ".notes"}), q.ColumnType("scope_id", q.CatalogType[itemScope]("pg_catalog", "int8", nil))).As("n")
-	id, nid := q.FieldOf(items.Rel(), "id", q.Int8()), q.FieldOf(notes.Rel(), "id", q.Int8())
-	parent, rank := q.FieldOf(notes.Rel(), "item_id", q.Int8()), q.FieldOf(notes.Rel(), "rank", q.Int4())
+	notes := tplan.MapTable(q.DefinePlanSource(reg, q.TableSpec[listNote, int64]{Name: ns + ".notes"}), tplan.ColumnType("scope_id", q.CatalogType[itemScope]("pg_catalog", "int8", nil))).As("n")
+	id, nid := tplan.FieldOf(items.Rel(), "id", tplan.Int8()), tplan.FieldOf(notes.Rel(), "id", tplan.Int8())
+	parent, rank := tplan.FieldOf(notes.Rel(), "item_id", tplan.Int8()), tplan.FieldOf(notes.Rel(), "rank", tplan.Int4())
 	out := q.DefineView(reg, q.ViewSpec[listEntry]{Name: "entries"})
-	query := q.Select(q.Project(q.Output(out, "item", q.Int8()), id.Expr()), q.Project(q.Output(out, "note", q.Int8()), nid.Expr()), q.Project(q.Output(out, "rank", q.Int4()), rank.Expr())).From(items).LeftJoin(notes, q.Eq(parent.Expr(), id.Expr()))
-	return listFixture{layout: layout, reg: reg, schema: ns, role: role, items: items, notes: notes, id: id, nid: nid, parent: parent, rank: rank, label: q.FieldOf(items.Rel(), "label", q.Text()), out: out, query: query}
+	query := tplan.Select(tplan.Project(tplan.Output(out, "item", tplan.Int8()), id.Expr()), tplan.Project(tplan.Output(out, "note", tplan.Int8()), nid.Expr()), tplan.Project(tplan.Output(out, "rank", tplan.Int4()), rank.Expr())).From(items).LeftJoin(notes, tplan.Eq(parent.Expr(), id.Expr()))
+	return listFixture{layout: layout, reg: reg, schema: ns, role: role, items: items, notes: notes, id: id, nid: nid, parent: parent, rank: rank, label: tplan.FieldOf(items.Rel(), "label", tplan.Text()), out: out, query: query}
 }
 
 func verifyListSnapshot(t *testing.T, db *sql.DB, f listFixture) {
@@ -106,19 +107,19 @@ func TestReadListJoinedPagesBothDrivers(t *testing.T) {
 	for _, driver := range []string{"stdsql", "pgx"} {
 		t.Run(driver, func(t *testing.T) {
 			f := newListFixture(t, db, driver)
-			ids, minimum := q.Input("ids", q.ArrayOf(q.Int8())), q.Input("minimum", q.Int4())
-			orders := []q.RowOrder{{Name: "rank", Terms: []q.RowTerm{q.Desc(f.rank).NullsLast(), q.Asc(f.id), q.Asc(f.nid).NullsLast()}}, {Name: "reverse", Terms: []q.RowTerm{q.Asc(f.rank).NullsFirst(), q.Desc(f.id), q.Desc(f.nid).NullsFirst()}}}
-			spec := q.ReadListSpec{Optional: []q.RowPredicate{{Name: "selected", When: q.Any(f.id.Expr(), ids.Expr())}, {Name: "ranked", When: q.Ge(f.rank.Expr(), minimum.Expr())}}, Orders: orders, Pages: q.RowPages{Unpaged: true, Offset: true, Keyset: true, MaxLimit: 10, MaxOffset: 20}, ExactCount: true}
-			plan := q.DefineRead(f.out, "joined", f.query.WithList(spec))
+			ids, minimum := tplan.Input("ids", q.ArrayOf(tplan.Int8())), tplan.Input("minimum", tplan.Int4())
+			orders := []tplan.RowOrder{{Name: "rank", Terms: []tplan.RowTerm{tplan.Desc(f.rank).NullsLast(), tplan.Asc(f.id), tplan.Asc(f.nid).NullsLast()}}, {Name: "reverse", Terms: []tplan.RowTerm{tplan.Asc(f.rank).NullsFirst(), tplan.Desc(f.id), tplan.Desc(f.nid).NullsFirst()}}}
+			spec := tplan.ReadListSpec{Optional: []tplan.RowPredicate{{Name: "selected", When: tplan.Any(f.id.Expr(), ids.Expr())}, {Name: "ranked", When: tplan.Ge(f.rank.Expr(), minimum.Expr())}}, Orders: orders, Pages: tplan.RowPages{Unpaged: true, Offset: true, Keyset: true, MaxLimit: 10, MaxOffset: 20}, ExactCount: true}
+			plan := tplan.DefineRead(f.out, "joined", f.query.WithList(spec))
 			verifyListSnapshot(t, db, f)
 			err := runRowPlan(t, db, pool, driver, f.reg.SQLAuthority(), f.role, 1, q.LogConfig{}, func(ctx context.Context, s q.Session[itemScope]) error {
 				bound := plan.Bind(s)
 				for _, order := range orders {
-					all, total, err := bound.List(ctx, q.RowChoice{Order: order.Name})
+					all, total, err := bound.List(ctx, tplan.RowChoice{Order: order.Name})
 					require.NoError(t, err)
 					require.EqualValues(t, 6, total)
 					require.Len(t, all, 6)
-					choice := q.RowChoice{Order: order.Name, Page: q.FirstPage, Limit: 2}
+					choice := tplan.RowChoice{Order: order.Name, Page: tplan.FirstPage, Limit: 2}
 					var combined []listEntry
 					for i := 0; i < 10; i++ {
 						page, total, err := bound.List(ctx, choice)
@@ -130,28 +131,28 @@ func TestReadListJoinedPagesBothDrivers(t *testing.T) {
 						combined = append(combined, page...)
 						cursor, err := plan.CursorFrom(order.Name, page[len(page)-1])
 						require.NoError(t, err)
-						choice.Page, choice.After = q.AfterPage, cursor
+						choice.Page, choice.After = tplan.AfterPage, cursor
 					}
 					require.Equal(t, all, combined)
-					page, err := bound.Page(ctx, q.RowChoice{Order: order.Name, Page: q.OffsetPage, Limit: 2, Offset: 4})
+					page, err := bound.Page(ctx, tplan.RowChoice{Order: order.Name, Page: tplan.OffsetPage, Limit: 2, Offset: 4})
 					require.NoError(t, err)
 					require.Equal(t, all[4:], page)
 				}
-				selected := q.BindValue(ids, []int64{1, 3})
-				page, total, err := bound.List(ctx, q.RowChoice{Order: "rank", Filters: []string{"selected"}, Page: q.OffsetPage, Limit: 2}, selected)
+				selected := tplan.BindValue(ids, []int64{1, 3})
+				page, total, err := bound.List(ctx, tplan.RowChoice{Order: "rank", Filters: []string{"selected"}, Page: tplan.OffsetPage, Limit: 2}, selected)
 				require.NoError(t, err)
 				require.Len(t, page, 2)
 				require.EqualValues(t, 3, total)
-				total, err = bound.Count(ctx, []string{"ranked"}, q.BindValue(minimum, int32(0)))
+				total, err = bound.Count(ctx, []string{"ranked"}, tplan.BindValue(minimum, int32(0)))
 				require.NoError(t, err)
 				require.EqualValues(t, 2, total)
 				for _, empty := range [][]int64{nil, {}} {
-					page, total, err = bound.List(ctx, q.RowChoice{Order: "rank", Filters: []string{"selected"}}, q.BindValue(ids, empty))
+					page, total, err = bound.List(ctx, tplan.RowChoice{Order: "rank", Filters: []string{"selected"}}, tplan.BindValue(ids, empty))
 					require.NoError(t, err)
 					require.Empty(t, page)
 					require.Zero(t, total)
 				}
-				for _, bad := range []q.RowChoice{{Order: "rank", Page: q.FirstPage, Limit: 11}, {Order: "rank", Page: q.OffsetPage, Limit: 1, Offset: 21}, {Order: "rank", Page: q.AfterPage, Limit: 1}, {Order: "rank", Filters: []string{"selected", "selected"}}, {Order: "missing"}} {
+				for _, bad := range []tplan.RowChoice{{Order: "rank", Page: tplan.FirstPage, Limit: 11}, {Order: "rank", Page: tplan.OffsetPage, Limit: 1, Offset: 21}, {Order: "rank", Page: tplan.AfterPage, Limit: 1}, {Order: "rank", Filters: []string{"selected", "selected"}}, {Order: "missing"}} {
 					_, err := bound.Page(ctx, bad, selected)
 					require.Error(t, err)
 				}

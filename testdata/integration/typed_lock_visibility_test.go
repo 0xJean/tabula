@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	q "github.com/0xJean/tabula"
+	"github.com/0xJean/tabula/plan"
 	"github.com/stretchr/testify/require"
 )
 
@@ -29,8 +30,8 @@ func addStatusLock[V any](t *testing.T, db *sql.DB, f *effectFixture, name, sqlT
 		visibility.AliveValue = live
 	}
 	desc := q.Define(f.reg, q.TableSpec[record, int64]{Name: table, RelationScope: q.Global(), SoftDelete: visibility})
-	rel := q.FromTable(desc, "r", q.Global())
-	source := q.RowsFrom(desc, rel, q.FieldOf(rel, "status", kind).Column())
-	f.statusLocks[name] = q.DefineRows(f.view, name, source, q.RowsSpec{Lock: q.ForRows(q.ForShare, rel, q.Wait)},
-		q.Project(q.Output(f.view, "id", q.Int8()), q.FieldOf(rel, "id", q.Int8()).Expr()))
+	rel := plan.FromTable(desc, "r", q.Global())
+	source := plan.RowsFrom(desc, rel, plan.FieldOf(rel, "status", kind).Column())
+	f.statusLocks[name] = plan.DefineRows(f.view, name, source, plan.RowsSpec{Lock: plan.ForRows(plan.ForShare, rel, plan.Wait)},
+		plan.Project(plan.Output(f.view, "id", plan.Int8()), plan.FieldOf(rel, "id", plan.Int8()).Expr()))
 }

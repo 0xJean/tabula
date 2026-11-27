@@ -10,6 +10,7 @@ import (
 	"time"
 
 	q "github.com/0xJean/tabula"
+	"github.com/0xJean/tabula/plan"
 	"github.com/0xJean/tabula/sqlcheck"
 	"github.com/stretchr/testify/require"
 )
@@ -52,14 +53,14 @@ func prepareSingleTables(t *testing.T, db *sql.DB) (string, string) {
 }
 
 type singleCalls struct {
-	one, first           func(q.Binding) (singleResult, error)
-	maybeOne, maybeFirst func(q.Binding) (singleResult, bool, error)
+	one, first           func(plan.Binding) (singleResult, error)
+	maybeOne, maybeFirst func(plan.Binding) (singleResult, bool, error)
 }
 
-func checkSingleResults(t *testing.T, calls singleCalls, key q.Slot[int64]) {
+func checkSingleResults(t *testing.T, calls singleCalls, key plan.Slot[int64]) {
 	t.Helper()
 	for _, limit := range []int64{0, 1, 2, 6} {
-		arg := q.BindValue(key, limit)
+		arg := plan.BindValue(key, limit)
 		row, err := calls.one(arg)
 		maybe, found, optErr := calls.maybeOne(arg)
 		switch limit {
@@ -105,34 +106,34 @@ func TestSingleReadDrivers(t *testing.T) {
 	reg := q.NewRegistry(q.RegistryConfig[struct{}]{Deny: q.DenyLegacySQL})
 	table := q.DefinePlanSource(reg, q.TableSpec[singleItem, int64]{Name: schema + ".items", RelationScope: q.ByRLS(),
 		SoftDelete: &q.SoftDelete{AliveValue: "open", DeletedValue: "closed"}})
-	left, right := q.FromTable(table, "a", q.ByRLS()), q.FromTable(table, "b", q.ByRLS())
-	src := q.RowsFrom(table, left)
-	id, otherID := q.FieldOf(left, "id", q.Int8()), q.FieldOf(right, "id", q.Int8())
-	group, peer := q.FieldOf(left, "group_id", q.Int4()), q.FieldOf(right, "group_id", q.Int4())
-	key := q.Input("key", q.Int8())
-	filter := q.RowFilter{Where: q.Le(id.Expr(), key.Expr())}
+	left, right := plan.FromTable(table, "a", q.ByRLS()), plan.FromTable(table, "b", q.ByRLS())
+	src := plan.RowsFrom(table, left)
+	id, otherID := plan.FieldOf(left, "id", plan.Int8()), plan.FieldOf(right, "id", plan.Int8())
+	group, peer := plan.FieldOf(left, "group_id", plan.Int4()), plan.FieldOf(right, "group_id", plan.Int4())
+	key := plan.Input("key", plan.Int8())
+	filter := plan.RowFilter{Where: plan.Le(id.Expr(), key.Expr())}
 	out := q.DefineView(reg, q.ViewSpec[singleResult]{Name: "entries"})
-	project := []q.Projection{q.Project(q.Output(out, "id", q.Int8()), id.Expr()),
-		q.Project(q.Output(out, "note", q.Text()), q.FieldOf(left, "note", q.Text()).Expr())}
-	forms := q.ReadForms{Exact: true, First: q.OrderedFirst}
-	sort := q.RowOrder{Name: "forward", Terms: []q.RowTerm{q.Asc(id)}}
-	spec := q.RowsSpec{RowFilter: filter, Orders: []q.RowOrder{sort}, WithExists: true}
-	rows := q.DefineRowsWithForms(out, "by_key", src, spec, forms, project...)
-	probe := q.DefineExists(src, "visible", q.RowFilter{Optional: []q.RowPredicate{{Name: "by_id", When: q.Eq(id.Expr(), key.Expr())}}})
-	match := q.Select(project...).From(src).InnerJoin(right, q.Eq(group.Expr(), peer.Expr())).
-		Where(filter.Where, q.Le(otherID.Expr(), key.Expr()))
-	joined := q.DefineRead(out, "paired", match.OrderBy(q.Asc(id), q.Asc(otherID)).WithForms(forms))
-	unordered := q.DefineRead(out, "any_pair", match.WithForms(q.ReadForms{First: q.UnorderedFirst}))
+	project := []plan.Projection{plan.Project(plan.Output(out, "id", plan.Int8()), id.Expr()),
+		plan.Project(plan.Output(out, "note", plan.Text()), plan.FieldOf(left, "note", plan.Text()).Expr())}
+	forms := plan.ReadForms{Exact: true, First: plan.OrderedFirst}
+	sort := plan.RowOrder{Name: "forward", Terms: []plan.RowTerm{plan.Asc(id)}}
+	spec := plan.RowsSpec{RowFilter: filter, Orders: []plan.RowOrder{sort}, WithExists: true}
+	rows := plan.DefineRowsWithForms(out, "by_key", src, spec, forms, project...)
+	probe := plan.DefineExists(src, "visible", plan.RowFilter{Optional: []plan.RowPredicate{{Name: "by_id", When: plan.Eq(id.Expr(), key.Expr())}}})
+	match := plan.Select(project...).From(src).InnerJoin(right, plan.Eq(group.Expr(), peer.Expr())).
+		Where(filter.Where, plan.Le(otherID.Expr(), key.Expr()))
+	joined := plan.DefineRead(out, "paired", match.OrderBy(plan.Asc(id), plan.Asc(otherID)).WithForms(forms))
+	unordered := plan.DefineRead(out, "any_pair", match.WithForms(plan.ReadForms{First: plan.UnorderedFirst}))
 	totals := q.DefineView(reg, q.ViewSpec[lockResult]{Name: "notes"})
-	count := q.Project(q.Output(totals, "id", q.Int8()), q.CountAll())
-	scalar := q.DefineRows(totals, "total", src, q.RowsSpec{RowFilter: filter}, count)
-	grouped := q.DefineRead(totals, "totals", q.Select(count).From(src).Where(filter.Where).
-		GroupBy(group.Expr()).OrderBy(q.Asc(group)).WithForms(forms))
+	count := plan.Project(plan.Output(totals, "id", plan.Int8()), plan.CountAll())
+	scalar := plan.DefineRows(totals, "total", src, plan.RowsSpec{RowFilter: filter}, count)
+	grouped := plan.DefineRead(totals, "totals", plan.Select(count).From(src).Where(filter.Where).
+		GroupBy(group.Expr()).OrderBy(plan.Asc(group)).WithForms(forms))
 
-	spec.Lock, spec.WithExists = q.ForRows(q.ForUpdate, left, q.SkipLocked), false
-	locked := q.DefineRowsWithForms(out, "locked", src, spec, forms, project...)
-	joinedLock := q.DefineRead(out, "locked_pairs", match.OrderBy(q.Asc(id), q.Asc(otherID)).
-		Lock(q.ForRows(q.ForUpdate, left, q.SkipLocked)).WithForms(forms))
+	spec.Lock, spec.WithExists = plan.ForRows(plan.ForUpdate, left, plan.SkipLocked), false
+	locked := plan.DefineRowsWithForms(out, "locked", src, spec, forms, project...)
+	joinedLock := plan.DefineRead(out, "locked_pairs", match.OrderBy(plan.Asc(id), plan.Asc(otherID)).
+		Lock(plan.ForRows(plan.ForUpdate, left, plan.SkipLocked)).WithForms(forms))
 	work := sqlcheck.RoleStatements{}
 	work.AddDefinitions(role, table.Definition())
 	work.AddViews(role, out.Definition(), totals.Definition())
@@ -145,7 +146,7 @@ func TestSingleReadDrivers(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, findings)
 
-	choice := q.RowChoice{Order: "forward"}
+	choice := plan.RowChoice{Order: "forward"}
 	ctx := t.Context()
 	for _, driver := range []string{"pq", "pgx"} {
 		t.Run(driver, func(t *testing.T) {
@@ -154,53 +155,53 @@ func TestSingleReadDrivers(t *testing.T) {
 			require.NoError(t, run(ctx, func(c context.Context, s session) error {
 				b := rows.Bind(s)
 				checkSingleResults(t, singleCalls{
-					one:        func(v q.Binding) (singleResult, error) { return b.One(c, choice, v) },
-					first:      func(v q.Binding) (singleResult, error) { return b.First(c, choice, v) },
-					maybeOne:   func(v q.Binding) (singleResult, bool, error) { return b.MaybeOne(c, choice, v) },
-					maybeFirst: func(v q.Binding) (singleResult, bool, error) { return b.MaybeFirst(c, choice, v) },
+					one:        func(v plan.Binding) (singleResult, error) { return b.One(c, choice, v) },
+					first:      func(v plan.Binding) (singleResult, error) { return b.First(c, choice, v) },
+					maybeOne:   func(v plan.Binding) (singleResult, bool, error) { return b.MaybeOne(c, choice, v) },
+					maybeFirst: func(v plan.Binding) (singleResult, bool, error) { return b.MaybeFirst(c, choice, v) },
 				}, key)
 				j := joined.Bind(s)
 				checkSingleResults(t, singleCalls{
-					one:        func(v q.Binding) (singleResult, error) { return j.One(c, v) },
-					first:      func(v q.Binding) (singleResult, error) { return j.First(c, v) },
-					maybeOne:   func(v q.Binding) (singleResult, bool, error) { return j.MaybeOne(c, v) },
-					maybeFirst: func(v q.Binding) (singleResult, bool, error) { return j.MaybeFirst(c, v) },
+					one:        func(v plan.Binding) (singleResult, error) { return j.One(c, v) },
+					first:      func(v plan.Binding) (singleResult, error) { return j.First(c, v) },
+					maybeOne:   func(v plan.Binding) (singleResult, bool, error) { return j.MaybeOne(c, v) },
+					maybeFirst: func(v plan.Binding) (singleResult, bool, error) { return j.MaybeFirst(c, v) },
 				}, key)
-				pairs, err := j.Find(c, q.BindValue(key, 3))
+				pairs, err := j.Find(c, plan.BindValue(key, 3))
 				require.NoError(t, err)
 				require.Len(t, pairs, 5)
 				require.Equal(t, pairs[1], pairs[2])
-				first, err := unordered.Bind(s).First(c, q.BindValue(key, 3))
+				first, err := unordered.Bind(s).First(c, plan.BindValue(key, 3))
 				require.NoError(t, err)
 				require.Contains(t, pairs, first)
 				for _, id := range []int64{1, 7, 8, 9} {
-					got, err := probe.Bind(s).Exists(c, []string{"by_id"}, q.BindValue(key, id))
+					got, err := probe.Bind(s).Exists(c, []string{"by_id"}, plan.BindValue(key, id))
 					require.NoError(t, err)
 					require.Equal(t, id == 1, got)
 				}
 				for _, n := range []int64{0, 1} {
-					got, err := b.Exists(c, nil, q.BindValue(key, n))
+					got, err := b.Exists(c, nil, plan.BindValue(key, n))
 					require.NoError(t, err)
 					require.Equal(t, n != 0, got)
 				}
-				total, found, err := scalar.Bind(s).MaybeOne(c, q.RowChoice{}, q.BindValue(key, 0))
+				total, found, err := scalar.Bind(s).MaybeOne(c, plan.RowChoice{}, plan.BindValue(key, 0))
 				require.NoError(t, err)
 				require.True(t, found)
 				require.Zero(t, total.ID)
-				_, found, err = grouped.Bind(s).MaybeFirst(c, q.BindValue(key, 0))
+				_, found, err = grouped.Bind(s).MaybeFirst(c, plan.BindValue(key, 0))
 				require.NoError(t, err)
 				require.False(t, found)
-				total, err = grouped.Bind(s).One(c, q.BindValue(key, 1))
+				total, err = grouped.Bind(s).One(c, plan.BindValue(key, 1))
 				require.NoError(t, err)
 				require.EqualValues(t, 1, total.ID)
-				_, err = grouped.Bind(s).One(c, q.BindValue(key, 6))
+				_, err = grouped.Bind(s).One(c, plan.BindValue(key, 6))
 				require.ErrorIs(t, err, q.ErrMultipleRows)
 				// The completed cursor releases the session for the next read.
 				found, err = probe.Bind(s).Exists(c, nil)
 				require.True(t, found)
 				return err
 			}))
-			all := q.BindValue(key, 10)
+			all := plan.BindValue(key, 10)
 			for _, hold := range []int{1, 2} {
 				require.NoError(t, run(ctx, func(c context.Context, s session) error {
 					b := locked.Bind(s)
@@ -259,12 +260,12 @@ func TestSingleReadLateError(t *testing.T) {
 	}
 	reg := q.NewRegistry(q.RegistryConfig[struct{}]{Deny: q.DenyLegacySQL})
 	table := q.DefinePlanSource(reg, q.TableSpec[record, int64]{Name: notes, RelationScope: q.Global()})
-	rel := q.FromTable(table, "n", q.Global())
-	src := q.RowsFrom(table, rel)
+	rel := plan.FromTable(table, "n", q.Global())
+	src := plan.RowsFrom(table, rel)
 	out := q.DefineView(reg, q.ViewSpec[lockResult]{Name: "entries"})
-	project := q.Project(q.Output(out, "id", q.Int8()), q.FieldOf(rel, "id", q.Int8()).Expr())
-	unbounded := q.DefineRows(out, "all_notes", src, q.RowsSpec{}, project)
-	bounded := q.DefineRowsWithForms(out, "some_notes", src, q.RowsSpec{}, q.ReadForms{Exact: true}, project)
+	project := plan.Project(plan.Output(out, "id", plan.Int8()), plan.FieldOf(rel, "id", plan.Int8()).Expr())
+	unbounded := plan.DefineRows(out, "all_notes", src, plan.RowsSpec{}, project)
+	bounded := plan.DefineRowsWithForms(out, "some_notes", src, plan.RowsSpec{}, plan.ReadForms{Exact: true}, project)
 	// A mismatched result type fails in each driver's result decoder.
 	entries := ns + ".entries"
 	_, err = db.ExecContext(t.Context(), "CREATE VIEW "+entries+" AS SELECT 'invalid'::text AS id")
@@ -272,15 +273,15 @@ func TestSingleReadLateError(t *testing.T) {
 	_, err = db.ExecContext(t.Context(), "GRANT SELECT ON "+entries+" TO "+role)
 	require.NoError(t, err)
 	bad := q.DefinePlanSource(reg, q.TableSpec[record, int64]{Name: entries, RelationScope: q.Global()})
-	b := q.FromTable(bad, "e", q.Global())
-	scan := q.DefineRead(out, "entry", q.Select(q.Project(q.Output(out, "id", q.Int8()), q.FieldOf(b, "id", q.Int8()).Expr())).
-		From(b).WithForms(q.ReadForms{First: q.UnorderedFirst}))
-	available := q.DefineExists(q.RowsFrom(bad, b), "present", q.RowFilter{})
+	b := plan.FromTable(bad, "e", q.Global())
+	scan := plan.DefineRead(out, "entry", plan.Select(plan.Project(plan.Output(out, "id", plan.Int8()), plan.FieldOf(b, "id", plan.Int8()).Expr())).
+		From(b).WithForms(plan.ReadForms{First: plan.UnorderedFirst}))
+	available := plan.DefineExists(plan.RowsFrom(bad, b), "present", plan.RowFilter{})
 	for _, driver := range []string{"pq", "pgx"} {
 		t.Run(driver, func(t *testing.T) {
 			run := authorizedEffectRunner(t, driver, db, pool, role, reg.SQLAuthority(), q.StatementPolicy{}, nil, false)
 			read := func(ctx context.Context, s session) error {
-				row, found, err := unbounded.Bind(s).MaybeOne(ctx, q.RowChoice{})
+				row, found, err := unbounded.Bind(s).MaybeOne(ctx, plan.RowChoice{})
 				require.Zero(t, row)
 				require.False(t, found)
 				return err
@@ -291,7 +292,7 @@ func TestSingleReadLateError(t *testing.T) {
 			err = read(t.Context(), direct)
 			require.Equal(t, "22012", q.SQLState(err), "%v", err)
 			// The bounded query completes after its second row on the server.
-			_, err = bounded.Bind(direct).One(t.Context(), q.RowChoice{})
+			_, err = bounded.Bind(direct).One(t.Context(), plan.RowChoice{})
 			require.ErrorIs(t, err, q.ErrMultipleRows)
 			require.NoError(t, run(t.Context(), func(c context.Context, s session) error {
 				row, found, err := scan.Bind(s).MaybeFirst(c)

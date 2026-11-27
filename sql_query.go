@@ -52,7 +52,7 @@ func TryDefineSQL[Row, Args, S any](r *Registry[S], spec SQLSpec) (*SQLQuery[Row
 func (q *SQLQuery[Row, Args, S]) Name() string { return q.plan.name }
 
 // SQL returns the compiled positional PostgreSQL SQL ($1..$n).
-func (q *SQLQuery[Row, Args, S]) SQL() string { return q.plan.shape.sql }
+func (q *SQLQuery[Row, Args, S]) SQL() string { return q.plan.shape.SQL }
 
 // Definition returns a deep copy of the registered Definition for sqlcheck.
 func (q *SQLQuery[Row, Args, S]) Definition() Definition { return q.plan.definition() }

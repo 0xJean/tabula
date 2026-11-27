@@ -1,15 +1,15 @@
 # Composing typed queries
 
-Queries retain their physical descriptors, PostgreSQL types, codecs and input
+Typed query composition lives in `github.com/0xJean/tabula/plan` (`package plan`). Queries retain their physical descriptors, PostgreSQL types, codecs and input
 identities across nesting. An intermediate relation needs exported handles; only
-the final executable read needs a View and its Go decoder. Constructing a query
+the final executable read needs a `tabula.View` and its Go decoder. Constructing a query
 performs no database access and registers no statement.
 
 ```go
-value := tabula.Export("value", itemID.Expr())
-selected := tabula.Derived("selected", tabula.Select(value.Project()).From(items))
-query := tabula.Select(tabula.Project(outValue, value.From(selected))).From(selected)
-plan := tabula.DefineRead(output, "selected_items", query)
+value := plan.Export("value", itemID.Expr())
+selected := plan.Derived("selected", plan.Select(value.Project()).From(items))
+query := plan.Select(plan.Project(outValue, value.From(selected))).From(selected)
+readPlan := plan.DefineRead(output, "selected_items", query)
 ```
 
 The exported identity belongs to `value`, not its name. Another `Export("value",
@@ -24,9 +24,9 @@ blocks without capturing another occurrence. A lateral join sees preceding
 inputs only. An ordinary derived source cannot capture enclosing fields.
 
 ```go
-latest := tabula.ScalarSubquery(tabula.SelectValue(noteLabel.Expr()).From(notes).
-    Where(tabula.Eq(noteItemID.Expr(), tabula.Outer(itemID.Expr()))).
-    OrderBy(tabula.Desc(noteID)).Take(1))
+latest := plan.ScalarSubquery(plan.SelectValue(noteLabel.Expr()).From(notes).
+    Where(plan.Eq(noteItemID.Expr(), plan.Outer(itemID.Expr()))).
+    OrderBy(plan.Desc(noteID)).Take(1))
 ```
 
 A scalar query produces NULL on zero rows and PostgreSQL error `21000` on more
@@ -58,12 +58,12 @@ one result row. It preserves volatile provenance and does not establish a stable
 page key. `DefaultMaterialization` and `NotMaterialized` provide no such guarantee.
 
 ```go
-value := tabula.Export("value", tabula.ArrayExpr(tabula.GenRandomUUID()))
-generated := tabula.CTE("generated", tabula.Select(value.Project()).From(items),
-    tabula.Materialized)
+value := plan.Export("value", plan.ArrayExpr(plan.GenRandomUUID()))
+generated := plan.CTE("generated", plan.Select(value.Project()).From(items),
+    plan.Materialized)
 g := generated.As("g")
-query := tabula.Select(tabula.Project(outArray,
-    tabula.NullIf(value.From(g), otherArray.Expr()))).From(g).With(generated)
+query := plan.Select(plan.Project(outArray,
+    plan.NullIf(value.From(g), otherArray.Expr()))).From(g).With(generated)
 ```
 
 Direct volatile-array `NullIf` remains rejected. The explicit stored field above

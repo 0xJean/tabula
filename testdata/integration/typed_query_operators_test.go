@@ -12,6 +12,7 @@ import (
 
 	q "github.com/0xJean/tabula"
 	"github.com/0xJean/tabula/pgxdriver"
+	tplan "github.com/0xJean/tabula/plan"
 	"github.com/0xJean/tabula/stdsql"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
@@ -54,14 +55,14 @@ func TestQueryHiddenComparisonsIgnoreSearchPathDrivers(t *testing.T) {
 		t.Run(driver, func(t *testing.T) {
 			reg := q.NewRegistry(q.RegistryConfig[itemScope]{Deny: q.DenyLegacySQL, DefaultTypes: []q.TypeDefault{q.TypeMapping(q.CatalogType[itemScope]("pg_catalog", "int8", nil))}})
 			table := q.DefinePlanSource(reg, q.TableSpec[item, int64]{Name: schema + ".items", RelationScope: q.ByScopeColumn()})
-			source := q.MapTable(table).As("i")
-			id := q.Export("value", q.FieldOf(source.Rel(), "id", q.Int8()).Expr())
-			d := q.Derived("d", q.Select(id.Project()).From(source))
+			source := tplan.MapTable(table).As("i")
+			id := tplan.Export("value", tplan.FieldOf(source.Rel(), "id", tplan.Int8()).Expr())
+			d := tplan.Derived("d", tplan.Select(id.Project()).From(source))
 			out := q.DefineView(reg, q.ViewSpec[composedValue]{Name: "entries"})
-			plan := q.DefineRead(out, "visible", q.Select(q.Project(q.Output(out, "value", q.Int8()), id.From(d))).From(d))
+			plan := tplan.DefineRead(out, "visible", tplan.Select(tplan.Project(tplan.Output(out, "value", tplan.Int8()), id.From(d))).From(d))
 			notes := q.DefinePlanSource(reg, q.TableSpec[note, int64]{Name: schema + ".notes", RelationScope: q.Global(), SoftDelete: &q.SoftDelete{DeletedValue: "closed"}})
-			n := q.MapTable(notes).As("n")
-			live := q.DefineRead(out, "live", q.Select(q.Project(q.Output(out, "value", q.Int8()), q.FieldOf(n.Rel(), "id", q.Int8()).Expr())).From(n).Take(10))
+			n := tplan.MapTable(notes).As("n")
+			live := tplan.DefineRead(out, "live", tplan.Select(tplan.Project(tplan.Output(out, "value", tplan.Int8()), tplan.FieldOf(n.Rel(), "id", tplan.Int8()).Expr())).From(n).Take(10))
 			shape := out.Definition().StatementShapes["visible.scoped.data"]
 			for _, fn := range []string{`pg_catalog.int8eq("pg_catalog"."int8","pg_catalog"."int8")`, `pg_catalog.booleq("pg_catalog"."bool","pg_catalog"."bool")`} {
 				require.Contains(t, shape.Privileges, q.DefinedPrivilege{Function: fn, Privilege: "EXECUTE"})

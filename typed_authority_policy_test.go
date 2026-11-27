@@ -3,19 +3,25 @@ package tabula
 import (
 	"testing"
 
+	"github.com/0xJean/tabula/internal/planrt"
 	"github.com/stretchr/testify/require"
 )
 
-func signedPolicyCall(query string, effects statementEffects) (SQLAuthority, *int64, AuthorizedStatement) {
-	authority := SQLAuthority{issuer: &statementIssuer{}}
+func signedPolicyCall(query string, effects planrt.StatementEffects) (SQLAuthority, *int64, AuthorizedStatement) {
+	authority := SQLAuthority{issuer: &planrt.Issuer{}}
 	owner := new(int64)
-	shape := &compiledShape{authority: authority.issuer, sql: query,
-		shape: StatementShape{Effects: EffectWrite}, effects: effects}
+	shape := &planrt.CompiledShape{
+		Authority:    authority.issuer,
+		SQL:          query,
+		Effects:      uint8(EffectWrite),
+		HasResult:    true,
+		WriteEffects: effects,
+	}
 	return authority, owner, AuthorizedStatement{method: CallReturningEach, shape: shape, owner: owner}
 }
 
 func TestSignedWriteCTEPolicy(t *testing.T) {
-	effects := statementEffects{writeCTE: true, writes: []statementWrite{{command: "INSERT"}}}
+	effects := planrt.StatementEffects{WriteCTE: true, Writes: []planrt.WriteEffect{{Command: "INSERT"}}}
 	policy := StatementPolicy{Read: []string{"select"}, Write: []string{"with", "insert"}, RequireReturning: true, AllowAuthorizedWriteCTE: true}
 	guard, err := policy.Compile(false)
 	require.NoError(t, err)
@@ -37,7 +43,7 @@ func TestSignedWriteCTEPolicy(t *testing.T) {
 		view.Effects = EffectRead
 		require.NoError(t, guard.CheckAuthorized(authority, owner, CallReturningEach, call))
 		unsigned := *call.shape
-		unsigned.effects = statementEffects{}
+		unsigned.WriteEffects = planrt.StatementEffects{}
 		call.shape = &unsigned
 		require.ErrorIs(t, guard.CheckAuthorized(authority, owner, CallReturningEach, call), ErrForbiddenStatement)
 	}
@@ -60,7 +66,7 @@ func TestSignedWriteCTEPolicy(t *testing.T) {
 	noWith, err := policy.Compile(false)
 	require.NoError(t, err)
 	require.ErrorIs(t, noWith.CheckAuthorized(authority, owner, CallReturningEach, call), ErrForbiddenStatement)
-	call.shape.effects.writes = append(call.shape.effects.writes, statementWrite{command: "UPDATE"})
+	call.shape.WriteEffects.Writes = append(call.shape.WriteEffects.Writes, planrt.WriteEffect{Command: "UPDATE"})
 	require.ErrorIs(t, guard.CheckAuthorized(authority, owner, CallReturningEach, call), ErrForbiddenStatement)
 }
 
@@ -69,25 +75,25 @@ func TestSignedWriteRoutinePolicy(t *testing.T) {
 	guard, err := policy.Compile(false)
 	require.NoError(t, err)
 	require.True(t, guard.Enabled())
-	authority, owner, call := signedPolicyCall("SELECT public.append_note($1) AS id", statementEffects{writeRoutine: true})
-	call.shape.shape.Routines = []RoutineRequirement{{Signature: "public.append_note(text)"}}
-	call.shape.shape.Privileges = []DefinedPrivilege{{Function: "public.append_note(text)", Privilege: "EXECUTE"}}
+	authority, owner, call := signedPolicyCall("SELECT public.append_note($1) AS id", planrt.StatementEffects{WriteRoutine: true})
+	call.shape.Routines = []planrt.RoutineMeta{{Signature: "public.append_note(text)"}}
+	call.shape.FunctionGrants = []planrt.FunctionGrant{{Function: "public.append_note(text)", Privilege: "EXECUTE"}}
 	require.NoError(t, guard.CheckAuthorized(authority, owner, CallReturningEach, call))
 	for _, method := range []string{"Scan", "Each", "Returning", "Exec"} {
-		require.ErrorIs(t, guard.Check(method, call.shape.sql), ErrForbiddenStatement)
+		require.ErrorIs(t, guard.Check(method, call.shape.SQL), ErrForbiddenStatement)
 	}
-	call.shape.shape.Privileges[0].Function = "public.other(text)"
+	call.shape.FunctionGrants[0].Function = "public.other(text)"
 	require.ErrorIs(t, guard.CheckAuthorized(authority, owner, CallReturningEach, call), ErrForbiddenStatement)
-	call.shape.shape.Privileges[0].Function = "public.append_note(text)"
-	call.shape.shape.Routines[0].ReadOnly = true
+	call.shape.FunctionGrants[0].Function = "public.append_note(text)"
+	call.shape.Routines[0].ReadOnly = true
 	require.ErrorIs(t, guard.CheckAuthorized(authority, owner, CallReturningEach, call), ErrForbiddenStatement)
-	call.shape.shape.Routines[0].ReadOnly = false
-	call.shape.sql += "; COMMIT"
+	call.shape.Routines[0].ReadOnly = false
+	call.shape.SQL += "; COMMIT"
 	require.ErrorIs(t, guard.CheckAuthorized(authority, owner, CallReturningEach, call), ErrForbiddenStatement)
 }
 
 func TestSignedUpsertChecksEveryCommand(t *testing.T) {
-	authority, owner, call := signedPolicyCall("INSERT INTO items VALUES ($1) ON CONFLICT(id) DO UPDATE SET note=$2 RETURNING id", statementEffects{writes: []statementWrite{{command: "INSERT"}, {command: "UPDATE"}}})
+	authority, owner, call := signedPolicyCall("INSERT INTO items VALUES ($1) ON CONFLICT(id) DO UPDATE SET note=$2 RETURNING id", planrt.StatementEffects{Writes: []planrt.WriteEffect{{Command: "INSERT"}, {Command: "UPDATE"}}})
 	insertOnly, err := (StatementPolicy{Write: []string{"insert"}}).Compile(false)
 	require.NoError(t, err)
 	require.ErrorIs(t, insertOnly.CheckAuthorized(authority, owner, CallReturningEach, call), ErrForbiddenStatement)

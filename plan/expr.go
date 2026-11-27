@@ -1,0 +1,293 @@
+package plan
+
+import (
+	"github.com/0xJean/tabula"
+
+	"fmt"
+	"maps"
+	"slices"
+	"strings"
+)
+
+// Expr is a typed expression assembled from descriptor fields and inputs.
+type Expr[V any] struct {
+	part     expressionPart
+	kind     tabula.PGType[V]
+	nullable bool
+}
+
+// Pred is an Expr[bool] and can be passed directly to Project. A nullable
+// predicate projects SQL UNKNOWN as NULL and follows three-valued logic in WHERE.
+type Pred = Expr[bool]
+
+type expressionPart interface {
+	render(*typedCompiler) (string, error)
+}
+
+type typedCompiler struct {
+	queryReads   map[physicalName]bool
+	queryShapes  []tabula.StatementShape
+	block        *queryBlock
+	inputPrefix  string
+	inputAliases map[*typedInput]*typedInput
+	querySerial  int
+	sources      map[*occurrence]bool // true after rendering the occurrence's scope predicate
+	from         []*occurrence
+	params       *parameterLayout
+	reads        map[physicalColumn]catalogType
+	selectCols   map[physicalName]map[string]bool
+	hasSecret    bool
+	scopeType    catalogType
+	functions    map[string]bool
+	// New SQL forms include native aggregates in their grant inventory.
+	// Legacy-only forms retain their original snapshots.
+	extendedForm     bool
+	legacyAggregates []aggregateCall
+
+	conflictTarget *occurrence
+}
+
+// requireNative records the exact pg_proc identity selected by a closed
+// expression overload, including polymorphic identities when applicable.
+func (c *typedCompiler) requireNative(signature string) {
+	if c.functions == nil {
+		c.functions = make(map[string]bool)
+	}
+	c.functions[signature] = true
+}
+
+func newTypedCompiler(scoped bool, sources ...*occurrence) (*typedCompiler, error) {
+	c := &typedCompiler{
+		sources: make(map[*occurrence]bool), from: slices.Clone(sources), reads: make(map[physicalColumn]catalogType),
+		selectCols: make(map[physicalName]map[string]bool),
+	}
+	aliases := make(map[string]bool)
+	needsScope := false
+	for _, src := range sources {
+		if src == nil || src.entry == nil || src.issuer == nil {
+			return nil, fmt.Errorf("tabula: undeclared relation occurrence")
+		}
+		if src.issuer != sources[0].issuer {
+			return nil, fmt.Errorf("tabula: relations belong to different registries")
+		}
+		if aliases[src.alias] {
+			return nil, fmt.Errorf("tabula: duplicate relation alias %q", src.alias)
+		}
+		aliases[src.alias] = true
+		c.sources[src] = false
+		c.selectCols[src.table] = make(map[string]bool)
+		needsScope = needsScope || src.scope == tabula.ByScopeColumn()
+	}
+	c.params = newParameterLayout(scoped && needsScope)
+	return c, nil
+}
+
+// scopePredicate emits only the declared occurrence's scope condition. A
+// database-enforced or global relation never reserves a session parameter.
+func (c *typedCompiler) scopePredicate(src *occurrence, kind catalogType) (string, error) {
+	if _, ok := c.sources[src]; !ok {
+		return "", fmt.Errorf("tabula: undeclared scope occurrence")
+	}
+	if !c.params.scoped || src.scope != tabula.ByScopeColumn() {
+		return "", nil
+	}
+	if !matchesColumnType(src.scopeGoType, kind.GoType) || (c.scopeType.GoType != nil && !sameSQLType(c.scopeType, kind)) {
+		return "", fmt.Errorf("tabula: incompatible PostgreSQL type for scope column on %q", src.alias)
+	}
+	col := physicalColumn{Table: src.table, Name: src.scopeColumn}
+	if err := col.Record(c.reads, kind); err != nil {
+		return "", err
+	}
+	c.scopeType = kind
+	c.selectCols[src.table][src.scopeColumn] = true
+	c.sources[src] = true
+	c.hasSecret = c.hasSecret || src.scopeSecret
+	alias := src.alias
+	if c.block != nil && c.block.physicalAliases[src] != "" {
+		alias = c.block.physicalAliases[src]
+	}
+	op, err := c.comparisonOperator(kind, "=")
+	if err != nil {
+		return "", err
+	}
+	return "(" + typedQuote(alias) + "." + typedQuote(src.scopeColumn) + " " + op + " " + kind.Cast("$1") + ")", nil
+}
+
+// readRequirements records each physical table once, even if two aliases
+// refer to it. Ordered output makes the snapshot independent of map iteration.
+func (c *typedCompiler) readRequirements() (tabula.StatementShape, error) {
+	var s tabula.StatementShape
+	s.Effects = tabula.EffectRead
+	tables := make(map[string]physicalName)
+	for _, src := range c.from {
+		if c.queryReads != nil && !c.queryReads[src.table] && len(c.selectCols[src.table]) == 0 {
+			continue
+		}
+		if err := src.checkCommand("SELECT"); err != nil {
+			return tabula.StatementShape{}, err
+		}
+		tables[src.table.SQL()] = src.table
+	}
+	for _, table := range slices.Sorted(maps.Keys(tables)) {
+		s.Access = append(s.Access, tabula.ShapeAccess{Relation: table, Command: "SELECT"})
+		columns := slices.Sorted(maps.Keys(c.selectCols[tables[table]]))
+		if len(columns) == 0 {
+			s.AnyColumnSelect = append(s.AnyColumnSelect, table)
+		} else {
+			s.Privileges = append(s.Privileges, tabula.DefinedPrivilege{Table: table, Privilege: "SELECT", Columns: columns})
+		}
+	}
+	return s, nil
+}
+
+// Expr references this column on its declaring occurrence.
+func (f Field[V]) Expr() Expr[V] {
+	if f.ref == nil {
+		return Expr[V]{}
+	}
+	return Expr[V]{f.ref, f.kind, f.ref.nullable}
+}
+
+func (c *typedCompiler) read(f *fieldRef) error {
+	if f == nil {
+		return fmt.Errorf("tabula: undeclared field")
+	}
+	if _, ok := c.sources[f.source]; !ok {
+		return fmt.Errorf("tabula: field is outside the statement's relation scope")
+	}
+	if c.block != nil {
+		if err := c.block.resolvePhysical(f.source, 0); err != nil {
+			return err
+		}
+	}
+	column := physicalColumn{Table: f.source.table, Name: f.name}
+	if err := column.Record(c.reads, f.kind); err != nil {
+		return err
+	}
+	c.selectCols[f.source.table][f.name] = true
+	c.hasSecret = c.hasSecret || f.secret
+	return nil
+}
+
+func (f *fieldRef) render(c *typedCompiler) (string, error) {
+	if err := c.read(f); err != nil {
+		return "", err
+	}
+	alias := f.source.alias
+	if c.block != nil && c.block.physicalAliases[f.source] != "" {
+		alias = c.block.physicalAliases[f.source]
+	}
+	return typedQuote(alias) + "." + typedQuote(f.name), nil
+}
+
+// Expr references a bound value. Its value never enters the SQL text.
+func (s Slot[V]) Expr() Expr[V] {
+	if s.input == nil {
+		return Expr[V]{}
+	}
+	return Expr[V]{part: s.input, kind: s.kind, nullable: typeNullable(s.kind)}
+}
+
+func (i *typedInput) render(c *typedCompiler) (string, error) {
+	if c.inputAliases != nil && c.inputPrefix != "" && i.fixed == nil && c.inputAliases[i] == nil {
+		alias := *i
+		alias.name = c.inputPrefix + i.name
+		c.inputAliases[i] = &alias
+	}
+	if alias := c.inputAliases[i]; alias != nil {
+		i = alias
+	}
+	slot, err := c.params.parameter(i)
+	if err != nil {
+		return "", err
+	}
+	return i.kind.Cast(slot), nil
+}
+
+type comparison struct {
+	op           string
+	left, right  expressionPart
+	matchingType bool
+	kind         catalogType
+}
+
+func (v comparison) render(c *typedCompiler) (string, error) {
+	if !v.matchingType || v.left == nil || v.right == nil {
+		if v.op == "LIKE" || v.op == "ILIKE" {
+			return "", fmt.Errorf("tabula: %s requires declared PostgreSQL string operands", v.op)
+		}
+		return "", fmt.Errorf("tabula: %s requires operands of the same declared PostgreSQL type", v.op)
+	}
+	left, err := v.left.render(c)
+	if err != nil {
+		return "", err
+	}
+	right, err := v.right.render(c)
+	if err != nil {
+		return "", err
+	}
+	op, err := c.comparisonOperator(v.kind, v.op)
+	if err != nil {
+		return "", err
+	}
+	return "(" + left + " " + op + " " + right + ")", nil
+}
+
+func (c *typedCompiler) comparisonOperator(kind catalogType, op string) (string, error) {
+	if !c.params.graph {
+		return op, nil
+	}
+	operation := map[string]string{"=": "eq", "<>": "ne", "<": "lt", "<=": "le", ">": "gt", ">=": "ge"}[op]
+	if operation == "" {
+		return op, nil
+	}
+	if readComparable(kind) {
+		if err := requireReadComparison(c, kind, operation); err != nil {
+			return "", err
+		}
+	}
+	return "OPERATOR(pg_catalog." + op + ")", nil
+}
+
+func typedComparison[V any](op string, left, right Expr[V], nullable bool) Pred {
+	return Pred{comparison{op, left.part, right.part, sameSQLType(typeID(left.kind), typeID(right.kind)), typeID(left.kind)}, Bool(), nullable}
+}
+
+// Eq compares two expressions of the same PostgreSQL type.
+func Eq[V any](left, right Expr[V]) Pred {
+	return typedComparison("=", left, right, left.nullable || right.nullable)
+}
+
+// IsNotDistinct compares values using PostgreSQL's null-safe equality.
+func IsNotDistinct[V any](left, right Expr[V]) Pred {
+	return typedComparison("IS NOT DISTINCT FROM", left, right, false)
+}
+
+// IsDistinct compares values using PostgreSQL's null-safe inequality.
+func IsDistinct[V any](left, right Expr[V]) Pred {
+	return typedComparison("IS DISTINCT FROM", left, right, false)
+}
+
+type conjunction []Pred
+
+// And combines two or more typed predicates in declaration order.
+func And(first, second Pred, rest ...Pred) Pred {
+	terms := slices.Concat([]Pred{first, second}, rest)
+	nullable := slices.ContainsFunc(terms, func(p Pred) bool { return p.nullable })
+	return Pred{conjunction(terms), Bool(), nullable}
+}
+
+func (terms conjunction) render(c *typedCompiler) (string, error) {
+	parts := make([]string, len(terms))
+	for i, term := range terms {
+		if term.part == nil || !sameSQLType(typeID(term.kind), typeID(Bool())) {
+			return "", fmt.Errorf("tabula: AND requires a declared boolean predicate")
+		}
+		part, err := term.part.render(c)
+		if err != nil {
+			return "", err
+		}
+		parts[i] = part
+	}
+	return "(" + strings.Join(parts, " AND ") + ")", nil
+}

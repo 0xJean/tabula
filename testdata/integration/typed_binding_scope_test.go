@@ -9,6 +9,7 @@ import (
 
 	q "github.com/0xJean/tabula"
 	pg "github.com/0xJean/tabula/pgtype"
+	tplan "github.com/0xJean/tabula/plan"
 	"github.com/stretchr/testify/require"
 )
 
@@ -57,23 +58,23 @@ func TestMappedPrivateInputsAcrossDrivers(t *testing.T) {
 			reg := q.NewRegistry(q.RegistryConfig[itemScope]{Deny: q.DenyLegacySQL})
 			items := q.DefinePlanSource(reg, q.TableSpec[item, int64]{Name: table,
 				SoftDelete: &q.SoftDelete{DeletedValue: "closed", AliveValue: "open"}})
-			layout := q.MapTable(items, q.ColumnType("id", idType), q.ColumnType("scope_id", scopeType), q.ColumnType("state", liveType))
+			layout := tplan.MapTable(items, tplan.ColumnType("id", idType), tplan.ColumnType("scope_id", scopeType), tplan.ColumnType("state", liveType))
 			src := layout.As("i")
-			id := q.MappedColumn[int64](layout, "id")
+			id := tplan.MappedColumn[int64](layout, "id")
 			field, floor := id.On(src.Rel()), id.Input("floor")
-			plan := q.DefineTableRows(src, "by_id", q.RowsSpec{
-				RowFilter: q.RowFilter{Where: q.Ge(field.Expr(), floor.Expr())},
-				Orders:    []q.RowOrder{{Name: "forward", Terms: []q.RowTerm{q.Asc(field)}}},
-				Pages:     q.RowPages{Keyset: true, MaxLimit: 8},
-			}, q.SelectColumns(field.Column()))
-			binding := q.BindValue(floor, 0)
-			cursor, err := plan.Cursor("forward", q.At(field, int64(0)))
+			plan := tplan.DefineTableRows(src, "by_id", tplan.RowsSpec{
+				RowFilter: tplan.RowFilter{Where: tplan.Ge(field.Expr(), floor.Expr())},
+				Orders:    []tplan.RowOrder{{Name: "forward", Terms: []tplan.RowTerm{tplan.Asc(field)}}},
+				Pages:     tplan.RowPages{Keyset: true, MaxLimit: 8},
+			}, tplan.SelectColumns(field.Column()))
+			binding := tplan.BindValue(floor, 0)
+			cursor, err := plan.Cursor("forward", tplan.At(field, int64(0)))
 			require.NoError(t, err)
 			require.Equal(t, 2, idCalls)
 			require.Equal(t, 1, liveCalls)
-			_, err = plan.Cursor("forward", q.At(field, int64(-1)))
+			_, err = plan.Cursor("forward", tplan.At(field, int64(-1)))
 			require.ErrorIs(t, err, rejected)
-			choice := q.RowChoice{Order: "forward", Page: q.AfterPage, Limit: 8, After: cursor}
+			choice := tplan.RowChoice{Order: "forward", Page: tplan.AfterPage, Limit: 8, After: cursor}
 			require.NoError(t, runRowPlan(t, db, pool, driver, reg.SQLAuthority(), role, 0, q.LogConfig{}, func(ctx context.Context, s q.Session[itemScope]) error {
 				for range 2 {
 					rows, total, err := plan.Bind(s).List(ctx, choice, binding)

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	q "github.com/0xJean/tabula"
+	tplan "github.com/0xJean/tabula/plan"
 	"github.com/stretchr/testify/require"
 )
 
@@ -22,15 +23,15 @@ INSERT INTO `+schema+`.items SELECT n,0,'note' FROM generate_series(1,100) AS n`
 			require.NoError(t, err)
 			reg := q.NewRegistry(q.RegistryConfig[struct{}]{Deny: q.DenyLegacySQL})
 			table := q.DefinePlanSource(reg, q.TableSpec[writeItem, int64]{Name: schema + ".items", RelationScope: q.Global()})
-			src := q.MapTable(table).As("i")
-			id, rank := q.FieldOf(src.Rel(), "id", q.Int8()), q.FieldOf(src.Rel(), "rank", q.Int4())
-			value := q.Input("rank", q.Int4())
-			plan := q.DefineTableReturning(src, "change", q.UpdateOf(src).Set(q.Assign(rank, value.Expr())).AllRows(), q.SelectColumns(id.Column()))
+			src := tplan.MapTable(table).As("i")
+			id, rank := tplan.FieldOf(src.Rel(), "id", tplan.Int8()), tplan.FieldOf(src.Rel(), "rank", tplan.Int4())
+			value := tplan.Input("rank", tplan.Int4())
+			plan := tplan.DefineTableReturning(src, "change", tplan.UpdateOf(src).Set(tplan.Assign(rank, value.Expr())).AllRows(), tplan.SelectColumns(id.Column()))
 			run := authorizedEffectRunner(t, driver, db, pool, "", reg.SQLAuthority(), q.StatementPolicy{}, nil, false)
 			err = run(ctx, func(ctx context.Context, s session) error {
 				cancelCtx, cancel := context.WithCancel(ctx)
 				defer cancel()
-				for _, err := range plan.Bind(s).Iter(cancelCtx, q.BindValue(value, int32(1))) {
+				for _, err := range plan.Bind(s).Iter(cancelCtx, tplan.BindValue(value, int32(1))) {
 					if err != nil {
 						return err
 					}
@@ -49,7 +50,7 @@ INSERT INTO `+schema+`.items SELECT n,0,'note' FROM generate_series(1,100) AS n`
 				}
 			}()
 			err = run(ctx, func(ctx context.Context, s session) error {
-				next, closeRows := iter.Pull2(plan.Bind(s).Iter(ctx, q.BindValue(value, int32(2))))
+				next, closeRows := iter.Pull2(plan.Bind(s).Iter(ctx, tplan.BindValue(value, int32(2))))
 				stop = closeRows
 				_, err, ok := next()
 				require.True(t, ok)
@@ -77,15 +78,15 @@ CREATE TRIGGER fail_items AFTER UPDATE ON `+schema+`.items FOR EACH STATEMENT EX
 			require.NoError(t, err)
 			reg := q.NewRegistry(q.RegistryConfig[struct{}]{Deny: q.DenyLegacySQL})
 			table := q.DefinePlanSource(reg, q.TableSpec[writeItem, int64]{Name: schema + ".items", RelationScope: q.Global()})
-			src := q.MapTable(table).As("i")
-			id, rank := q.FieldOf(src.Rel(), "id", q.Int8()), q.FieldOf(src.Rel(), "rank", q.Int4())
-			value := q.Input("rank", q.Int4())
-			plan := q.DefineTableReturning(src, "change", q.UpdateOf(src).Set(q.Assign(rank, value.Expr())).AllRows(), q.SelectColumns(id.Column()))
+			src := tplan.MapTable(table).As("i")
+			id, rank := tplan.FieldOf(src.Rel(), "id", tplan.Int8()), tplan.FieldOf(src.Rel(), "rank", tplan.Int4())
+			value := tplan.Input("rank", tplan.Int4())
+			plan := tplan.DefineTableReturning(src, "change", tplan.UpdateOf(src).Set(tplan.Assign(rank, value.Expr())).AllRows(), tplan.SelectColumns(id.Column()))
 			run := authorizedEffectRunner(t, driver, db, pool, "", reg.SQLAuthority(), q.StatementPolicy{}, nil, false)
 			seen := 0
 			var visible error
 			err = run(ctx, func(ctx context.Context, s session) error {
-				for _, err := range plan.Bind(s).Iter(ctx, q.BindValue(value, int32(1))) {
+				for _, err := range plan.Bind(s).Iter(ctx, tplan.BindValue(value, int32(1))) {
 					if err != nil {
 						visible = err
 						return nil // This observed operation failure is recoverable.
@@ -104,7 +105,7 @@ CREATE TRIGGER fail_items AFTER UPDATE ON `+schema+`.items FOR EACH STATEMENT EX
 			err = run(ctx, func(ctx context.Context, s session) error {
 				operationCtx, cancel := context.WithCancel(ctx)
 				defer cancel()
-				for _, err := range plan.Bind(s).Iter(operationCtx, q.BindValue(value, int32(1))) {
+				for _, err := range plan.Bind(s).Iter(operationCtx, tplan.BindValue(value, int32(1))) {
 					require.NoError(t, err)
 					seen++
 					cancel()

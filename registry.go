@@ -18,6 +18,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/0xJean/tabula/internal/planrt"
 )
 
 // Session executes SQL under a single fixed scope. Transaction adapters and
@@ -106,7 +108,7 @@ type RegistryConfig[S any] struct {
 // metrics, and the list of defined tables and views. Applications normally
 // declare one package-level Registry and may construct isolated registries in tests.
 type Registry[S any] struct {
-	statementIssuer     *statementIssuer
+	statementIssuer     *planrt.Issuer
 	prefix              string
 	scopeType           reflect.Type
 	scopeID             func(S) any
@@ -130,7 +132,7 @@ type Registry[S any] struct {
 	typeFamilies map[reflect.Type][]string
 	defs         []*registration
 	views        []*registration
-	typedColumns map[physicalColumn]catalogType
+	typedColumns map[planrt.PhysicalColumn]planrt.CatalogType
 }
 
 // NewRegistry creates a Registry preloaded with built-in scalar zero
@@ -153,7 +155,7 @@ func NewRegistry[S any](cfg RegistryConfig[S]) *Registry[S] {
 		}
 	}
 	r := &Registry[S]{
-		statementIssuer:     &statementIssuer{strict: cfg.Deny&DenyLegacySQL != 0},
+		statementIssuer:     &planrt.Issuer{Strict: cfg.Deny&DenyLegacySQL != 0},
 		prefix:              prefix,
 		scopeType:           reflect.TypeFor[S](),
 		scopeID:             cfg.ScopeID,
@@ -237,12 +239,13 @@ func snapshots[D Definition | ViewDefinition](entries []*registration) []D {
 
 // registration belongs to the Registry. All accesses use the registry mutex.
 type registration struct {
+	id    *planrt.EntryID
 	def   Definition
 	bySQL map[string]stmtMeta
 }
 
 func (r *Registry[S]) record(def Definition, view bool) *registration {
-	e := &registration{def: def, bySQL: make(map[string]stmtMeta)}
+	e := &registration{id: new(planrt.EntryID), def: def, bySQL: make(map[string]stmtMeta)}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if view {

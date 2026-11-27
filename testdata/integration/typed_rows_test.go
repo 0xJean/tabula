@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/0xJean/tabula"
+	tplan "github.com/0xJean/tabula/plan"
 	"github.com/0xJean/tabula/sqlcheck"
 	"github.com/stretchr/testify/require"
 )
@@ -80,40 +81,40 @@ func TestRegisteredRowPlans(t *testing.T) {
 			trace := new(rowTracer)
 			reg := tabula.NewRegistry(tabula.RegistryConfig[itemScope]{Deny: tabula.DenyLegacySQL, Tracer: trace, ScopeID: func(s itemScope) any { return int64(s) }})
 			tab := tabula.Define(reg, tabula.TableSpec[planItem, int64]{Name: table, AllowDelete: true})
-			rel := tabula.FromTable(tab, "i", tabula.ByScopeColumn())
-			scope := tabula.FieldOf(rel, "scope_id", tabula.CatalogType[itemScope]("pg_catalog", "int8", nil))
-			src := tabula.RowsFrom(tab, rel, scope.Column())
-			id, rank := tabula.FieldOf(rel, "id", tabula.Int8()), tabula.FieldOf(rel, "rank", tabula.Int4())
-			label, revision := tabula.FieldOf(rel, "label", tabula.Text()), tabula.FieldOf(rel, "revision", tabula.Int4())
-			removed := tabula.FieldOf(rel, "removed", tabula.Bool())
-			minimum := tabula.Input("minimum", tabula.Int8())
-			minRank, newRank := tabula.Input("min_rank", tabula.Int4()), tabula.Input("new_rank", tabula.Int4())
-			expected, remove := tabula.Input("previous", tabula.Int4()), tabula.Input("remove", tabula.Bool())
+			rel := tplan.FromTable(tab, "i", tabula.ByScopeColumn())
+			scope := tplan.FieldOf(rel, "scope_id", tabula.CatalogType[itemScope]("pg_catalog", "int8", nil))
+			src := tplan.RowsFrom(tab, rel, scope.Column())
+			id, rank := tplan.FieldOf(rel, "id", tplan.Int8()), tplan.FieldOf(rel, "rank", tplan.Int4())
+			label, revision := tplan.FieldOf(rel, "label", tplan.Text()), tplan.FieldOf(rel, "revision", tplan.Int4())
+			removed := tplan.FieldOf(rel, "removed", tplan.Bool())
+			minimum := tplan.Input("minimum", tplan.Int8())
+			minRank, newRank := tplan.Input("min_rank", tplan.Int4()), tplan.Input("new_rank", tplan.Int4())
+			expected, remove := tplan.Input("previous", tplan.Int4()), tplan.Input("remove", tplan.Bool())
 			out := tabula.DefineView(reg, tabula.ViewSpec[planResult]{Name: "entries"})
 			quiet := []tabula.StatementOption{tabula.Quiet()}
-			filter := tabula.RowFilter{Observe: quiet, Optional: []tabula.RowPredicate{{Name: "minimum", When: tabula.Ge(id.Expr(), minimum.Expr())}}}
-			search := tabula.DefineRows(out, "search", src, tabula.RowsSpec{RowFilter: filter,
-				Orders: []tabula.RowOrder{{Name: "forward", Terms: []tabula.RowTerm{tabula.Asc(label), tabula.Desc(id)}}, {Name: "reverse", Terms: []tabula.RowTerm{tabula.Desc(label), tabula.Asc(id)}}},
-				Pages:  tabula.RowPages{Unpaged: true, Offset: true, Keyset: true, MaxLimit: 10, MaxOffset: 12}},
-				tabula.Project(tabula.Output(out, "id", tabula.Int8()), id.Expr()), tabula.Project(tabula.Output(out, "label", tabula.Text()), label.Expr()))
+			filter := tplan.RowFilter{Observe: quiet, Optional: []tplan.RowPredicate{{Name: "minimum", When: tplan.Ge(id.Expr(), minimum.Expr())}}}
+			search := tplan.DefineRows(out, "search", src, tplan.RowsSpec{RowFilter: filter,
+				Orders: []tplan.RowOrder{{Name: "forward", Terms: []tplan.RowTerm{tplan.Asc(label), tplan.Desc(id)}}, {Name: "reverse", Terms: []tplan.RowTerm{tplan.Desc(label), tplan.Asc(id)}}},
+				Pages:  tplan.RowPages{Unpaged: true, Offset: true, Keyset: true, MaxLimit: 10, MaxOffset: 12}},
+				tplan.Project(tplan.Output(out, "id", tplan.Int8()), id.Expr()), tplan.Project(tplan.Output(out, "label", tplan.Text()), label.Expr()))
 			totals := tabula.DefineView(reg, tabula.ViewSpec[planTotals]{Name: "notes"})
 			numeric := tabula.CatalogType[string]("pg_catalog", "numeric", nil)
-			scalar := tabula.DefineRows(totals, "totals", src, tabula.RowsSpec{RowFilter: filter},
-				tabula.Project(tabula.Output(totals, "n", tabula.Int8()), tabula.CountAll()),
-				tabula.Project(tabula.Output(totals, "minimum", tabula.Int4()), tabula.MinOf(rank.Expr())),
-				tabula.Project(tabula.Output(totals, "maximum", tabula.Int4()), tabula.MaxOf(rank.Expr())),
-				tabula.Project(tabula.Output(totals, "total", tabula.Int8()), tabula.SumOf(rank.Expr(), tabula.Int8())),
-				tabula.Project(tabula.Output(totals, "mean", numeric), tabula.AvgOf(rank.Expr(), numeric)))
+			scalar := tplan.DefineRows(totals, "totals", src, tplan.RowsSpec{RowFilter: filter},
+				tplan.Project(tplan.Output(totals, "n", tplan.Int8()), tplan.CountAll()),
+				tplan.Project(tplan.Output(totals, "minimum", tplan.Int4()), tplan.MinOf(rank.Expr())),
+				tplan.Project(tplan.Output(totals, "maximum", tplan.Int4()), tplan.MaxOf(rank.Expr())),
+				tplan.Project(tplan.Output(totals, "total", tplan.Int8()), tplan.SumOf(rank.Expr(), tplan.Int8())),
+				tplan.Project(tplan.Output(totals, "mean", numeric), tplan.AvgOf(rank.Expr(), numeric)))
 			groups := tabula.DefineView(reg, tabula.ViewSpec[planGroup]{Name: "groups"})
-			grouped := tabula.DefineRows(groups, "counts", src, tabula.RowsSpec{RowFilter: filter, GroupBy: []tabula.RowColumn{label.Column()},
-				Orders: []tabula.RowOrder{{Name: "label", Terms: []tabula.RowTerm{tabula.Asc(label)}}}, Pages: tabula.RowPages{Offset: true, MaxLimit: 3, MaxOffset: 10}},
-				tabula.Project(tabula.Output(groups, "label", tabula.Text()), label.Expr()), tabula.Project(tabula.Output(groups, "n", tabula.Int8()), tabula.CountOf(id.Expr())))
-			base := tabula.MutationSpec{RowFilter: tabula.RowFilter{Observe: quiet, Where: tabula.Ge(id.Expr(), minimum.Expr())}, Version: tabula.ExpectVersion(revision, expected)}
-			del := tabula.DefineDeleteMany(src, "remove_live", base)
-			base.Optional = []tabula.RowPredicate{{Name: "rank", When: tabula.Ge(rank.Expr(), minRank.Expr())}}
-			mod := tabula.DefineUpdateMany(src, "change", base,
-				tabula.RowSet{Name: "priority", Assignments: []tabula.RowAssignment{tabula.Assign(rank, newRank.Expr())}},
-				tabula.RowSet{Name: "hide", Assignments: []tabula.RowAssignment{tabula.Assign(removed, remove.Expr())}})
+			grouped := tplan.DefineRows(groups, "counts", src, tplan.RowsSpec{RowFilter: filter, GroupBy: []tplan.RowColumn{label.Column()},
+				Orders: []tplan.RowOrder{{Name: "label", Terms: []tplan.RowTerm{tplan.Asc(label)}}}, Pages: tplan.RowPages{Offset: true, MaxLimit: 3, MaxOffset: 10}},
+				tplan.Project(tplan.Output(groups, "label", tplan.Text()), label.Expr()), tplan.Project(tplan.Output(groups, "n", tplan.Int8()), tplan.CountOf(id.Expr())))
+			base := tplan.MutationSpec{RowFilter: tplan.RowFilter{Observe: quiet, Where: tplan.Ge(id.Expr(), minimum.Expr())}, Version: tplan.ExpectVersion(revision, expected)}
+			del := tplan.DefineDeleteMany(src, "remove_live", base)
+			base.Optional = []tplan.RowPredicate{{Name: "rank", When: tplan.Ge(rank.Expr(), minRank.Expr())}}
+			mod := tplan.DefineUpdateMany(src, "change", base,
+				tplan.RowSet{Name: "priority", Assignments: []tplan.RowAssignment{tplan.Assign(rank, newRank.Expr())}},
+				tplan.RowSet{Name: "hide", Assignments: []tplan.RowAssignment{tplan.Assign(removed, remove.Expr())}})
 
 			// Bind each family from the serialized snapshot, with the same names
 			// that CollectSQL emits for the constructors.
@@ -168,21 +169,21 @@ func TestRegisteredRowPlans(t *testing.T) {
 			run(reader, 1, func(ctx context.Context, s tabula.Session[itemScope]) error {
 				bound := search.Bind(s)
 				for _, order := range []string{"forward", "reverse"} {
-					all, total, err := bound.List(ctx, tabula.RowChoice{Order: order})
+					all, total, err := bound.List(ctx, tplan.RowChoice{Order: order})
 					require.NoError(t, err)
 					require.EqualValues(t, 4, total)
 					require.Len(t, all, 4)
 					for i, row := range all {
-						c := tabula.RowChoice{Order: order, Page: tabula.FirstPage, Limit: 1}
+						c := tplan.RowChoice{Order: order, Page: tplan.FirstPage, Limit: 1}
 						if i != 0 {
 							prev := all[i-1]
-							pos := tabula.NullAt(label)
+							pos := tplan.NullAt(label)
 							if prev.Label != nil {
-								pos = tabula.At(label, *prev.Label)
+								pos = tplan.At(label, *prev.Label)
 							}
-							c.After, err = search.Cursor(order, pos, tabula.At(id, prev.ID))
+							c.After, err = search.Cursor(order, pos, tplan.At(id, prev.ID))
 							require.NoError(t, err)
-							c.Page = tabula.AfterPage
+							c.Page = tplan.AfterPage
 						}
 						page, total, err := bound.List(ctx, c)
 						require.NoError(t, err)
@@ -191,7 +192,7 @@ func TestRegisteredRowPlans(t *testing.T) {
 					}
 				}
 				b := scalar.Bind(s)
-				rows, n, err := b.List(ctx, tabula.RowChoice{})
+				rows, n, err := b.List(ctx, tplan.RowChoice{})
 				require.NoError(t, err)
 				require.EqualValues(t, 1, n)
 				require.Len(t, rows, 1)
@@ -200,11 +201,11 @@ func TestRegisteredRowPlans(t *testing.T) {
 				require.EqualValues(t, 10, *rows[0].Min)
 				require.EqualValues(t, 30, *rows[0].Max)
 				require.Contains(t, *rows[0].Avg, "15")
-				rows, n, err = b.List(ctx, tabula.RowChoice{Filters: []string{"minimum"}}, tabula.BindValue(minimum, 100))
+				rows, n, err = b.List(ctx, tplan.RowChoice{Filters: []string{"minimum"}}, tplan.BindValue(minimum, 100))
 				require.NoError(t, err)
 				require.EqualValues(t, 1, n)
 				require.Equal(t, []planTotals{{}}, rows)
-				group, n, err := grouped.Bind(s).List(ctx, tabula.RowChoice{Order: "label", Page: tabula.OffsetPage, Limit: 1, Offset: 1})
+				group, n, err := grouped.Bind(s).List(ctx, tplan.RowChoice{Order: "label", Page: tplan.OffsetPage, Limit: 1, Offset: 1})
 				require.NoError(t, err)
 				require.EqualValues(t, 2, n)
 				require.Equal(t, []planGroup{{Count: 2}}, group)
@@ -213,7 +214,7 @@ func TestRegisteredRowPlans(t *testing.T) {
 			run(editor, 1, func(ctx context.Context, s tabula.Session[itemScope]) error {
 				b := mod.Bind(s)
 				update := func(id int64, version, rank int32, want int64) {
-					n, err := b.UpdateMany(ctx, "priority", nil, tabula.BindValue(expected, version), tabula.BindValue(minimum, id), tabula.BindValue(newRank, rank))
+					n, err := b.UpdateMany(ctx, "priority", nil, tplan.BindValue(expected, version), tplan.BindValue(minimum, id), tplan.BindValue(newRank, rank))
 					require.NoError(t, err)
 					require.Equal(t, want, n)
 				}
@@ -221,7 +222,7 @@ func TestRegisteredRowPlans(t *testing.T) {
 				update(6, 0, 9, 1)
 				update(1, 0, 9, 3)
 				update(1, 0, 8, 0)
-				n, err := b.UpdateMany(ctx, "hide", []string{"rank"}, tabula.BindValue(expected, 1), tabula.BindValue(minimum, 6), tabula.BindValue(minRank, 9), tabula.BindValue(remove, true))
+				n, err := b.UpdateMany(ctx, "hide", []string{"rank"}, tplan.BindValue(expected, 1), tplan.BindValue(minimum, 6), tplan.BindValue(minRank, 9), tplan.BindValue(remove, true))
 				require.NoError(t, err)
 				require.EqualValues(t, 1, n)
 				return nil
@@ -229,14 +230,14 @@ func TestRegisteredRowPlans(t *testing.T) {
 			run(remover, 1, func(ctx context.Context, s tabula.Session[itemScope]) error {
 				b := del.Bind(s)
 				for _, tc := range []struct{ minimum, want int64 }{{6, 0}, {3, 1}, {1, 2}} {
-					n, err := b.DeleteMany(ctx, nil, tabula.BindValue(minimum, tc.minimum), tabula.BindValue(expected, 1))
+					n, err := b.DeleteMany(ctx, nil, tplan.BindValue(minimum, tc.minimum), tplan.BindValue(expected, 1))
 					require.NoError(t, err)
 					require.Equal(t, tc.want, n)
 				}
 				return nil
 			})
 			run(reader, 2, func(ctx context.Context, s tabula.Session[itemScope]) error {
-				rows, n, err := search.Bind(s).List(ctx, tabula.RowChoice{Order: "forward", Page: tabula.OffsetPage, Limit: 5})
+				rows, n, err := search.Bind(s).List(ctx, tplan.RowChoice{Order: "forward", Page: tplan.OffsetPage, Limit: 5})
 				require.NoError(t, err)
 				require.EqualValues(t, 1, n)
 				require.EqualValues(t, 4, rows[0].ID)
@@ -244,7 +245,7 @@ func TestRegisteredRowPlans(t *testing.T) {
 			})
 			require.Empty(t, logBytes.String())
 			err = runRowPlan(t, db, pool, driver, reg.SQLAuthority(), reader, 1, log, func(ctx context.Context, s tabula.Session[itemScope]) error {
-				_, err := mod.Bind(s).UpdateMany(ctx, "priority", nil, tabula.BindValue(expected, 0), tabula.BindValue(minimum, 1), tabula.BindValue(newRank, 4))
+				_, err := mod.Bind(s).UpdateMany(ctx, "priority", nil, tplan.BindValue(expected, 0), tplan.BindValue(minimum, 1), tplan.BindValue(newRank, 4))
 				return err
 			})
 			require.Error(t, err)
@@ -264,10 +265,10 @@ func TestRegisteredRowPlans(t *testing.T) {
 			exec("ALTER TABLE " + table + " FORCE ROW LEVEL SECURITY")
 			exec("CREATE POLICY visible ON " + table + " FOR SELECT TO " + reader + " USING (scope_id=NULLIF(current_setting('demo.scope',true),'')::bigint)")
 			rlsTable := tabula.Define(reg, tabula.TableSpec[planItem, int64]{Name: table, ReadOnly: true, RelationScope: tabula.ByRLS()})
-			rs := tabula.FromTable(rlsTable, "r", tabula.ByRLS())
-			read := tabula.DefineRows(out, "visible", tabula.RowsFrom(rlsTable, rs), tabula.RowsSpec{WithExists: true},
-				tabula.Project(tabula.Output(out, "id", tabula.Int8()), tabula.FieldOf(rs, "id", tabula.Int8()).Expr()),
-				tabula.Project(tabula.Output(out, "label", tabula.Text()), tabula.FieldOf(rs, "label", tabula.Text()).Expr()))
+			rs := tplan.FromTable(rlsTable, "r", tabula.ByRLS())
+			read := tplan.DefineRows(out, "visible", tplan.RowsFrom(rlsTable, rs), tplan.RowsSpec{WithExists: true},
+				tplan.Project(tplan.Output(out, "id", tplan.Int8()), tplan.FieldOf(rs, "id", tplan.Int8()).Expr()),
+				tplan.Project(tplan.Output(out, "label", tplan.Text()), tplan.FieldOf(rs, "label", tplan.Text()).Expr()))
 			inv = sqlcheck.SQLInventory{Sites: []sqlcheck.SQLSite{{ID: "rls", Kind: "typed_rows", Method: "DefineRows", Definition: "entries", QueryKey: "visible"}}}
 			rlsWork, err := inv.BindRolesWithDefinitions(map[string]sqlcheck.SQLBinding{"rls": {Roles: []string{reader}}}, nil, reg.DefinedViews())
 			require.NoError(t, err)
@@ -294,7 +295,7 @@ func TestRegisteredRowPlans(t *testing.T) {
 				id    int64
 			}{{1, 5}, {2, 4}} {
 				run(reader, tc.scope, func(ctx context.Context, s tabula.Session[itemScope]) error {
-					rows, count, err := read.Bind(s).List(ctx, tabula.RowChoice{})
+					rows, count, err := read.Bind(s).List(ctx, tplan.RowChoice{})
 					require.NoError(t, err)
 					require.EqualValues(t, 1, count)
 					require.Equal(t, tc.id, rows[0].ID)

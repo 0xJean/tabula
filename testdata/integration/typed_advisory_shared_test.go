@@ -10,6 +10,7 @@ import (
 	"time"
 
 	q "github.com/0xJean/tabula"
+	tplan "github.com/0xJean/tabula/plan"
 	"github.com/0xJean/tabula/sqlcheck"
 	"github.com/stretchr/testify/require"
 )
@@ -20,28 +21,28 @@ func TestSharedAdvisoryOverloads(t *testing.T) {
 		t.Run(driver, func(t *testing.T) {
 			reg := q.NewRegistry(q.RegistryConfig[struct{}]{})
 			view := q.DefineView(reg, q.ViewSpec[advisoryResult]{Name: "entries"})
-			big, first, second := q.Input("key", q.Int8()), q.Input("first", q.Int4()), q.Input("second", q.Int4())
+			big, first, second := tplan.Input("key", tplan.Int8()), tplan.Input("first", tplan.Int4()), tplan.Input("second", tplan.Int4())
 			key := time.Now().UnixNano()
 			readOnly := authorizedEffectRunner(t, driver, db, pool, "", reg.SQLAuthority(), q.StatementPolicy{}, nil, true)
 			run := authorizedEffectRunner(t, driver, db, pool, "", reg.SQLAuthority(), q.StatementPolicy{}, nil, false)
 			direct := effectDirect(t, driver, reg.SQLAuthority())
 			for _, pair := range []bool{false, true} {
 				name := "big"
-				args := []q.Binding{q.BindValue(big, key)}
+				args := []tplan.Binding{tplan.BindValue(big, key)}
 				if pair {
 					name = "pair"
-					args = []q.Binding{q.BindValue(first, int32(key>>32)), q.BindValue(second, int32(key))}
+					args = []tplan.Binding{tplan.BindValue(first, int32(key>>32)), tplan.BindValue(second, int32(key))}
 				}
-				declare := func(label string, mode q.AdvisoryMode, wait q.LockWait) *q.AdvisoryLockPlan[advisoryResult, struct{}] {
-					lock := q.AdvisoryXactLock(mode, wait, big.Expr())
+				declare := func(label string, mode tplan.AdvisoryMode, wait tplan.LockWait) *tplan.AdvisoryLockPlan[advisoryResult, struct{}] {
+					lock := tplan.AdvisoryXactLock(mode, wait, big.Expr())
 					if pair {
-						lock = q.AdvisoryXactLockPair(mode, wait, first.Expr(), second.Expr())
+						lock = tplan.AdvisoryXactLockPair(mode, wait, first.Expr(), second.Expr())
 					}
-					return q.DefineAdvisoryLock(view, name+"_"+label, lock)
+					return tplan.DefineAdvisoryLock(view, name+"_"+label, lock)
 				}
-				sharedWait, sharedTry := declare("shared_wait", q.Shared, q.Wait), declare("shared_try", q.Shared, q.Try)
-				exclusive := declare("exclusive", q.Exclusive, q.Try)
-				for _, lock := range []*q.AdvisoryLockPlan[advisoryResult, struct{}]{sharedWait, sharedTry} {
+				sharedWait, sharedTry := declare("shared_wait", tplan.Shared, tplan.Wait), declare("shared_try", tplan.Shared, tplan.Try)
+				exclusive := declare("exclusive", tplan.Exclusive, tplan.Try)
+				for _, lock := range []*tplan.AdvisoryLockPlan[advisoryResult, struct{}]{sharedWait, sharedTry} {
 					_, err := lock.Bind(direct).Acquire(t.Context(), args...)
 					require.ErrorIs(t, err, q.ErrReadOnly)
 				}
@@ -52,7 +53,7 @@ func TestSharedAdvisoryOverloads(t *testing.T) {
 						require.NoError(t, err)
 						require.True(t, held)
 						require.NoError(t, readOnly(t.Context(), func(ctx context.Context, peer session) error {
-							for _, lock := range []*q.AdvisoryLockPlan[advisoryResult, struct{}]{sharedWait, sharedTry} {
+							for _, lock := range []*tplan.AdvisoryLockPlan[advisoryResult, struct{}]{sharedWait, sharedTry} {
 								held, err := lock.Bind(peer).Acquire(ctx, args...)
 								require.NoError(t, err)
 								require.True(t, held)
@@ -95,16 +96,16 @@ func TestSharedAdvisoryNativePrivileges(t *testing.T) {
 			exec("CREATE ROLE " + role)
 			t.Cleanup(func() { _, err := db.Exec("DROP OWNED BY " + role + "; DROP ROLE " + role); require.NoError(t, err) })
 			run := authorizedEffectRunner(t, driver, db, pool, role, reg.SQLAuthority(), q.StatementPolicy{}, nil, true)
-			big, small := q.Input("key", q.Int8()), q.Input("small", q.Int4())
-			for i, lock := range []q.AdvisoryLock{
-				q.AdvisoryXactLock(q.Shared, q.Wait, big.Expr()), q.AdvisoryXactLock(q.Shared, q.Try, big.Expr()),
-				q.AdvisoryXactLockPair(q.Shared, q.Wait, small.Expr(), small.Expr()), q.AdvisoryXactLockPair(q.Shared, q.Try, small.Expr(), small.Expr()),
+			big, small := tplan.Input("key", tplan.Int8()), tplan.Input("small", tplan.Int4())
+			for i, lock := range []tplan.AdvisoryLock{
+				tplan.AdvisoryXactLock(tplan.Shared, tplan.Wait, big.Expr()), tplan.AdvisoryXactLock(tplan.Shared, tplan.Try, big.Expr()),
+				tplan.AdvisoryXactLockPair(tplan.Shared, tplan.Wait, small.Expr(), small.Expr()), tplan.AdvisoryXactLockPair(tplan.Shared, tplan.Try, small.Expr(), small.Expr()),
 			} {
 				name := fmt.Sprintf("lock_%d", i)
-				plan := q.DefineAdvisoryLock(view, name, lock)
-				args := []q.Binding{q.BindValue(big, time.Now().UnixNano())}
+				plan := tplan.DefineAdvisoryLock(view, name, lock)
+				args := []tplan.Binding{tplan.BindValue(big, time.Now().UnixNano())}
 				if i >= 2 {
-					args = []q.Binding{q.BindValue(small, int32(17))}
+					args = []tplan.Binding{tplan.BindValue(small, int32(17))}
 				}
 				signature := view.Definition().StatementShapes[name+".lock"].Privileges[0].Function
 				execute := func() error {

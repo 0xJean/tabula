@@ -1,19 +1,19 @@
 # Typed writes and returned rows
 
-Declare writes from the same mapped physical occurrences used by typed reads.
+Typed write plans live in `github.com/0xJean/tabula/plan` (`package plan`). Declare writes from the same mapped physical occurrences used by typed reads.
 `InsertInto`, `UpdateOf` and `DeleteFrom` build immutable declarations; they do
 not execute or register SQL. `DefineWrite` registers a count-only statement and
 requires its owner to be the outer target. `DefineReturning` registers an exact
-ordered result projection into a view. Every `Define` constructor has a `Try`
+ordered result projection into a `tabula.View`. Every `Define` constructor has a `Try`
 partner that publishes no shapes on failure.
 
 ```go
-write := tabula.UpdateOf(items).
-    Set(tabula.Assign(rank, newRank.Expr())).
-    Where(tabula.Eq(id.Expr(), wantedID.Expr()))
-plan := tabula.DefineWrite(items, "set_rank", write)
-count, err := plan.Bind(session).Exec(ctx,
-    tabula.BindValue(newRank, int32(4)), tabula.BindValue(wantedID, int64(7)))
+write := plan.UpdateOf(items).
+    Set(plan.Assign(rank, newRank.Expr())).
+    Where(plan.Eq(id.Expr(), wantedID.Expr()))
+writePlan := plan.DefineWrite(items, "set_rank", write)
+count, err := writePlan.Bind(session).Exec(ctx,
+    plan.BindValue(newRank, int32(4)), plan.BindValue(wantedID, int64(7)))
 ```
 
 Assignments are evaluated on the old row. Assignment targets contribute UPDATE

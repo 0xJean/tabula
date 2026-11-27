@@ -10,6 +10,7 @@ import (
 	"time"
 
 	q "github.com/0xJean/tabula"
+	"github.com/0xJean/tabula/plan"
 	"github.com/0xJean/tabula/pqdriver"
 	"github.com/0xJean/tabula/sqlcheck"
 	"github.com/stretchr/testify/require"
@@ -75,30 +76,30 @@ func TestExplicitJoinDrivers(t *testing.T) {
 			reg := q.NewRegistry(cfg)
 			groups := q.Define(reg, q.TableSpec[joinGroup, int64]{Name: ns + ".groups"})
 			jobs := q.Define(reg, q.TableSpec[joinJob, int64]{Name: ns + ".jobs"})
-			g, j := q.FromTable(groups, "g", q.ByScopeColumn()), q.FromTable(jobs, "j", q.ByScopeColumn())
+			g, j := plan.FromTable(groups, "g", q.ByScopeColumn()), plan.FromTable(jobs, "j", q.ByScopeColumn())
 			scope := q.CatalogType[itemScope]("pg_catalog", "int8", nil)
-			left := q.RowsFrom(groups, g, q.FieldOf(g, "scope_id", scope).Column())
-			right := q.RowsFrom(jobs, j, q.FieldOf(j, "scope_id", scope).Column())
-			gid, jid := q.FieldOf(g, "id", q.Int8()), q.FieldOf(j, "id", q.Int8())
-			name := q.FieldOf(g, "name", q.Text())
-			on := q.Eq(gid.Expr(), q.FieldOf(j, "group_id", q.Int8()).Expr())
+			left := plan.RowsFrom(groups, g, plan.FieldOf(g, "scope_id", scope).Column())
+			right := plan.RowsFrom(jobs, j, plan.FieldOf(j, "scope_id", scope).Column())
+			gid, jid := plan.FieldOf(g, "id", plan.Int8()), plan.FieldOf(j, "id", plan.Int8())
+			name := plan.FieldOf(g, "name", plan.Text())
+			on := plan.Eq(gid.Expr(), plan.FieldOf(j, "group_id", plan.Int8()).Expr())
 			out := q.DefineView(reg, q.ViewSpec[joinPair]{Name: "entries"})
-			base := q.Select(q.Project(q.Output(out, "group_id", q.Int8()), gid.Expr()), q.Project(q.Output(out, "job_id", q.Int8()), jid.Expr())).From(left)
-			pairs := q.DefineRead(out, "pairs", base.LeftJoin(right, on).OrderBy(q.Asc(gid)))
-			matches := q.DefineRead(out, "matches", base.InnerJoin(right, on))
-			product := q.DefineRead(out, "pairs_product", base.CrossJoin(right).OrderBy(q.Asc(gid)))
+			base := plan.Select(plan.Project(plan.Output(out, "group_id", plan.Int8()), gid.Expr()), plan.Project(plan.Output(out, "job_id", plan.Int8()), jid.Expr())).From(left)
+			pairs := plan.DefineRead(out, "pairs", base.LeftJoin(right, on).OrderBy(plan.Asc(gid)))
+			matches := plan.DefineRead(out, "matches", base.InnerJoin(right, on))
+			product := plan.DefineRead(out, "pairs_product", base.CrossJoin(right).OrderBy(plan.Asc(gid)))
 			summary := q.DefineView(reg, q.ViewSpec[groupTotal]{Name: "notes"})
-			minimum := q.Input("minimum", q.Int8())
-			count := q.CountOf(jid.Expr())
-			totals := q.DefineRead(summary, "summary", q.Select(q.Project(q.Output(summary, "group_id", q.Int8()), gid.Expr()),
-				q.Project(q.Output(summary, "n", q.Int8()), count)).From(left).LeftJoin(right, on).
-				GroupBy(gid.Expr()).Having(q.Ge(count, minimum.Expr())).OrderBy(q.Asc(gid)))
+			minimum := plan.Input("minimum", plan.Int8())
+			count := plan.CountOf(jid.Expr())
+			totals := plan.DefineRead(summary, "summary", plan.Select(plan.Project(plan.Output(summary, "group_id", plan.Int8()), gid.Expr()),
+				plan.Project(plan.Output(summary, "n", plan.Int8()), count)).From(left).LeftJoin(right, on).
+				GroupBy(gid.Expr()).Having(plan.Ge(count, minimum.Expr())).OrderBy(plan.Asc(gid)))
 
-			keys := q.Input("keys", q.ArrayOf(q.Int8()))
-			a, b := q.Input("a", q.Int8()), q.Input("b", q.Int8())
-			pattern, folded := q.Input("pattern", q.Text()), q.Input("folded", q.Text())
-			filter := q.And(q.Any(gid.Expr(), keys.Expr()), q.In(gid.Expr(), a.Expr(), b.Expr()), q.Like(name.Expr(), pattern.Expr()), q.ILike(name.Expr(), folded.Expr()))
-			filtered := q.DefineRead(out, "filtered", base.InnerJoin(right, on).Where(filter))
+			keys := plan.Input("keys", q.ArrayOf(plan.Int8()))
+			a, b := plan.Input("a", plan.Int8()), plan.Input("b", plan.Int8())
+			pattern, folded := plan.Input("pattern", plan.Text()), plan.Input("folded", plan.Text())
+			filter := plan.And(plan.Any(gid.Expr(), keys.Expr()), plan.In(gid.Expr(), a.Expr(), b.Expr()), plan.Like(name.Expr(), pattern.Expr()), plan.ILike(name.Expr(), folded.Expr()))
+			filtered := plan.DefineRead(out, "filtered", base.InnerJoin(right, on).Where(filter))
 			work := sqlcheck.RoleStatements{}
 			work.AddDefinitions(role, sqlcheck.ViewsToDefinitions(reg.DefinedViews())...)
 			needs, err := work.Readiness(role)
@@ -126,7 +127,7 @@ func TestExplicitJoinDrivers(t *testing.T) {
 					n    int64
 					want []groupTotal
 				}{{0, []groupTotal{{1, 1}, {2, 0}, {3, 0}}}, {1, []groupTotal{{1, 1}}}} {
-					got, err := totals.Bind(s).Find(ctx, q.BindValue(minimum, tc.n))
+					got, err := totals.Bind(s).Find(ctx, plan.BindValue(minimum, tc.n))
 					require.NoError(t, err)
 					require.Equal(t, tc.want, got)
 				}
@@ -135,8 +136,8 @@ func TestExplicitJoinDrivers(t *testing.T) {
 					pattern string
 					n       int
 				}{{[]int64{1, 2}, "Al_h%", 1}, {[]int64{1}, "al%", 0}, {[]int64{}, "%", 0}, {nil, "%", 0}} {
-					rows, err = filtered.Bind(s).Find(ctx, q.BindValue(keys, tc.keys), q.BindValue(a, 1), q.BindValue(b, 2),
-						q.BindValue(pattern, tc.pattern), q.BindValue(folded, "aL%"))
+					rows, err = filtered.Bind(s).Find(ctx, plan.BindValue(keys, tc.keys), plan.BindValue(a, 1), plan.BindValue(b, 2),
+						plan.BindValue(pattern, tc.pattern), plan.BindValue(folded, "aL%"))
 					require.NoError(t, err)
 					require.Len(t, rows, tc.n)
 				}
@@ -178,17 +179,17 @@ func TestExplicitJoinWithRLS(t *testing.T) {
 	reg := q.NewRegistry(q.RegistryConfig[itemScope]{Deny: q.DenyLegacySQL})
 	groups := q.Define(reg, q.TableSpec[joinGroup, int64]{Name: ns + ".groups", RelationScope: q.ByRLS()})
 	jobs := q.Define(reg, q.TableSpec[joinJob, int64]{Name: ns + ".jobs", RelationScope: q.ByRLS()})
-	g, j := q.FromTable(groups, "g", q.ByRLS()), q.FromTable(jobs, "j", q.ByRLS())
-	gid := q.FieldOf(g, "id", q.Int8())
+	g, j := plan.FromTable(groups, "g", q.ByRLS()), plan.FromTable(jobs, "j", q.ByRLS())
+	gid := plan.FieldOf(g, "id", plan.Int8())
 	out := q.DefineView(reg, q.ViewSpec[joinPair]{Name: "entries"})
-	p := q.DefineRead(out, "pairs", q.Select(q.Project(q.Output(out, "group_id", q.Int8()), gid.Expr()),
-		q.Project(q.Output(out, "job_id", q.Int8()), q.FieldOf(j, "id", q.Int8()).Expr())).From(g).
-		LeftJoin(j, q.Eq(gid.Expr(), q.FieldOf(j, "group_id", q.Int8()).Expr())).OrderBy(q.Asc(gid)))
-	peer := q.FromTable(groups, "peer", q.ByRLS())
-	peerID := q.FieldOf(peer, "id", q.Int8())
-	self := q.DefineRead(out, "peers", q.Select(q.Project(q.Output(out, "group_id", q.Int8()), gid.Expr()),
-		q.Project(q.Output(out, "job_id", q.Int8()), peerID.Expr())).From(g).
-		InnerJoin(peer, q.Eq(gid.Expr(), peerID.Expr())).OrderBy(q.Asc(gid)))
+	p := plan.DefineRead(out, "pairs", plan.Select(plan.Project(plan.Output(out, "group_id", plan.Int8()), gid.Expr()),
+		plan.Project(plan.Output(out, "job_id", plan.Int8()), plan.FieldOf(j, "id", plan.Int8()).Expr())).From(g).
+		LeftJoin(j, plan.Eq(gid.Expr(), plan.FieldOf(j, "group_id", plan.Int8()).Expr())).OrderBy(plan.Asc(gid)))
+	peer := plan.FromTable(groups, "peer", q.ByRLS())
+	peerID := plan.FieldOf(peer, "id", plan.Int8())
+	self := plan.DefineRead(out, "peers", plan.Select(plan.Project(plan.Output(out, "group_id", plan.Int8()), gid.Expr()),
+		plan.Project(plan.Output(out, "job_id", plan.Int8()), peerID.Expr())).From(g).
+		InnerJoin(peer, plan.Eq(gid.Expr(), peerID.Expr())).OrderBy(plan.Asc(gid)))
 	def := out.Definition()
 	require.Empty(t, def.StatementShapes["pairs.rls.data"].Inputs)
 	require.NotContains(t, def.Statements["pairs.rls.data"], "scope_id")

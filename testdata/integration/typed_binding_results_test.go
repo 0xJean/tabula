@@ -13,6 +13,7 @@ import (
 
 	q "github.com/0xJean/tabula"
 	pg "github.com/0xJean/tabula/pgtype"
+	"github.com/0xJean/tabula/plan"
 	"github.com/stretchr/testify/require"
 )
 
@@ -81,29 +82,29 @@ span interval, host inet, prefix inet, doc jsonb, short varchar(2) NOT NULL)`)
 			q.RegisterType(reg, func(p *clockText) any { return clockScanner{text: (*string)(p)} })
 			q.RegisterType(reg, func(p *offsetClockText) any { return clockScanner{text: (*string)(p), offset: true} })
 			table := q.DefinePlanSource(reg, q.TableSpec[item, int64]{Name: physical, RelationScope: q.Global()})
-			layout := q.MapTable(table,
-				q.ColumnType("uid", pg.UUID[string]()), q.ColumnType("amount", pg.Numeric[string]()),
-				q.ColumnType("clock", q.CatalogType[clockText]("pg_catalog", "time", nil)),
-				q.ColumnType("zoned", q.CatalogType[offsetClockText]("pg_catalog", "timetz", nil)),
-				q.ColumnType("span", q.CatalogType[sql.NullString]("pg_catalog", "interval", nil)),
-				q.ColumnType("host", pg.Inet()), q.ColumnType("prefix", pg.InetPrefix()),
-				q.ColumnType("doc", pg.JSONB[map[string]int]()), q.ColumnType("short", pg.Varchar(2)))
+			layout := plan.MapTable(table,
+				plan.ColumnType("uid", pg.UUID[string]()), plan.ColumnType("amount", pg.Numeric[string]()),
+				plan.ColumnType("clock", q.CatalogType[clockText]("pg_catalog", "time", nil)),
+				plan.ColumnType("zoned", q.CatalogType[offsetClockText]("pg_catalog", "timetz", nil)),
+				plan.ColumnType("span", q.CatalogType[sql.NullString]("pg_catalog", "interval", nil)),
+				plan.ColumnType("host", pg.Inet()), plan.ColumnType("prefix", pg.InetPrefix()),
+				plan.ColumnType("doc", pg.JSONB[map[string]int]()), plan.ColumnType("short", pg.Varchar(2)))
 			src := layout.As("i")
-			p := q.DefineTableRows(src, "values", q.RowsSpec{}, q.SelectAll())
-			short := q.MappedColumn[string](layout, "short")
-			id := q.MappedColumn[int64](layout, "id")
+			p := plan.DefineTableRows(src, "values", plan.RowsSpec{}, plan.SelectAll())
+			short := plan.MappedColumn[string](layout, "short")
+			id := plan.MappedColumn[int64](layout, "id")
 			boundID, shortText := id.Input("id"), short.Input("value")
-			lookup := q.DefineExists(src, "lookup", q.RowFilter{Where: q.Eq(short.On(src.Rel()).Expr(), shortText.Expr())})
-			edit := q.DefineUpdateMany(src, "set_label", q.MutationSpec{
-				RowFilter: q.RowFilter{Where: q.Eq(id.On(src.Rel()).Expr(), boundID.Expr())},
-			}, q.RowSet{Name: "label", Assignments: []q.RowAssignment{q.Assign(short.On(src.Rel()), shortText.Expr())}})
+			lookup := plan.DefineExists(src, "lookup", plan.RowFilter{Where: plan.Eq(short.On(src.Rel()).Expr(), shortText.Expr())})
+			edit := plan.DefineUpdateMany(src, "set_label", plan.MutationSpec{
+				RowFilter: plan.RowFilter{Where: plan.Eq(id.On(src.Rel()).Expr(), boundID.Expr())},
+			}, plan.RowSet{Name: "label", Assignments: []plan.RowAssignment{plan.Assign(short.On(src.Rel()), shortText.Expr())}})
 			run := authorizedEffectRunner(t, driver, db, pool, "", reg.SQLAuthority(), q.StatementPolicy{}, nil, false)
-			over := q.BindValue(shortText, "abcd")
+			over := plan.BindValue(shortText, "abcd")
 			for _, style := range []string{"postgres", "iso_8601"} {
 				require.NoError(t, run(t.Context(), func(ctx context.Context, s session) error {
 					_, err := s.Exec(ctx, "SET LOCAL IntervalStyle = "+style)
 					require.NoError(t, err)
-					v, err := p.Bind(s).One(ctx, q.RowChoice{})
+					v, err := p.Bind(s).One(ctx, plan.RowChoice{})
 					require.NoError(t, err)
 					require.Equal(t, uuid, v.UUID)
 					require.Equal(t, decimal, v.Amount)
@@ -123,12 +124,12 @@ AND $3::interval = '1 mon 2 days 03:04:05.123456'::interval`, []any{string(v.Clo
 				}))
 			}
 			err := run(t.Context(), func(ctx context.Context, s session) error {
-				_, err := edit.Bind(s).UpdateMany(ctx, "label", nil, q.BindValue(boundID, 1), over)
+				_, err := edit.Bind(s).UpdateMany(ctx, "label", nil, plan.BindValue(boundID, 1), over)
 				return err
 			})
 			require.Equal(t, "22001", q.SQLState(err))
 			require.NoError(t, run(t.Context(), func(ctx context.Context, s session) error {
-				row, err := p.Bind(s).One(ctx, q.RowChoice{})
+				row, err := p.Bind(s).One(ctx, plan.RowChoice{})
 				require.NoError(t, err)
 				require.Equal(t, "ab", row.Short)
 				return nil

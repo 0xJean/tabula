@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+
+	"github.com/0xJean/tabula/internal/planrt"
 )
 
 // descriptor contains the compiled column set and a reference to its registry entry.
@@ -14,7 +16,7 @@ type descriptor[T, S any] struct {
 	cols      []column[T]
 	byName    map[string]int
 	entry     *registration
-	fixed     map[string]*compiledShape
+	fixed     map[string]*planrt.CompiledShape
 	plansOnly bool
 }
 

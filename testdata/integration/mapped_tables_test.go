@@ -14,6 +14,7 @@ import (
 	q "github.com/0xJean/tabula"
 	pg "github.com/0xJean/tabula/pgtype"
 	"github.com/0xJean/tabula/pgxdriver"
+	tplan "github.com/0xJean/tabula/plan"
 	"github.com/0xJean/tabula/pqdriver"
 	"github.com/0xJean/tabula/sqlcheck"
 	"github.com/stretchr/testify/require"
@@ -70,40 +71,40 @@ func TestMappedTableDrivers(t *testing.T) {
 				return runRowPlan(t, db, pool, driverName, reg.SQLAuthority(), role, 1, q.LogConfig{}, f)
 			}
 			tab := q.DefinePlanSource(reg, q.TableSpec[mappedItem, int64]{Name: tableName, AllowDelete: true, RelationScope: q.ByRLS()})
-			layout := q.MapTable(tab, q.ColumnType("group_id", pg.UUID[string]()), q.ColumnType("label", pg.Varchar(8)))
+			layout := tplan.MapTable(tab, tplan.ColumnType("group_id", pg.UUID[string]()), tplan.ColumnType("label", pg.Varchar(8)))
 			src := layout.As("i")
-			group := q.MappedColumn[string](layout, "group_id")
+			group := tplan.MappedColumn[string](layout, "group_id")
 			v := group.Input("group_id")
-			filter := q.RowFilter{Where: q.Eq(group.On(src.Rel()).Expr(), v.Expr())}
-			value := q.BindValue(v, groupID)
-			id, label := q.MappedColumn[int64](layout, "id"), q.MappedColumn[string](layout, "label")
-			narrow := q.DefineTableRows(src, "brief", q.RowsSpec{RowFilter: filter},
-				q.SelectColumns(label.On(src.Rel()).Column(), id.On(src.Rel()).Column()), q.ReadForms{Exact: true, First: q.UnorderedFirst})
-			probe := q.DefineExists(src, "has_group", filter)
+			filter := tplan.RowFilter{Where: tplan.Eq(group.On(src.Rel()).Expr(), v.Expr())}
+			value := tplan.BindValue(v, groupID)
+			id, label := tplan.MappedColumn[int64](layout, "id"), tplan.MappedColumn[string](layout, "label")
+			narrow := tplan.DefineTableRows(src, "brief", tplan.RowsSpec{RowFilter: filter},
+				tplan.SelectColumns(label.On(src.Rel()).Column(), id.On(src.Rel()).Column()), tplan.ReadForms{Exact: true, First: tplan.UnorderedFirst})
+			probe := tplan.DefineExists(src, "has_group", filter)
 			out := q.DefineView(reg, q.ViewSpec[sourceResult]{Name: "entries"})
-			rowID := q.Project(q.Output(out, "id", pg.Int8()), id.On(src.Rel()).Expr())
-			rowLabel := func(r q.Rel[mappedItem]) q.Projection {
-				return q.Project(q.Output(out, "label", pg.Varchar(8)), label.On(r).Expr())
+			rowID := tplan.Project(tplan.Output(out, "id", pg.Int8()), id.On(src.Rel()).Expr())
+			rowLabel := func(r tplan.Rel[mappedItem]) tplan.Projection {
+				return tplan.Project(tplan.Output(out, "label", pg.Varchar(8)), label.On(r).Expr())
 			}
-			projected := q.DefineRows(out, "brief", src, q.RowsSpec{RowFilter: filter}, rowID, rowLabel(src.Rel()))
+			projected := tplan.DefineRows(out, "brief", src, tplan.RowsSpec{RowFilter: filter}, rowID, rowLabel(src.Rel()))
 			right := layout.As("j")
-			joined := q.DefineRead(out, "paired", q.Select(rowID, rowLabel(right.Rel())).From(src).
-				InnerJoin(right.Rel(), q.Eq(id.On(src.Rel()).Expr(), id.On(right.Rel()).Expr())).Where(filter.Where))
+			joined := tplan.DefineRead(out, "paired", tplan.Select(rowID, rowLabel(right.Rel())).From(src).
+				InnerJoin(right.Rel(), tplan.Eq(id.On(src.Rel()).Expr(), id.On(right.Rel()).Expr())).Where(filter.Where))
 			checkSourceRole(t, db, reader, tab.Definition())
 			checkSourceRole(t, db, reader, q.Definition(out.Definition()))
 			require.NoError(t, run(reader, func(ctx context.Context, s q.Session[itemScope]) error {
 				bound := narrow.Bind(s)
-				got, n, err := bound.List(ctx, q.RowChoice{}, value)
+				got, n, err := bound.List(ctx, tplan.RowChoice{}, value)
 				require.NoError(t, err)
 				require.EqualValues(t, 1, n)
 				require.Equal(t, []mappedItem{{ID: 1, Label: "first"}}, got)
-				one, err := bound.One(ctx, q.RowChoice{}, value)
+				one, err := bound.One(ctx, tplan.RowChoice{}, value)
 				require.NoError(t, err)
 				require.Equal(t, got[0], one)
-				first, err := bound.First(ctx, q.RowChoice{}, value)
+				first, err := bound.First(ctx, tplan.RowChoice{}, value)
 				require.NoError(t, err)
 				require.Equal(t, got[0], first)
-				maybe, ok, err := bound.MaybeOne(ctx, q.RowChoice{}, q.BindValue(v, "00000000-0000-0000-0000-000000000000"))
+				maybe, ok, err := bound.MaybeOne(ctx, tplan.RowChoice{}, tplan.BindValue(v, "00000000-0000-0000-0000-000000000000"))
 				require.NoError(t, err)
 				require.False(t, ok)
 				require.Equal(t, mappedItem{}, maybe)
@@ -111,7 +112,7 @@ func TestMappedTableDrivers(t *testing.T) {
 				require.NoError(t, err)
 				require.True(t, exists)
 				want := []sourceResult{{ID: 1, Label: "first"}}
-				views, err := projected.Bind(s).Find(ctx, q.RowChoice{}, value)
+				views, err := projected.Bind(s).Find(ctx, tplan.RowChoice{}, value)
 				require.NoError(t, err)
 				require.Equal(t, want, views)
 				views, err = joined.Bind(s).Find(ctx, value)
@@ -119,7 +120,7 @@ func TestMappedTableDrivers(t *testing.T) {
 				require.Equal(t, want, views)
 				return nil
 			}))
-			all := q.DefineTableRows(src, "by_group", q.RowsSpec{RowFilter: filter}, q.SelectAll())
+			all := tplan.DefineTableRows(src, "by_group", tplan.RowsSpec{RowFilter: filter}, tplan.SelectAll())
 			checkSourceRole(t, db, fullReader, tab.Definition())
 			families := sqlcheck.DefaultTypeFamilies()
 			families["string"] = append(families["string"], "uuid")
@@ -127,29 +128,29 @@ func TestMappedTableDrivers(t *testing.T) {
 			require.NoError(t, err)
 			require.Empty(t, drift)
 			require.NoError(t, run(fullReader, func(ctx context.Context, s q.Session[itemScope]) error {
-				got, err := all.Bind(s).Find(ctx, q.RowChoice{}, value)
+				got, err := all.Bind(s).Find(ctx, tplan.RowChoice{}, value)
 				require.NoError(t, err)
 				require.Len(t, got, 1)
 				got[0].CreatedAt, got[0].UpdatedAt = got[0].CreatedAt.UTC(), got[0].UpdatedAt.UTC()
 				require.Equal(t, mappedItem{ID: 1, GroupID: groupID, Label: "first", Rank: 4, Active: true, Note: new("private"),
 					Region: "1", Revision: 8, CreatedAt: time.Date(2020, 3, 2, 1, 0, 0, 0, time.UTC),
 					UpdatedAt: time.Date(2020, 3, 2, 2, 0, 0, 0, time.UTC)}, got[0])
-				rows, err := all.Bind(s).Find(ctx, q.RowChoice{}, q.BindValue(v, "00000000-0000-0000-0000-000000000000"))
+				rows, err := all.Bind(s).Find(ctx, tplan.RowChoice{}, tplan.BindValue(v, "00000000-0000-0000-0000-000000000000"))
 				require.NoError(t, err)
 				require.Nil(t, rows)
 				return nil
 			}))
 			require.Equal(t, "42501", q.SQLState(run(reader, func(ctx context.Context, s q.Session[itemScope]) error {
-				_, err := all.Bind(s).Find(ctx, q.RowChoice{}, value)
+				_, err := all.Bind(s).Find(ctx, tplan.RowChoice{}, value)
 				return err
 			})))
-			rank := q.MappedColumn[int32](layout, "rank")
+			rank := tplan.MappedColumn[int32](layout, "rank")
 			newRank := rank.Input("rank")
-			change := q.DefineUpdateMany(src, "change", q.MutationSpec{RowFilter: filter},
-				q.RowSet{Name: "rank", Assignments: []q.RowAssignment{q.Assign(rank.On(src.Rel()), newRank.Expr())}})
-			remove := q.DefineDeleteMany(src, "remove", q.MutationSpec{RowFilter: filter})
+			change := tplan.DefineUpdateMany(src, "change", tplan.MutationSpec{RowFilter: filter},
+				tplan.RowSet{Name: "rank", Assignments: []tplan.RowAssignment{tplan.Assign(rank.On(src.Rel()), newRank.Expr())}})
+			remove := tplan.DefineDeleteMany(src, "remove", tplan.MutationSpec{RowFilter: filter})
 			require.NoError(t, run(writer, func(ctx context.Context, s q.Session[itemScope]) error {
-				n, err := change.Bind(s).UpdateMany(ctx, "rank", nil, value, q.BindValue(newRank, 12))
+				n, err := change.Bind(s).UpdateMany(ctx, "rank", nil, value, tplan.BindValue(newRank, 12))
 				require.NoError(t, err)
 				require.EqualValues(t, 1, n)
 				n, err = remove.Bind(s).DeleteMany(ctx, nil, value)
@@ -190,14 +191,14 @@ func checkMappedKeyLock(t *testing.T, db *sql.DB, schema, role string, reg *q.Re
 	exec("INSERT INTO " + name + " VALUES (4,7)")
 	exec("GRANT SELECT (item_id), UPDATE (group_id) ON " + name + " TO " + role)
 	tab := q.DefinePlanSource(reg, q.TableSpec[sourceKey, sourceKey]{Name: name, RelationScope: q.Global()})
-	layout := q.MapTable(tab)
+	layout := tplan.MapTable(tab)
 	src := layout.As("g")
-	item := q.MappedColumn[int64](layout, "item_id").On(src.Rel())
-	plan := q.DefineTableRows(src, "hold", q.RowsSpec{Lock: q.ForRows(q.ForUpdate, src.Rel(), q.NoWait)},
-		q.SelectColumns(item.Column()), q.ReadForms{First: q.UnorderedFirst})
+	item := tplan.MappedColumn[int64](layout, "item_id").On(src.Rel())
+	plan := tplan.DefineTableRows(src, "hold", tplan.RowsSpec{Lock: tplan.ForRows(tplan.ForUpdate, src.Rel(), tplan.NoWait)},
+		tplan.SelectColumns(item.Column()), tplan.ReadForms{First: tplan.UnorderedFirst})
 	checkSourceRole(t, db, role, tab.Definition())
 	hold := func(ctx context.Context, s q.Session[itemScope]) error {
-		row, err := plan.Bind(s).First(ctx, q.RowChoice{})
+		row, err := plan.Bind(s).First(ctx, tplan.RowChoice{})
 		if err != nil {
 			return err
 		}
@@ -261,25 +262,25 @@ func checkMappedCodecs(t *testing.T, db *sql.DB, schema, role, driverName string
 	reg := q.NewRegistry(cfg)
 	tab := q.DefinePlanSource(reg, q.TableSpec[mappedNote, int64]{Name: table, RelationScope: q.Global(),
 		SoftDelete: &q.SoftDelete{AliveValue: mappedMark("open"), DeletedValue: mappedMark("closed")}})
-	layout := q.MapTable(tab)
+	layout := tplan.MapTable(tab)
 	src, other := layout.As("n"), layout.As("m")
-	id := q.MappedColumn[int64](layout, "id")
-	mark := q.MappedColumn[mappedMark](layout, "mark")
+	id := tplan.MappedColumn[int64](layout, "id")
+	mark := tplan.MappedColumn[mappedMark](layout, "mark")
 	input := mark.Input("mark")
-	filter := q.RowFilter{Where: q.Eq(mark.On(src.Rel()).Expr(), input.Expr())}
-	full := q.DefineTableRows(src, "notes", q.RowsSpec{RowFilter: filter, Orders: []q.RowOrder{{Name: "id", Terms: []q.RowTerm{q.Asc(id.On(src.Rel()))}}}}, q.SelectAll())
+	filter := tplan.RowFilter{Where: tplan.Eq(mark.On(src.Rel()).Expr(), input.Expr())}
+	full := tplan.DefineTableRows(src, "notes", tplan.RowsSpec{RowFilter: filter, Orders: []tplan.RowOrder{{Name: "id", Terms: []tplan.RowTerm{tplan.Asc(id.On(src.Rel()))}}}}, tplan.SelectAll())
 	type codeRow struct {
 		Mark mappedMark `db:"mark"`
 	}
 	out := q.DefineView(reg, q.ViewSpec[codeRow]{Name: "entries"})
-	joined := q.DefineRead(out, "pairs", q.Select(q.Project(q.Output(out, "mark", kind), mark.On(other.Rel()).Expr())).
-		From(src.Rel()).InnerJoin(other, q.Eq(id.On(src.Rel()).Expr(), id.On(other.Rel()).Expr())).Where(filter.Where))
+	joined := tplan.DefineRead(out, "pairs", tplan.Select(tplan.Project(tplan.Output(out, "mark", kind), mark.On(other.Rel()).Expr())).
+		From(src.Rel()).InnerJoin(other, tplan.Eq(id.On(src.Rel()).Expr(), id.On(other.Rel()).Expr())).Where(filter.Where))
 	checkSourceRole(t, db, role, tab.Definition())
 	checkSourceRole(t, db, role, q.Definition(out.Definition()))
 	require.Equal(t, 1, calls) // The declared live value is shared by the layout's occurrences.
-	b := q.BindValue(input, "first")
+	b := tplan.BindValue(input, "first")
 	require.NoError(t, run(reg.SQLAuthority(), func(ctx context.Context, s q.Session[itemScope]) error {
-		rows, n, err := full.Bind(s).List(ctx, q.RowChoice{Order: "id"}, b)
+		rows, n, err := full.Bind(s).List(ctx, tplan.RowChoice{Order: "id"}, b)
 		require.NoError(t, err)
 		require.EqualValues(t, 2, n)
 		require.Equal(t, []mappedNote{

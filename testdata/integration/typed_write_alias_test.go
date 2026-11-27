@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	q "github.com/0xJean/tabula"
+	tplan "github.com/0xJean/tabula/plan"
 	"github.com/stretchr/testify/require"
 )
 
@@ -23,20 +24,20 @@ INSERT INTO `+schema+`.notes(id,rank) VALUES(1,21),(2,22)`)
 			reg := q.NewRegistry(q.RegistryConfig[struct{}]{Deny: q.DenyLegacySQL})
 			table := q.DefinePlanSource(reg, q.TableSpec[writeItem, int64]{Name: schema + ".items", RelationScope: q.Global(), AllowDelete: true})
 			notes := q.DefinePlanSource(reg, q.TableSpec[writeItem, int64]{Name: schema + ".notes", RelationScope: q.Global()})
-			src, other := q.MapTable(table).As("_tabula_0"), q.MapTable(notes).As("_tabula_1")
-			id, rank := q.FieldOf(src.Rel(), "id", q.Int8()), q.FieldOf(src.Rel(), "rank", q.Int4())
-			nid, nrank := q.FieldOf(other.Rel(), "id", q.Int8()), q.FieldOf(other.Rel(), "rank", q.Int4())
-			matched := q.DefineWrite(src, "matched", q.UpdateOf(src).Set(q.Assign(rank, nrank.Expr())).From(other, q.Eq(nid.Expr(), id.Expr())).AllRows())
-			inner := q.SelectValue(nrank.Expr()).From(other).Where(q.Eq(nid.Expr(), q.Outer(id.Expr())))
-			correlated := q.DefineWrite(src, "correlated", q.UpdateOf(src).Set(q.Assign(rank, q.Coalesce(q.ScalarSubquery(inner), rank.Expr()))).AllRows())
-			remove := q.DefineWrite(src, "remove", q.DeleteFrom(src).Using(other, q.Eq(nid.Expr(), id.Expr())).AllRows())
-			excluded := q.MapTable(table).As("excluded")
-			eid, erank := q.FieldOf(excluded.Rel(), "id", q.Int8()), q.FieldOf(excluded.Rel(), "rank", q.Int4())
-			key, value := q.Input("id", q.Int8()), q.Input("rank", q.Int4())
-			upsert := q.DefineWrite(excluded, "upsert", q.InsertInto(excluded).Values(q.Assign(eid, key.Expr()), q.Assign(erank, value.Expr())).
-				OnConflict(q.ConflictColumns(eid.Column())).DoUpdate(q.Assign(erank, q.Excluded(erank))))
+			src, other := tplan.MapTable(table).As("_tabula_0"), tplan.MapTable(notes).As("_tabula_1")
+			id, rank := tplan.FieldOf(src.Rel(), "id", tplan.Int8()), tplan.FieldOf(src.Rel(), "rank", tplan.Int4())
+			nid, nrank := tplan.FieldOf(other.Rel(), "id", tplan.Int8()), tplan.FieldOf(other.Rel(), "rank", tplan.Int4())
+			matched := tplan.DefineWrite(src, "matched", tplan.UpdateOf(src).Set(tplan.Assign(rank, nrank.Expr())).From(other, tplan.Eq(nid.Expr(), id.Expr())).AllRows())
+			inner := tplan.SelectValue(nrank.Expr()).From(other).Where(tplan.Eq(nid.Expr(), tplan.Outer(id.Expr())))
+			correlated := tplan.DefineWrite(src, "correlated", tplan.UpdateOf(src).Set(tplan.Assign(rank, tplan.Coalesce(tplan.ScalarSubquery(inner), rank.Expr()))).AllRows())
+			remove := tplan.DefineWrite(src, "remove", tplan.DeleteFrom(src).Using(other, tplan.Eq(nid.Expr(), id.Expr())).AllRows())
+			excluded := tplan.MapTable(table).As("excluded")
+			eid, erank := tplan.FieldOf(excluded.Rel(), "id", tplan.Int8()), tplan.FieldOf(excluded.Rel(), "rank", tplan.Int4())
+			key, value := tplan.Input("id", tplan.Int8()), tplan.Input("rank", tplan.Int4())
+			upsert := tplan.DefineWrite(excluded, "upsert", tplan.InsertInto(excluded).Values(tplan.Assign(eid, key.Expr()), tplan.Assign(erank, value.Expr())).
+				OnConflict(tplan.ConflictColumns(eid.Column())).DoUpdate(tplan.Assign(erank, tplan.Excluded(erank))))
 			run := authorizedEffectRunner(t, driver, db, pool, "", reg.SQLAuthority(), q.StatementPolicy{}, nil, false)
-			for _, plan := range []*q.WritePlan[struct{}]{matched, correlated} {
+			for _, plan := range []*tplan.WritePlan[struct{}]{matched, correlated} {
 				require.NoError(t, run(ctx, func(ctx context.Context, s session) error {
 					n, err := plan.Bind(s).Exec(ctx)
 					require.NoError(t, err)
@@ -48,7 +49,7 @@ INSERT INTO `+schema+`.notes(id,rank) VALUES(1,21),(2,22)`)
 			require.NoError(t, db.QueryRowContext(ctx, "SELECT sum(rank) FROM "+schema+".items").Scan(&total))
 			require.Equal(t, 43, total)
 			require.NoError(t, run(ctx, func(ctx context.Context, s session) error {
-				n, err := upsert.Bind(s).Exec(ctx, q.BindValue(key, int64(1)), q.BindValue(value, int32(99)))
+				n, err := upsert.Bind(s).Exec(ctx, tplan.BindValue(key, int64(1)), tplan.BindValue(value, int32(99)))
 				require.NoError(t, err)
 				require.EqualValues(t, 1, n)
 				return nil

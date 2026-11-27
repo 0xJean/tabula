@@ -9,13 +9,14 @@ import (
 	"strings"
 
 	"github.com/0xJean/tabula/internal/pgstmt"
+	"github.com/0xJean/tabula/internal/planrt"
 )
 
 type compiledSQLPlan[Args, S any] struct {
 	reg        *Registry[S]
 	name       string
 	entry      *registration
-	shape      *compiledShape
+	shape      *planrt.CompiledShape
 	args       *compiledSQLArgs[Args]
 	paramOrder []sqlParamSlot // ordered $1..$n
 	scope      resolvedSQLScope
@@ -131,16 +132,17 @@ func compileSQLPlan[Args, S any](
 		Effects:   cls.effects,
 		StructSQL: true,
 	}
-	compiled := &compiledShape{
-		observationKey: name + ".sql",
-		tableName:      name,
-		action:         "sql",
-		fixedMethod:    cls.fixedMethod,
-		authority:      r.statementIssuer,
-		key:            "sql",
-		sql:            rewritten,
-		shape:          cloneShape(stmtShape),
-		effects:        cls.stmtEffects,
+	compiled := &planrt.CompiledShape{
+		ObservationKey: name + ".sql",
+		TableName:      name,
+		Action:         "sql",
+		FixedMethod:    uint8(cls.fixedMethod),
+		Authority:      r.statementIssuer,
+		Key:            "sql",
+		SQL:            rewritten,
+		Effects:        uint8(cls.effects),
+		HasResult:      len(result) != 0,
+		WriteEffects:   cls.stmtEffects,
 	}
 	def := Definition{
 		Name:             name,
@@ -203,20 +205,20 @@ func bindSQLSession[S any](reg *Registry[S], s Session[S]) sqlSessionBinding[S] 
 	}
 }
 
-func (b *sqlSessionBinding[S]) authorize(shape *compiledShape, method CallMethod, values []any, secret []bool, meta stmtMeta, requiresScope bool) (AuthorizedStatement, error) {
+func (b *sqlSessionBinding[S]) authorize(shape *planrt.CompiledShape, method CallMethod, values []any, secret []bool, meta stmtMeta, requiresScope bool) (AuthorizedStatement, error) {
 	if b.bindErr != nil {
 		return AuthorizedStatement{}, b.bindErr
 	}
-	if shape == nil || shape.authority == nil || shape.authority != b.reg.statementIssuer || !eligibleOwner(b.s) {
+	if shape == nil || shape.Authority == nil || shape.Authority != b.reg.statementIssuer || !eligibleOwner(b.s) {
 		return AuthorizedStatement{}, ErrStatementAuthority
 	}
-	if !shape.permitsMethod(method) {
+	if !shape.PermitsMethod(uint8(method)) {
 		return AuthorizedStatement{}, ErrStatementAuthority
 	}
 	if requiresScope && b.s.Unscoped() {
 		return AuthorizedStatement{}, ErrStatementAuthority
 	}
-	effects := shape.shape.Effects
+	effects := ShapeEffects(shape.Effects)
 	if effects&(EffectWrite|EffectRowLock) != 0 {
 		if ro, ok := b.s.(interface{ ReadOnly() bool }); ok && ro.ReadOnly() {
 			return AuthorizedStatement{}, ErrReadOnly
@@ -270,14 +272,14 @@ func (b *sqlSessionBinding[S]) runSQL(
 	execute func(context.Context) (int64, error),
 ) (int64, error) {
 	m := meta
-	m.key = call.shape.observationKey
+	m.key = call.shape.ObservationKey
 	ctx, span := b.reg.startOp(ctx, b.logger, b.s.Scope(), table, action, m, call.secret, b.sessionObserved)
 	n, raw := execute(ctx)
 	if cbErr, ok := errors.AsType[sqlCallbackError](raw); ok {
-		span.finish(ctx, call.shape.sql, n, cbErr.err, call.args, call.secret, m.secret, m.quiet)
+		span.finish(ctx, call.shape.SQL, n, cbErr.err, call.args, call.secret, m.secret, m.quiet)
 		return n, cbErr.err
 	}
-	span.finish(ctx, call.shape.sql, n, raw, call.args, call.secret, m.secret, m.quiet)
+	span.finish(ctx, call.shape.SQL, n, raw, call.args, call.secret, m.secret, m.quiet)
 	if raw == nil {
 		return n, nil
 	}

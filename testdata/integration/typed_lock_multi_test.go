@@ -10,6 +10,7 @@ import (
 	"time"
 
 	q "github.com/0xJean/tabula"
+	tplan "github.com/0xJean/tabula/plan"
 	"github.com/0xJean/tabula/sqlcheck"
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
@@ -30,7 +31,7 @@ func TestMultipleRowLocks(t *testing.T) {
 				Note string `db:"note"`
 			}
 			reg := q.NewRegistry(q.RegistryConfig[struct{}]{})
-			makeSource := func(name, alias string) q.RowSource[item, struct{}] {
+			makeSource := func(name, alias string) tplan.RowSource[item, struct{}] {
 				exec("CREATE TABLE " + schema + "." + name + " (id bigint PRIMARY KEY, note text NOT NULL)")
 				exec("INSERT INTO " + schema + "." + name + " VALUES (1, 'open')")
 				exec("GRANT SELECT(id), UPDATE(note) ON " + schema + "." + name + " TO " + role)
@@ -38,19 +39,19 @@ func TestMultipleRowLocks(t *testing.T) {
 				exec("ALTER TABLE " + schema + "." + name + " FORCE ROW LEVEL SECURITY")
 				exec("CREATE POLICY read_rows ON " + schema + "." + name + " FOR SELECT TO " + role + " USING (true)")
 				exec("CREATE POLICY lock_rows ON " + schema + "." + name + " FOR UPDATE TO " + role + " USING (true)")
-				return q.MapTable(q.DefinePlanSource(reg, q.TableSpec[item, int64]{Name: schema + "." + name, RelationScope: q.ByRLS()})).As(alias)
+				return tplan.MapTable(q.DefinePlanSource(reg, q.TableSpec[item, int64]{Name: schema + "." + name, RelationScope: q.ByRLS()})).As(alias)
 			}
 			a, b := makeSource("items", "i"), makeSource("notes", "n")
-			id, other := q.FieldOf(a.Rel(), "id", q.Int8()), q.FieldOf(b.Rel(), "id", q.Int8())
+			id, other := tplan.FieldOf(a.Rel(), "id", tplan.Int8()), tplan.FieldOf(b.Rel(), "id", tplan.Int8())
 			view := q.DefineView(reg, q.ViewSpec[lockResult]{Name: "entries"})
-			base := q.Select(q.Project(q.Output(view, "id", q.Int8()), id.Expr())).From(a).InnerJoin(b, q.Eq(id.Expr(), other.Expr()))
-			build := func(name string, wait q.LockWait) *q.ReadPlan[lockResult, struct{}] {
-				return q.DefineRead(view, name, base.Locks(q.ForRows(q.ForUpdate, a.Rel(), wait), q.ForRows(q.ForShare, b.Rel(), wait)))
+			base := tplan.Select(tplan.Project(tplan.Output(view, "id", tplan.Int8()), id.Expr())).From(a).InnerJoin(b, tplan.Eq(id.Expr(), other.Expr()))
+			build := func(name string, wait tplan.LockWait) *tplan.ReadPlan[lockResult, struct{}] {
+				return tplan.DefineRead(view, name, base.Locks(tplan.ForRows(tplan.ForUpdate, a.Rel(), wait), tplan.ForRows(tplan.ForShare, b.Rel(), wait)))
 			}
-			locked, skip := build("locked", q.NoWait), build("skip", q.SkipLocked)
+			locked, skip := build("locked", tplan.NoWait), build("skip", tplan.SkipLocked)
 			run := authorizedEffectRunner(t, driver, db, pool, role, reg.SQLAuthority(), q.StatementPolicy{}, nil, false)
 			raw := effectSQLRunner(t, driver, db, pool, role)
-			read := func(plan *q.ReadPlan[lockResult, struct{}]) ([]lockResult, error) {
+			read := func(plan *tplan.ReadPlan[lockResult, struct{}]) ([]lockResult, error) {
 				var rows []lockResult
 				err := run(t.Context(), func(ctx context.Context, s session) error {
 					var err error
@@ -62,9 +63,9 @@ func TestMultipleRowLocks(t *testing.T) {
 			rows, err := read(locked)
 			require.NoError(t, err)
 			require.Equal(t, []lockResult{{ID: 1}}, rows)
-			for i, strength := range []q.RowLockStrength{q.ForUpdate, q.ForNoKeyUpdate, q.ForShare, q.ForKeyShare} {
-				for j, wait := range []q.LockWait{q.Wait, q.NoWait, q.SkipLocked} {
-					plan := q.DefineRead(view, fmt.Sprintf("mode_%d_%d", i, j), base.Locks(q.ForRows(strength, a.Rel(), wait), q.ForRows(strength, b.Rel(), wait)))
+			for i, strength := range []tplan.RowLockStrength{tplan.ForUpdate, tplan.ForNoKeyUpdate, tplan.ForShare, tplan.ForKeyShare} {
+				for j, wait := range []tplan.LockWait{tplan.Wait, tplan.NoWait, tplan.SkipLocked} {
+					plan := tplan.DefineRead(view, fmt.Sprintf("mode_%d_%d", i, j), base.Locks(tplan.ForRows(strength, a.Rel(), wait), tplan.ForRows(strength, b.Rel(), wait)))
 					rows, err := read(plan)
 					require.NoError(t, err)
 					require.Len(t, rows, 1)

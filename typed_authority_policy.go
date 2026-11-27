@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/0xJean/tabula/internal/pgstmt"
+	"github.com/0xJean/tabula/internal/planrt"
 )
 
 // CheckAuthorized verifies the registry, receiving session and method before
@@ -16,28 +17,28 @@ func (g StatementGuard) CheckAuthorized(authority SQLAuthority, owner any, metho
 	}
 	shape := call.shape
 	policy := callPolicyMethod(method)
-	if shape.shape.Effects&EffectWrite == 0 || method != CallExec && method != CallReturning && method != CallReturningEach {
-		return g.Check(policy, shape.sql)
+	if ShapeEffects(shape.Effects)&EffectWrite == 0 || method != CallExec && method != CallReturning && method != CallReturningEach {
+		return g.Check(policy, shape.SQL)
 	}
 	// A signed graph can reveal additional native commands, notably the UPDATE
 	// half of an upsert, that are not separate leading tokens in its SQL.
 	if g.write != nil {
-		for _, write := range shape.effects.writes {
-			if !g.write[strings.ToLower(write.command)] {
+		for _, write := range shape.WriteEffects.Writes {
+			if !g.write[strings.ToLower(write.Command)] {
 				return statementDenial("registered write uses a disallowed command")
 			}
 		}
 	}
-	err := g.Check(policy, shape.sql)
+	err := g.Check(policy, shape.SQL)
 	if err == nil {
 		return nil
 	}
-	effects := shape.effects
-	if effects.writeCTE {
+	effects := shape.WriteEffects
+	if effects.WriteCTE {
 		return g.checkWriteCTE(shape)
 	}
-	if effects.writeRoutine && g.allowWriteRoutine && signedWriteRoutines(shape) {
-		tokens, ok := pgstmt.SingleDML(shape.sql)
+	if effects.WriteRoutine && g.allowWriteRoutine && signedWriteRoutines(shape) {
+		tokens, ok := pgstmt.SingleDML(shape.SQL)
 		if !ok {
 			return singleStatementDenied
 		}
@@ -66,14 +67,14 @@ func callPolicyMethod(method CallMethod) string {
 	}
 }
 
-func (g StatementGuard) checkWriteCTE(shape *compiledShape) error {
-	if !g.allowWriteCTE || !g.write["with"] || len(shape.effects.writes) == 0 {
+func (g StatementGuard) checkWriteCTE(shape *planrt.CompiledShape) error {
+	if !g.allowWriteCTE || !g.write["with"] || len(shape.WriteEffects.Writes) == 0 {
 		return statementDenial("registered write CTEs are not enabled for this session")
 	}
-	if shape.effects.writeRoutine && (!g.allowWriteRoutine || !signedWriteRoutines(shape)) {
+	if shape.WriteEffects.WriteRoutine && (!g.allowWriteRoutine || !signedWriteRoutines(shape)) {
 		return statementDenial("registered write routines are not enabled for this session")
 	}
-	tokens, ok := pgstmt.SingleDML(shape.sql)
+	tokens, ok := pgstmt.SingleDML(shape.SQL)
 	if !ok {
 		return singleStatementDenied
 	}
@@ -99,15 +100,15 @@ func (g StatementGuard) checkWriteCTE(shape *compiledShape) error {
 	return nil
 }
 
-func signedWriteRoutines(shape *compiledShape) bool {
+func signedWriteRoutines(shape *planrt.CompiledShape) bool {
 	found := false
-	for _, routine := range shape.shape.Routines {
+	for _, routine := range shape.Routines {
 		if routine.ReadOnly {
 			continue
 		}
 		found = true
 		granted := false
-		for _, grant := range shape.shape.Privileges {
+		for _, grant := range shape.FunctionGrants {
 			if grant.Function == routine.Signature && grant.Privilege == "EXECUTE" {
 				granted = true
 				break

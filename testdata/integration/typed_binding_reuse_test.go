@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	q "github.com/0xJean/tabula"
+	"github.com/0xJean/tabula/plan"
 	"github.com/0xJean/tabula/pqdriver"
 	"github.com/stretchr/testify/require"
 )
@@ -50,15 +51,15 @@ func TestReuseBindingAcrossPlans(t *testing.T) {
 				},
 			})
 			items := q.DefinePlanSource(reg, q.TableSpec[joinGroup, int64]{Name: schema + ".groups", AllowDelete: true})
-			layout := q.MapTable(items)
+			layout := plan.MapTable(items)
 			src, peer := layout.As("g"), layout.As("peer")
-			id := q.MappedColumn[int64](layout, "id")
+			id := plan.MappedColumn[int64](layout, "id")
 			field := id.On(src.Rel())
-			members := q.ArrayOf(q.Int8())
-			ids := q.Input("ids", members)
-			filter := q.RowFilter{Where: q.And(q.Any(field.Expr(), ids.Expr()), q.Any(field.Expr(), ids.Expr()))}
+			members := q.ArrayOf(plan.Int8())
+			ids := plan.Input("ids", members)
+			filter := plan.RowFilter{Where: plan.And(plan.Any(field.Expr(), ids.Expr()), plan.Any(field.Expr(), ids.Expr()))}
 			invalid := errors.New("invalid label")
-			label := q.Input("label", q.Text().WithEncoder(func(s string) (any, error) {
+			label := plan.Input("label", plan.Text().WithEncoder(func(s string) (any, error) {
 				encodings.Add(1)
 				if s == "" {
 					return nil, invalid
@@ -66,45 +67,45 @@ func TestReuseBindingAcrossPlans(t *testing.T) {
 				return s + "!", nil
 			}))
 			out := q.DefineView(reg, q.ViewSpec[planResult]{Name: "entries"})
-			projection := []q.Projection{q.Project(q.Output(out, "id", q.Int8()), field.Expr()), q.Project(q.Output(out, "label", q.Text()), label.Expr())}
-			spec := q.RowsSpec{RowFilter: filter, WithExists: true, Orders: []q.RowOrder{{Name: "id", Terms: []q.RowTerm{q.Asc(field)}}}, Pages: q.RowPages{Keyset: true, Unpaged: true, MaxLimit: 5}}
-			page := q.DefineRowsWithForms(out, "lookup", src, spec, q.ReadForms{Exact: true, First: q.OrderedFirst}, projection...)
-			probe := q.DefineExists(src, "visible", filter)
-			join := q.DefineRead(out, "pairs", q.Select(projection...).From(src).
-				InnerJoin(peer, q.Eq(field.Expr(), id.On(peer.Rel()).Expr())).Where(filter.Where).WithForms(q.ReadForms{Exact: true}))
-			edit := q.MutationSpec{RowFilter: filter}
-			name := q.MappedColumn[string](layout, "name").On(src.Rel())
-			newName := q.Input("name", q.Text())
-			update := q.DefineUpdateMany(src, "change_name", edit, q.RowSet{Name: "label", Assignments: []q.RowAssignment{q.Assign(name, newName.Expr())}})
-			remove := q.DefineDeleteMany(src, "remove", edit)
+			projection := []plan.Projection{plan.Project(plan.Output(out, "id", plan.Int8()), field.Expr()), plan.Project(plan.Output(out, "label", plan.Text()), label.Expr())}
+			spec := plan.RowsSpec{RowFilter: filter, WithExists: true, Orders: []plan.RowOrder{{Name: "id", Terms: []plan.RowTerm{plan.Asc(field)}}}, Pages: plan.RowPages{Keyset: true, Unpaged: true, MaxLimit: 5}}
+			page := plan.DefineRowsWithForms(out, "lookup", src, spec, plan.ReadForms{Exact: true, First: plan.OrderedFirst}, projection...)
+			probe := plan.DefineExists(src, "visible", filter)
+			join := plan.DefineRead(out, "pairs", plan.Select(projection...).From(src).
+				InnerJoin(peer, plan.Eq(field.Expr(), id.On(peer.Rel()).Expr())).Where(filter.Where).WithForms(plan.ReadForms{Exact: true}))
+			edit := plan.MutationSpec{RowFilter: filter}
+			name := plan.MappedColumn[string](layout, "name").On(src.Rel())
+			newName := plan.Input("name", plan.Text())
+			update := plan.DefineUpdateMany(src, "change_name", edit, plan.RowSet{Name: "label", Assignments: []plan.RowAssignment{plan.Assign(name, newName.Expr())}})
+			remove := plan.DefineDeleteMany(src, "remove", edit)
 			result := q.DefineView(reg, q.ViewSpec[lockResult]{Name: "notes"})
-			fn := q.DeclareRoutine(q.RoutineSpec[int64]{Schema: schema, Name: "first_id", Result: q.Int8(),
-				Cardinality: q.RoutineOne, ReadOnly: true, Nullable: true}, q.Parameter("members", members))
+			fn := plan.DeclareRoutine(plan.RoutineSpec[int64]{Schema: schema, Name: "first_id", Result: plan.Int8(),
+				Cardinality: plan.RoutineOne, ReadOnly: true, Nullable: true}, plan.Parameter("members", members))
 			// The tested input has a first member, but an empty input can
 			// return NULL, so declare that result as nullable.
 			type nullableResult struct {
 				ID *int64 `db:"id"`
 			}
 			nullable := q.DefineView(reg, q.ViewSpec[nullableResult]{Name: "regions"})
-			readMember := q.DefineRoutine(nullable, "first_member", fn, q.Arg(q.FormalOf(fn, "members", members), ids.Expr()))
+			readMember := plan.DefineRoutine(nullable, "first_member", fn, plan.Arg(plan.FormalOf(fn, "members", members), ids.Expr()))
 			advisoryKey := id.Input("lock_id")
-			abs := q.DeclareRoutine(q.RoutineSpec[int64]{Schema: "pg_catalog", Name: "abs", Result: q.Int8(),
-				Cardinality: q.RoutineOne, ReadOnly: true}, q.Parameter("value", q.Int8()))
-			magnitude := q.DefineRoutine(result, "magnitude", abs, q.Arg(q.FormalOf(abs, "value", q.Int8()), advisoryKey.Expr()))
+			abs := plan.DeclareRoutine(plan.RoutineSpec[int64]{Schema: "pg_catalog", Name: "abs", Result: plan.Int8(),
+				Cardinality: plan.RoutineOne, ReadOnly: true}, plan.Parameter("value", plan.Int8()))
+			magnitude := plan.DefineRoutine(result, "magnitude", abs, plan.Arg(plan.FormalOf(abs, "value", plan.Int8()), advisoryKey.Expr()))
 			flags := q.DefineView(reg, q.ViewSpec[advisoryResult]{Name: "jobs"})
-			lock := q.DefineAdvisoryLock(flags, "hold_key", q.AdvisoryXactLock(q.Exclusive, q.Try, advisoryKey.Expr()))
+			lock := plan.DefineAdvisoryLock(flags, "hold_key", plan.AdvisoryXactLock(plan.Exclusive, plan.Try, advisoryKey.Expr()))
 
 			original := []int64{0, 4, 5}
-			binding := q.BindValue(ids, original)
+			binding := plan.BindValue(ids, original)
 			original[0] = 8
-			desc := q.BindValue(label, "visible")
+			desc := plan.BindValue(label, "visible")
 			want := planResult{ID: 1, Label: new("visible!")}
 			run := func(body rowCallback) error {
 				return runRowPlan(t, db, pool, driver, reg.SQLAuthority(), role, 1, q.LogConfig{}, body)
 			}
 			require.NoError(t, run(func(ctx context.Context, s q.Session[itemScope]) error {
 				b := page.Bind(s)
-				choice := q.RowChoice{Order: "id"}
+				choice := plan.RowChoice{Order: "id"}
 				base := adaptations.Load()
 				rows, total, err := b.List(ctx, choice, desc, binding)
 				require.NoError(t, err)
@@ -125,7 +126,7 @@ func TestReuseBindingAcrossPlans(t *testing.T) {
 				member, err := readMember.Bind(s).One(ctx, binding)
 				require.NoError(t, err)
 				require.Equal(t, new(int64(1)), member.ID)
-				lockID := q.BindValue(advisoryKey, -19834)
+				lockID := plan.BindValue(advisoryKey, -19834)
 				number, err := magnitude.Bind(s).One(ctx, lockID)
 				require.NoError(t, err)
 				require.EqualValues(t, 19834, number.ID)
@@ -135,9 +136,9 @@ func TestReuseBindingAcrossPlans(t *testing.T) {
 				var competing bool
 				require.NoError(t, db.QueryRowContext(ctx, "SELECT pg_try_advisory_xact_lock($1::bigint)", -19834).Scan(&competing))
 				require.False(t, competing)
-				after, err := page.Cursor("id", q.At(field, int64(1)))
+				after, err := page.Cursor("id", plan.At(field, int64(1)))
 				require.NoError(t, err)
-				rows, total, err = b.List(ctx, q.RowChoice{Order: "id", Page: q.AfterPage, Limit: 1, After: after}, desc, binding)
+				rows, total, err = b.List(ctx, plan.RowChoice{Order: "id", Page: plan.AfterPage, Limit: 1, After: after}, desc, binding)
 				require.NoError(t, err)
 				require.Empty(t, rows)
 				require.EqualValues(t, 1, total)
@@ -148,16 +149,16 @@ func TestReuseBindingAcrossPlans(t *testing.T) {
 				require.NoError(t, err)
 				require.True(t, found)
 				before := counter.calls.Load()
-				for _, values := range [][]q.Binding{{binding}, {desc, binding, binding}, {desc, binding, q.BindValue(id.Input("extra"), 1)}} {
+				for _, values := range [][]plan.Binding{{binding}, {desc, binding, binding}, {desc, binding, plan.BindValue(id.Input("extra"), 1)}} {
 					_, _, err = b.List(ctx, choice, values...)
 					require.Error(t, err)
 				}
-				_, _, err = b.List(ctx, choice, binding, q.BindValue(label, ""))
+				_, _, err = b.List(ctx, choice, binding, plan.BindValue(label, ""))
 				require.ErrorIs(t, err, invalid)
 				_, err = b.Exists(ctx, nil, desc, binding)
 				require.Error(t, err)
 				require.Equal(t, before, counter.calls.Load())
-				n, err := update.Bind(s).UpdateMany(ctx, "label", nil, binding, q.BindValue(newName, "changed"))
+				n, err := update.Bind(s).UpdateMany(ctx, "label", nil, binding, plan.BindValue(newName, "changed"))
 				require.NoError(t, err)
 				require.EqualValues(t, 1, n)
 				return nil

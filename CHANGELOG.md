@@ -3,6 +3,13 @@
 All notable changes are listed here. The project follows semantic versioning; before
 v1.0 a minor version may contain breaking changes.
 
+## v0.6.0 — Unreleased
+
+- **Breaking (pre-v1.0 API convergence)**: Extract the Typed Plan AST and scalar/aggregate/window/write expression DSL from root `package tabula` into a dedicated stdlib-only core subpackage `github.com/0xJean/tabula/plan` (`package plan`). Root `package tabula` retains `Registry`, `Table` CRUD, `View`, `DefineSQL*`, `SQLAuthority`, `SessionGuard`, `PGType`/`CatalogType`/`Varchar`/`ArrayOf`/`ArrayOfNullable`/`TypeDefault`/`TypeMapping`, `RelationScope`, `StatementShape` metadata, errors, retry, logging and telemetry interfaces—reducing root `tabula`'s exported function surface by roughly two-thirds while preserving unforgeable `SQLAuthority` verification through an internal sealed bridge with zero global state. [Migration guide](docs/MIGRATION.md#from-v05-to-v06)
+- Update `sqlcheck.CollectSQL` and role workload binding to recognize typed plan declarations and bound execution handles from `github.com/0xJean/tabula/plan`.
+- Add [Choosing an API](docs/CHOOSING-AN-API.md) with a one-page task decision matrix and copy-pasteable minimal application binding starter, and streamline [README.md](README.md) around the three entry-point tiers (`Table` CRUD, `DefineSQL*`, `tabula/plan`).
+- Enforce cross-document version consistency (`README.md` install version and checkout heading, `docs/INTEGRATION.md`, `docs/MIGRATION.md`, and `CHANGELOG.md`) in `scripts/docs.sh --check` and `scripts/release.sh verify/publish`, and update `ROADMAP.md` and `docs/AUTHORIZATION.md` to remove stale version references.
+
 ## v0.5.1 — 2026-11-27
 
 - Separate input (Go to PostgreSQL) and result (PostgreSQL to Go) integer type families for `DefineSQL`, `DefineSQLExec`, `DefineSQLReturning` and `DefineSQLList` verification: Go `int8`, `int16`, `int32`, `uint8`, `uint16` (plus pointer, `sql.NullInt16`, `sql.NullByte`, `sql.NullInt32`, `sql.Null[T]`, `,array` slice, `ScopeParam` and keyset cursor input paths) now allow lossless integer widening to `smallint`, `integer` and `bigint` as input parameters, while result columns retain narrow scanning bounds to prevent integer overflow.

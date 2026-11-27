@@ -15,16 +15,16 @@ func catalog[V any](name string) tabula.PGType[V] {
 }
 
 // Bool declares a PostgreSQL boolean.
-func Bool() tabula.PGType[bool] { return tabula.Bool() }
+func Bool() tabula.PGType[bool] { return catalog[bool]("bool") }
 
 // Int2 declares a PostgreSQL smallint.
 func Int2() tabula.PGType[int16] { return catalog[int16]("int2") }
 
 // Int4 declares a PostgreSQL integer.
-func Int4() tabula.PGType[int32] { return tabula.Int4() }
+func Int4() tabula.PGType[int32] { return catalog[int32]("int4") }
 
 // Int8 declares a PostgreSQL bigint.
-func Int8() tabula.PGType[int64] { return tabula.Int8() }
+func Int8() tabula.PGType[int64] { return catalog[int64]("int8") }
 
 // Float4 declares a PostgreSQL real.
 func Float4() tabula.PGType[float32] { return catalog[float32]("float4") }
@@ -36,7 +36,7 @@ func Float8() tabula.PGType[float64] { return catalog[float64]("float8") }
 func OID() tabula.PGType[uint32] { return catalog[uint32]("oid") }
 
 // Text declares PostgreSQL text.
-func Text() tabula.PGType[string] { return tabula.Text() }
+func Text() tabula.PGType[string] { return catalog[string]("text") }
 
 // BPChar declares PostgreSQL's blank-padded character catalog type.
 func BPChar() tabula.PGType[string] { return catalog[string]("bpchar") }
@@ -76,7 +76,7 @@ func Date() tabula.PGType[time.Time] { return catalog[time.Time]("date") }
 func Timestamp() tabula.PGType[time.Time] { return catalog[time.Time]("timestamp") }
 
 // Timestamptz declares a PostgreSQL timestamp with time zone for an instant.
-func Timestamptz() tabula.PGType[time.Time] { return tabula.Timestamptz() }
+func Timestamptz() tabula.PGType[time.Time] { return catalog[time.Time]("timestamptz") }
 
 // Time declares PostgreSQL time without time zone using time-of-day text.
 func Time() tabula.PGType[string] { return catalog[string]("time") }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/0xJean/tabula/internal/pgstmt"
+	"github.com/0xJean/tabula/internal/planrt"
 )
 
 // NoArgs is an empty parameter struct for DefineSQL, DefineSQLExec,
@@ -339,21 +340,21 @@ func compileArgBinder[Args, S any](r *Registry[S], rt reflect.Type, idx []int, f
 			}, nil
 		}
 	}
-	if def, ok := r.defaultTypes[ft]; ok && def.kind.encoder != nil {
-		enc := def.kind.encoder
+	if def, ok := r.defaultTypes[ft]; ok && def.kind.Encoder != nil {
+		enc := def.kind.Encoder
 		return func(a *Args) (any, error) {
-			return enc.encode(reflect.ValueOf(field(a)).Elem().Interface())
+			return enc.Encode(reflect.ValueOf(field(a)).Elem().Interface())
 		}, nil
 	}
 	if ft.Kind() == reflect.Pointer {
-		if def, ok := r.defaultTypes[ft.Elem()]; ok && def.kind.encoder != nil {
-			enc := def.kind.encoder
+		if def, ok := r.defaultTypes[ft.Elem()]; ok && def.kind.Encoder != nil {
+			enc := def.kind.Encoder
 			return func(a *Args) (any, error) {
 				ptr := reflect.ValueOf(field(a)).Elem()
 				if ptr.IsNil() {
 					return nil, nil
 				}
-				return enc.encode(ptr.Elem().Interface())
+				return enc.Encode(ptr.Elem().Interface())
 			}, nil
 		}
 	}
@@ -490,7 +491,7 @@ func (r *Registry[S]) recordSQLDefinition(def Definition) (*registration, error)
 			return nil, fmt.Errorf("%s: SQL declaration %q already registered", r.prefix, def.Name)
 		}
 	}
-	e := &registration{def: cloneDefinition(def), bySQL: make(map[string]stmtMeta)}
+	e := &registration{id: new(planrt.EntryID), def: cloneDefinition(def), bySQL: make(map[string]stmtMeta)}
 	r.views = append(r.views, e)
 	return e, nil
 }

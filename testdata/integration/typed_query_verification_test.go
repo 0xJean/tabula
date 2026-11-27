@@ -8,6 +8,7 @@ import (
 
 	q "github.com/0xJean/tabula"
 	"github.com/0xJean/tabula/pgxdriver"
+	tplan "github.com/0xJean/tabula/plan"
 	"github.com/0xJean/tabula/sqlcheck"
 	"github.com/stretchr/testify/require"
 )
@@ -20,16 +21,16 @@ func TestQueryGraphCountVerification(t *testing.T) {
 			Value int64 `db:"value"`
 		}
 		out := q.DefineView(f.reg, q.ViewSpec[row]{Name: "notes"})
-		id := q.FieldOf(f.src.Rel(), "id", q.Int8())
-		value := q.Input("value", q.Int8())
-		key, extra := q.Export("id", id.Expr()), q.Export("value", value.Expr())
-		derived := q.Derived("d", q.Select(key.Project(), extra.Project()).From(f.src))
-		plan := q.DefineRead(out, "listed", q.Select(
-			q.Project(q.Output(out, "id", q.Int8()), key.From(derived)),
-			q.Project(q.Output(out, "value", q.Int8()), extra.From(derived)),
-		).From(derived).WithList(q.ReadListSpec{
-			Orders:     []q.RowOrder{{Name: "id", Terms: []q.RowTerm{q.AscExpr(key.From(derived))}}},
-			Pages:      q.RowPages{Offset: true, MaxLimit: 2, MaxOffset: 4},
+		id := tplan.FieldOf(f.src.Rel(), "id", tplan.Int8())
+		value := tplan.Input("value", tplan.Int8())
+		key, extra := tplan.Export("id", id.Expr()), tplan.Export("value", value.Expr())
+		derived := tplan.Derived("d", tplan.Select(key.Project(), extra.Project()).From(f.src))
+		plan := tplan.DefineRead(out, "listed", tplan.Select(
+			tplan.Project(tplan.Output(out, "id", tplan.Int8()), key.From(derived)),
+			tplan.Project(tplan.Output(out, "value", tplan.Int8()), extra.From(derived)),
+		).From(derived).WithList(tplan.ReadListSpec{
+			Orders:     []tplan.RowOrder{{Name: "id", Terms: []tplan.RowTerm{tplan.AscExpr(key.From(derived))}}},
+			Pages:      tplan.RowPages{Offset: true, MaxLimit: 2, MaxOffset: 4},
 			ExactCount: true,
 		}))
 		def := out.Definition()
@@ -42,7 +43,7 @@ func TestQueryGraphCountVerification(t *testing.T) {
 		require.NoError(t, err)
 		require.Empty(t, findings)
 		require.NoError(t, f.run(t.Context(), func(ctx context.Context, s session) error {
-			rows, count, err := plan.Bind(s).List(ctx, q.RowChoice{Order: "id", Page: q.OffsetPage, Limit: 2}, q.BindValue(value, int64(7)))
+			rows, count, err := plan.Bind(s).List(ctx, tplan.RowChoice{Order: "id", Page: tplan.OffsetPage, Limit: 2}, tplan.BindValue(value, int64(7)))
 			require.NoError(t, err)
 			require.Equal(t, []row{{ID: 1, Value: 7}}, rows)
 			require.EqualValues(t, 1, count)
