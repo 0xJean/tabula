@@ -10,6 +10,7 @@ import (
 	q "github.com/0xJean/tabula"
 	pg "github.com/0xJean/tabula/pgtype"
 	"github.com/0xJean/tabula/pgxdriver"
+	tplan "github.com/0xJean/tabula/plan"
 	"github.com/0xJean/tabula/pqdriver"
 	"github.com/stretchr/testify/require"
 )
@@ -34,34 +35,34 @@ func TestWriteBatchCanonicalValues(t *testing.T) {
 			}
 			reg := q.NewRegistry(cfg)
 			table := q.DefinePlanSource(reg, q.TableSpec[item, int64]{Name: schema + ".items", RelationScope: q.Global()})
-			layout := q.MapTable(table, q.ColumnType("members", pg.ArrayOf(pg.Int4())), q.ColumnType("doc", pg.JSONB[json.RawMessage]()), q.ColumnType("uid", pg.UUID[string]()))
+			layout := tplan.MapTable(table, tplan.ColumnType("members", pg.ArrayOf(pg.Int4())), tplan.ColumnType("doc", pg.JSONB[json.RawMessage]()), tplan.ColumnType("uid", pg.UUID[string]()))
 			src := layout.As("i")
-			id := q.MappedColumn[int64](layout, "id").On(src.Rel())
-			members := q.MappedColumn[[]int32](layout, "members").On(src.Rel())
-			doc := q.MappedColumn[json.RawMessage](layout, "doc").On(src.Rel())
-			uid, label := q.MappedColumn[string](layout, "uid").On(src.Rel()), q.MappedColumn[string](layout, "label").On(src.Rel())
+			id := tplan.MappedColumn[int64](layout, "id").On(src.Rel())
+			members := tplan.MappedColumn[[]int32](layout, "members").On(src.Rel())
+			doc := tplan.MappedColumn[json.RawMessage](layout, "doc").On(src.Rel())
+			uid, label := tplan.MappedColumn[string](layout, "uid").On(src.Rel()), tplan.MappedColumn[string](layout, "label").On(src.Rel())
 			encoded := 0
 			arrayType := pg.ArrayOf(pg.Int4()).WithEncoder(func(value []int32) (any, error) { encoded++; return value, nil })
-			key, values, document := q.Input("id", pg.Int8()), q.Input("members", arrayType), q.Input("doc", pg.JSONB[json.RawMessage]())
+			key, values, document := tplan.Input("id", pg.Int8()), tplan.Input("members", arrayType), tplan.Input("doc", pg.JSONB[json.RawMessage]())
 			nullableText := func(value string) (any, error) {
 				if value == "" {
 					return nil, nil
 				}
 				return value, nil
 			}
-			identifier, text := q.Input("uid", pg.UUID[string]().WithEncoder(nullableText)), q.Input("label", pg.Text().WithEncoder(nullableText))
-			plan := q.DefineTableReturning(src, "batch", q.InsertInto(src).Values(q.Assign(id, key.Expr()), q.Assign(members, values.Expr()),
-				q.Assign(doc, document.Expr()), q.Assign(uid, identifier.Expr()), q.Assign(label, text.Expr())).Batch(1, 2),
-				q.SelectColumns(id.Column(), members.Column(), doc.Column(), uid.Column(), label.Column()))
+			identifier, text := tplan.Input("uid", pg.UUID[string]().WithEncoder(nullableText)), tplan.Input("label", pg.Text().WithEncoder(nullableText))
+			plan := tplan.DefineTableReturning(src, "batch", tplan.InsertInto(src).Values(tplan.Assign(id, key.Expr()), tplan.Assign(members, values.Expr()),
+				tplan.Assign(doc, document.Expr()), tplan.Assign(uid, identifier.Expr()), tplan.Assign(label, text.Expr())).Batch(1, 2),
+				tplan.SelectColumns(id.Column(), members.Column(), doc.Column(), uid.Column(), label.Column()))
 			raw, rawJSON := []int32{2, 3}, json.RawMessage(`{"x":1}`)
-			arrayBinding, jsonBinding := q.BindValue(values, raw), q.BindValue(document, rawJSON)
+			arrayBinding, jsonBinding := tplan.BindValue(values, raw), tplan.BindValue(document, rawJSON)
 			raw[0], rawJSON[5] = 99, '9'
 			uuid := "00000000-0000-4000-8000-000000000001"
-			var inputs [][]q.Binding
+			var inputs [][]tplan.Binding
 			for i := int64(1); i <= 3; i++ {
-				inputs = append(inputs, []q.Binding{q.BindValue(key, i), arrayBinding, jsonBinding, q.BindValue(identifier, uuid), q.BindValue(text, "")})
+				inputs = append(inputs, []tplan.Binding{tplan.BindValue(key, i), arrayBinding, jsonBinding, tplan.BindValue(identifier, uuid), tplan.BindValue(text, "")})
 			}
-			inputs = append(inputs, []q.Binding{q.BindValue(key, int64(4)), q.BindValue(values, []int32{}), q.BindValue(document, nil), q.BindValue(identifier, ""), q.BindValue(text, "note")})
+			inputs = append(inputs, []tplan.Binding{tplan.BindValue(key, int64(4)), tplan.BindValue(values, []int32{}), tplan.BindValue(document, nil), tplan.BindValue(identifier, ""), tplan.BindValue(text, "note")})
 			run := authorizedEffectRunner(t, driver, db, pool, "", reg.SQLAuthority(), q.StatementPolicy{}, nil, false)
 			require.NoError(t, run(ctx, func(ctx context.Context, s session) error {
 				// Reuse the exact canonical bindings in a two-row form and a
@@ -105,31 +106,31 @@ func TestWriteGeneratedColumns(t *testing.T) {
 			require.NoError(t, err)
 			reg := q.NewRegistry(q.RegistryConfig[struct{}]{Deny: q.DenyLegacySQL})
 			table := q.DefinePlanSource(reg, q.TableSpec[item, int64]{Name: schema + ".items", RelationScope: q.Global()})
-			src := q.MapTable(table).As("i")
-			id, rank, label := q.FieldOf(src.Rel(), "id", q.Int8()), q.FieldOf(src.Rel(), "rank", q.Int4()), q.FieldOf(src.Rel(), "label", q.Text())
-			key, value, text := q.Input("id", q.Int8()), q.Input("rank", q.Int4()), q.Input("label", q.Text())
-			selection := q.SelectColumns(id.Column(), label.Column())
-			defaults := q.DefineTableReturning(src, "defaults", q.InsertInto(src).DefaultValues(), selection)
-			explicit := q.DefineTableReturning(src, "explicit_default", q.InsertInto(src).Values(q.Assign(rank, value.Expr()), q.DefaultOf(label)), selection)
-			badIdentity := q.DefineWrite(src, "explicit_identity", q.InsertInto(src).Values(q.Assign(id, key.Expr())))
-			badGenerated := q.DefineWrite(src, "explicit_generated", q.InsertInto(src).Values(q.Assign(label, text.Expr())))
+			src := tplan.MapTable(table).As("i")
+			id, rank, label := tplan.FieldOf(src.Rel(), "id", tplan.Int8()), tplan.FieldOf(src.Rel(), "rank", tplan.Int4()), tplan.FieldOf(src.Rel(), "label", tplan.Text())
+			key, value, text := tplan.Input("id", tplan.Int8()), tplan.Input("rank", tplan.Int4()), tplan.Input("label", tplan.Text())
+			selection := tplan.SelectColumns(id.Column(), label.Column())
+			defaults := tplan.DefineTableReturning(src, "defaults", tplan.InsertInto(src).DefaultValues(), selection)
+			explicit := tplan.DefineTableReturning(src, "explicit_default", tplan.InsertInto(src).Values(tplan.Assign(rank, value.Expr()), tplan.DefaultOf(label)), selection)
+			badIdentity := tplan.DefineWrite(src, "explicit_identity", tplan.InsertInto(src).Values(tplan.Assign(id, key.Expr())))
+			badGenerated := tplan.DefineWrite(src, "explicit_generated", tplan.InsertInto(src).Values(tplan.Assign(label, text.Expr())))
 			run := authorizedEffectRunner(t, driver, db, pool, "", reg.SQLAuthority(), q.StatementPolicy{}, nil, false)
 			require.NoError(t, run(ctx, func(ctx context.Context, s session) error {
 				rows, err := defaults.Bind(s).All(ctx)
 				require.NoError(t, err)
 				require.Equal(t, []item{{ID: 1, Label: "3"}}, rows)
-				rows, err = explicit.Bind(s).All(ctx, q.BindValue(value, int32(8)))
+				rows, err = explicit.Bind(s).All(ctx, tplan.BindValue(value, int32(8)))
 				require.NoError(t, err)
 				require.Equal(t, []item{{ID: 2, Label: "8"}}, rows)
 				return nil
 			}))
 			err = run(ctx, func(ctx context.Context, s session) error {
-				_, err := badIdentity.Bind(s).Exec(ctx, q.BindValue(key, int64(9)))
+				_, err := badIdentity.Bind(s).Exec(ctx, tplan.BindValue(key, int64(9)))
 				return err
 			})
 			require.Equal(t, "428C9", q.SQLState(err))
 			err = run(ctx, func(ctx context.Context, s session) error {
-				_, err := badGenerated.Bind(s).Exec(ctx, q.BindValue(text, "note"))
+				_, err := badGenerated.Bind(s).Exec(ctx, tplan.BindValue(text, "note"))
 				return err
 			})
 			require.Equal(t, "428C9", q.SQLState(err))

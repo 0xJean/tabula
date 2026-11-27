@@ -1,16 +1,16 @@
 # Typed PostgreSQL expressions
 
-Scalar expressions compose in projections, predicates and `Assign` values. Each
+Scalar expressions live in `github.com/0xJean/tabula/plan` (`package plan`) and compose in projections, predicates and `Assign` values. Each
 node retains its PostgreSQL type, input identity, nullability and stability.
 Constructors accept typed handles, never SQL fragments or function names. A
 `TryDefine` constructor rejects an invalid tree before registering any shape.
 
 ```go
-fallback := tabula.Input("fallback", pg.Text())
-key := tabula.Input("key", pg.Text())
-label := tabula.Coalesce(tabula.JSONGetText(document.Expr(), key.Expr()), fallback.Expr())
-normalized := tabula.Lower(tabula.BTrim(label))
-assignment := tabula.Assign(target, normalized)
+fallback := plan.Input("fallback", pg.Text())
+key := plan.Input("key", pg.Text())
+label := plan.Coalesce(plan.JSONGetText(document.Expr(), key.Expr()), fallback.Expr())
+normalized := plan.Lower(plan.BTrim(label))
+assignment := plan.Assign(target, normalized)
 ```
 
 Here `document` and `target` are fields on the declared occurrence. Bind values

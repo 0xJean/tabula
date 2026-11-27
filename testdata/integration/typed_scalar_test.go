@@ -10,6 +10,7 @@ import (
 
 	q "github.com/0xJean/tabula"
 	pg "github.com/0xJean/tabula/pgtype"
+	"github.com/0xJean/tabula/plan"
 	"github.com/0xJean/tabula/pqdriver"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
@@ -27,7 +28,7 @@ type scalarFixture struct {
 	db     *sql.DB
 	pool   *pgxpool.Pool
 	reg    *q.Registry[struct{}]
-	src    q.RowSource[scalarItem, struct{}]
+	src    plan.RowSource[scalarItem, struct{}]
 	run    effectRunner
 	serial int
 	driver string
@@ -47,19 +48,19 @@ func scalarDrivers(t *testing.T, test func(*scalarFixture)) {
 			}
 			reg := q.NewRegistry(cfg)
 			table := q.DefinePlanSource(reg, q.TableSpec[scalarItem, int64]{Name: schema + ".items", RelationScope: q.Global()})
-			f := &scalarFixture{t: t, db: db, pool: pool, reg: reg, src: q.MapTable(table).As("i"), driver: driver}
+			f := &scalarFixture{t: t, db: db, pool: pool, reg: reg, src: plan.MapTable(table).As("i"), driver: driver}
 			f.run = authorizedEffectRunner(t, driver, db, pool, "", reg.SQLAuthority(), q.StatementPolicy{}, nil, false)
 			test(f)
 		})
 	}
 }
 
-func scalarPlan[V any](f *scalarFixture, kind q.PGType[V], value q.Expr[V]) *q.ReadPlan[scalarValue[V], struct{}] {
+func scalarPlan[V any](f *scalarFixture, kind q.PGType[V], value plan.Expr[V]) *plan.ReadPlan[scalarValue[V], struct{}] {
 	t := f.t
 	t.Helper()
 	f.serial++
 	view := q.DefineView(f.reg, q.ViewSpec[scalarValue[V]]{Name: fmt.Sprintf("entries_%d", f.serial)})
-	p := q.DefineRead(view, "value", q.Select(q.Project(q.Output(view, "value", kind), value)).From(f.src))
+	p := plan.DefineRead(view, "value", plan.Select(plan.Project(plan.Output(view, "value", kind), value)).From(f.src))
 	def := view.Definition()
 	conn, err := f.pool.Acquire(t.Context())
 	require.NoError(t, err)
@@ -89,7 +90,7 @@ func scalarPlan[V any](f *scalarFixture, kind q.PGType[V], value q.Expr[V]) *q.R
 	return p
 }
 
-func scalarCheck[V any](f *scalarFixture, name string, kind q.PGType[V], value q.Expr[V], want *V, bindings ...q.Binding) {
+func scalarCheck[V any](f *scalarFixture, name string, kind q.PGType[V], value plan.Expr[V], want *V, bindings ...plan.Binding) {
 	f.t.Helper()
 	f.t.Run(name, func(t *testing.T) {
 		parent := f.t
@@ -108,38 +109,38 @@ func scalarCheck[V any](f *scalarFixture, name string, kind q.PGType[V], value q
 
 func TestScalarTextAndBytes(t *testing.T) {
 	scalarDrivers(t, func(f *scalarFixture) {
-		s, other := q.Input("text", pg.Text()), q.Input("other", pg.Text())
-		start, count := q.Input("start", pg.Int4()), q.Input("count", pg.Int4())
-		pattern, replacement, flags := q.Input("pattern", pg.Text()), q.Input("replacement", pg.Text()), q.Input("flags", pg.Text())
-		bytes := q.Input("bytes", pg.Bytea())
-		enc := q.Input("encoding", pg.Text())
-		scalarCheck(f, "lower", pg.Text(), q.Lower(s.Expr()), new(" abc "), q.BindValue(s, " ABC "))
-		scalarCheck(f, "upper", pg.Text(), q.Upper(s.Expr()), new("ABC"), q.BindValue(s, "abc"))
-		scalarCheck(f, "trim", pg.Text(), q.Trim(s.Expr()), new("abc"), q.BindValue(s, " abc "))
-		scalarCheck(f, "btrim", pg.Text(), q.BTrim(s.Expr(), other.Expr()), new("abc"), q.BindValue(s, "xyabcxy"), q.BindValue(other, "xy"))
-		scalarCheck(f, "length", pg.Int4(), q.Length(s.Expr()), new(int32(3)), q.BindValue(s, "aé\u754c"))
-		scalarCheck(f, "substr_rest", pg.Text(), q.Substr(s.Expr(), start.Expr()), new("é\u754c"), q.BindValue(s, "aé\u754c"), q.BindValue(start, int32(2)))
-		scalarCheck(f, "substr_count", pg.Text(), q.Substr(s.Expr(), start.Expr(), count.Expr()), new("é"), q.BindValue(s, "aé\u754c"), q.BindValue(start, int32(2)), q.BindValue(count, int32(1)))
-		scalarCheck(f, "prefix", pg.Bool(), q.StartsWith(s.Expr(), other.Expr()), new(true), q.BindValue(s, "éclair"), q.BindValue(other, "é"))
-		scalarCheck(f, "replace", pg.Text(), q.RegexpReplace(s.Expr(), pattern.Expr(), replacement.Expr(), flags.Expr()), new("a-a"), q.BindValue(s, "A-A"), q.BindValue(pattern, "A"), q.BindValue(replacement, "a"), q.BindValue(flags, "g"))
+		s, other := plan.Input("text", pg.Text()), plan.Input("other", pg.Text())
+		start, count := plan.Input("start", pg.Int4()), plan.Input("count", pg.Int4())
+		pattern, replacement, flags := plan.Input("pattern", pg.Text()), plan.Input("replacement", pg.Text()), plan.Input("flags", pg.Text())
+		bytes := plan.Input("bytes", pg.Bytea())
+		enc := plan.Input("encoding", pg.Text())
+		scalarCheck(f, "lower", pg.Text(), plan.Lower(s.Expr()), new(" abc "), plan.BindValue(s, " ABC "))
+		scalarCheck(f, "upper", pg.Text(), plan.Upper(s.Expr()), new("ABC"), plan.BindValue(s, "abc"))
+		scalarCheck(f, "trim", pg.Text(), plan.Trim(s.Expr()), new("abc"), plan.BindValue(s, " abc "))
+		scalarCheck(f, "btrim", pg.Text(), plan.BTrim(s.Expr(), other.Expr()), new("abc"), plan.BindValue(s, "xyabcxy"), plan.BindValue(other, "xy"))
+		scalarCheck(f, "length", pg.Int4(), plan.Length(s.Expr()), new(int32(3)), plan.BindValue(s, "aé\u754c"))
+		scalarCheck(f, "substr_rest", pg.Text(), plan.Substr(s.Expr(), start.Expr()), new("é\u754c"), plan.BindValue(s, "aé\u754c"), plan.BindValue(start, int32(2)))
+		scalarCheck(f, "substr_count", pg.Text(), plan.Substr(s.Expr(), start.Expr(), count.Expr()), new("é"), plan.BindValue(s, "aé\u754c"), plan.BindValue(start, int32(2)), plan.BindValue(count, int32(1)))
+		scalarCheck(f, "prefix", pg.Bool(), plan.StartsWith(s.Expr(), other.Expr()), new(true), plan.BindValue(s, "éclair"), plan.BindValue(other, "é"))
+		scalarCheck(f, "replace", pg.Text(), plan.RegexpReplace(s.Expr(), pattern.Expr(), replacement.Expr(), flags.Expr()), new("a-a"), plan.BindValue(s, "A-A"), plan.BindValue(pattern, "A"), plan.BindValue(replacement, "a"), plan.BindValue(flags, "g"))
 		for _, v := range []struct {
 			name string
-			expr q.Pred
+			expr plan.Pred
 			want bool
 		}{
-			{"regex", q.RegexpMatch(s.Expr(), pattern.Expr()), false}, {"iregex", q.RegexpIMatch(s.Expr(), pattern.Expr()), true},
-			{"not_regex", q.RegexpNotMatch(s.Expr(), pattern.Expr()), true}, {"not_iregex", q.RegexpNotIMatch(s.Expr(), pattern.Expr()), false},
+			{"regex", plan.RegexpMatch(s.Expr(), pattern.Expr()), false}, {"iregex", plan.RegexpIMatch(s.Expr(), pattern.Expr()), true},
+			{"not_regex", plan.RegexpNotMatch(s.Expr(), pattern.Expr()), true}, {"not_iregex", plan.RegexpNotIMatch(s.Expr(), pattern.Expr()), false},
 		} {
-			scalarCheck(f, v.name, pg.Bool(), v.expr, new(v.want), q.BindValue(s, "ABC"), q.BindValue(pattern, "^a"))
+			scalarCheck(f, v.name, pg.Bool(), v.expr, new(v.want), plan.BindValue(s, "ABC"), plan.BindValue(pattern, "^a"))
 		}
-		scalarCheck(f, "concat", pg.Text(), q.Concat(q.TypedNull(pg.Text()), s.Expr(), start.Expr()), new("v3"), q.BindValue(s, "v"), q.BindValue(start, int32(3)))
-		scalarCheck(f, "strict_cat", pg.Text(), q.TextCat(q.TypedNull(pg.Text()), s.Expr()), nil, q.BindValue(s, "v"))
-		scalarCheck(f, "byte_cat", pg.Bytea(), q.ByteaCat(bytes.Expr(), bytes.Expr()), new([]byte{0, 255, 0, 255}), q.BindValue(bytes, []byte{0, 255}))
-		scalarCheck(f, "hex", pg.Text(), q.Encode(bytes.Expr(), q.Hex), new("005cff"), q.BindValue(bytes, []byte{0, 92, 255}))
-		scalarCheck(f, "base64", pg.Text(), q.Encode(bytes.Expr(), q.Base64), new("AFz/"), q.BindValue(bytes, []byte{0, 92, 255}))
-		scalarCheck(f, "escape", pg.Text(), q.Encode(bytes.Expr(), q.Escape), new(`\000\\\377`), q.BindValue(bytes, []byte{0, 92, 255}))
-		scalarCheck(f, "sha256", pg.Text(), q.Encode(q.SHA256(q.ConvertTo(s.Expr(), enc.Expr())), q.Hex), new("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"), q.BindValue(s, "abc"), q.BindValue(enc, "UTF8"))
-		scalarCheck(f, "empty_bytes", pg.Text(), q.Encode(bytes.Expr(), q.Hex), new(""), q.BindValue(bytes, []byte{}))
-		scalarCheck(f, "null_bytes", pg.Text(), q.Encode(bytes.Expr(), q.Hex), nil, q.BindValue(bytes, []byte(nil)))
+		scalarCheck(f, "concat", pg.Text(), plan.Concat(plan.TypedNull(pg.Text()), s.Expr(), start.Expr()), new("v3"), plan.BindValue(s, "v"), plan.BindValue(start, int32(3)))
+		scalarCheck(f, "strict_cat", pg.Text(), plan.TextCat(plan.TypedNull(pg.Text()), s.Expr()), nil, plan.BindValue(s, "v"))
+		scalarCheck(f, "byte_cat", pg.Bytea(), plan.ByteaCat(bytes.Expr(), bytes.Expr()), new([]byte{0, 255, 0, 255}), plan.BindValue(bytes, []byte{0, 255}))
+		scalarCheck(f, "hex", pg.Text(), plan.Encode(bytes.Expr(), plan.Hex), new("005cff"), plan.BindValue(bytes, []byte{0, 92, 255}))
+		scalarCheck(f, "base64", pg.Text(), plan.Encode(bytes.Expr(), plan.Base64), new("AFz/"), plan.BindValue(bytes, []byte{0, 92, 255}))
+		scalarCheck(f, "escape", pg.Text(), plan.Encode(bytes.Expr(), plan.Escape), new(`\000\\\377`), plan.BindValue(bytes, []byte{0, 92, 255}))
+		scalarCheck(f, "sha256", pg.Text(), plan.Encode(plan.SHA256(plan.ConvertTo(s.Expr(), enc.Expr())), plan.Hex), new("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"), plan.BindValue(s, "abc"), plan.BindValue(enc, "UTF8"))
+		scalarCheck(f, "empty_bytes", pg.Text(), plan.Encode(bytes.Expr(), plan.Hex), new(""), plan.BindValue(bytes, []byte{}))
+		scalarCheck(f, "null_bytes", pg.Text(), plan.Encode(bytes.Expr(), plan.Hex), nil, plan.BindValue(bytes, []byte(nil)))
 	})
 }

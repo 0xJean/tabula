@@ -1,6 +1,6 @@
 # PostgreSQL authorization and RLS verification
 
-Tabula v0.3 lets an application audit its configured SQL call sites against a disposable installation of its PostgreSQL schema. The application owns the roles, the mapping from entry points to roles, the expected grants, policy categories, exceptions and test data. Tabula supplies the collectors, comparators and rollback-based probes.
+Tabula lets an application audit its configured SQL call sites against a disposable installation of its PostgreSQL schema. The application owns the roles, the mapping from entry points to roles, the expected grants, policy categories, exceptions and test data. Tabula supplies the collectors, comparators and rollback-based probes.
 
 ## Check a role at startup
 
@@ -57,7 +57,7 @@ PostgreSQL grants and RLS still apply. A separately acquired database connection
 
 ## Physical sources for typed plans
 
-`DefinePlanSource(reg, spec)` registers the table's physical columns and keys. Its baseline privilege list is explicitly empty. `DefineRows` and `DefineRead` record the physical grants on their output view's shapes. `DefineTableRows`, `DefineExists`, `DefineUpdateMany` and `DefineDeleteMany` register their shapes on the source table. Mapping a table alone adds no grants. A partial projection requests SELECT on the fields it reads, including any predicate, order and soft-delete fields. A column-free existence query requires SELECT on any column. Bounded exact and first-row reads inherit the same role, scope and locking requirements as their data query. `CollectPrivilegeNeeds` takes the union across the supplied definitions. Use the role's selected shapes from `RoleStatements.Readiness(role)` for `CheckReadiness`, then verify the same assignments with `VerifyRoleStatements`.
+`tabula.DefinePlanSource(reg, spec)` registers the table's physical columns and keys. Its baseline privilege list is explicitly empty. Typed plans in `github.com/0xJean/tabula/plan` record their grants on the owning descriptor: `plan.DefineRows` and `plan.DefineRead` record physical grants on their output view's shapes; `plan.DefineTableRows`, `plan.DefineExists`, `plan.DefineUpdateMany` and `plan.DefineDeleteMany` register their shapes on the source table. Mapping a table alone adds no grants. A partial projection requests SELECT on the fields it reads, including any predicate, order and soft-delete fields. A column-free existence query requires SELECT on any column. Bounded exact and first-row reads inherit the same role, scope and locking requirements as their data query. `CollectPrivilegeNeeds` takes the union across the supplied definitions. Use the role's selected shapes from `RoleStatements.Readiness(role)` for `CheckReadiness`, then verify the same assignments with `VerifyRoleStatements`.
 
 For `UPDATE items SET rank = $1 WHERE id = $2`, the role needs column privileges `UPDATE(rank)` and `SELECT(id)`. A plan that also reads the old rank needs `SELECT(rank)`. Scope-column filters, live-row predicates and version comparisons contribute the columns they read. A `ByRLS` source records the requirement for enabled and forced row security on its physical relation.
 
@@ -207,7 +207,7 @@ A grant manifest contains the same scope plus its expected entries. This small d
 
 `CheckGrantManifest` reports `Missing` and `Extra` and generates SQL to reconcile them. It compares direct ACLs on tables, views, columns, sequences and overloaded functions. A function's `Arguments` uses the catalog's qualified type names, such as `pg_catalog.int4`. Grant options participate in equality. The generated order restores surviving column grants after a table-level revoke. Grantors are aggregated. Ownership, role membership, schema `USAGE`, database `CONNECT` and future-object default privileges are separate inputs to effective access. Use the role's planning and behavior probes to measure that access.
 
-The `FUNCTION` entries in `grants.json` cover ordinary, aggregate and window functions. Procedure `EXECUTE` grants are outside the scope of grant comparison and minimization in v0.3.
+The `FUNCTION` entries in `grants.json` cover ordinary, aggregate and window functions. Procedure `EXECUTE` grants are outside the scope of grant comparison and minimization.
 
 ### Table-level grant granularity
 

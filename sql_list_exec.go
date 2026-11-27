@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+
+	"github.com/0xJean/tabula/internal/planrt"
 )
 
 // Name returns the registered declaration name.
@@ -73,14 +75,15 @@ func (b *BoundSQLList[Row, Args, S]) prepareVariant(action string, method CallMe
 		values = append(values, ev)
 		secret = append(secret, b.l.meta.secret)
 	}
-	shape := &compiledShape{
-		observationKey: b.l.name + "." + action,
-		tableName:      b.l.name,
-		action:         action,
-		authority:      b.l.reg.statementIssuer,
-		key:            action,
-		sql:            built.sql,
-		shape:          built.shape,
+	shape := &planrt.CompiledShape{
+		ObservationKey: b.l.name + "." + action,
+		TableName:      b.l.name,
+		Action:         action,
+		Authority:      b.l.reg.statementIssuer,
+		Key:            action,
+		SQL:            built.sql,
+		Effects:        uint8(built.shape.Effects),
+		HasResult:      len(built.shape.Result) != 0,
 	}
 	return b.binding.authorize(shape, method, values, secret, b.l.meta, b.l.scope.mode == scopeParam)
 }
@@ -206,8 +209,8 @@ func (r *Registry[S]) encodeKeysetCursorValue(colType reflect.Type, val any) (an
 		ptr.Elem().Set(reflect.ValueOf(val))
 		return customWrap(ptr.Interface()), nil
 	}
-	if hasDef && def.kind.encoder != nil {
-		return def.kind.encoder.encode(val)
+	if hasDef && def.kind.Encoder != nil {
+		return def.kind.Encoder.Encode(val)
 	}
 	return val, nil
 }

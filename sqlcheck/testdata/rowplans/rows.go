@@ -5,6 +5,7 @@ import (
 	"context"
 
 	tb "github.com/0xJean/tabula"
+	tplan "github.com/0xJean/tabula/plan"
 )
 
 type item struct {
@@ -19,30 +20,30 @@ type result struct {
 var reg = tb.NewRegistry(tb.RegistryConfig[struct{}]{})
 var table = tb.Define(reg, tb.TableSpec[item, int64]{Name: "public.items", RelationScope: tb.Global(), AllowDelete: true})
 var out = tb.DefineView(reg, tb.ViewSpec[result]{Name: "entries"})
-var rel = tb.FromTable(table, "i", tb.Global())
-var src = tb.RowsFrom(table, rel)
-var id = tb.FieldOf(rel, "id", tb.Int8())
-var rank = tb.FieldOf(rel, "rank", tb.Int4())
-var value = tb.Input("rank", tb.Int4())
-var where = tb.RowFilter{Where: tb.Ge(rank.Expr(), value.Expr())}
-var plan = tb.DefineRows(out, "items_by_rank", src, tb.RowsSpec{
+var rel = tplan.FromTable(table, "i", tb.Global())
+var src = tplan.RowsFrom(table, rel)
+var id = tplan.FieldOf(rel, "id", tplan.Int8())
+var rank = tplan.FieldOf(rel, "rank", tplan.Int4())
+var value = tplan.Input("rank", tplan.Int4())
+var where = tplan.RowFilter{Where: tplan.Ge(rank.Expr(), value.Expr())}
+var plan = tplan.DefineRows(out, "items_by_rank", src, tplan.RowsSpec{
 	RowFilter: where, WithExists: true,
-	Orders: []tb.RowOrder{{Name: "forward", Terms: []tb.RowTerm{tb.Asc(id)}}, {Name: "reverse", Terms: []tb.RowTerm{tb.Desc(id)}}},
-}, tb.Project(tb.Output(out, "id", tb.Int8()), id.Expr()))
-var change, _ = tb.TryDefineUpdateMany(src, "change_rank", tb.MutationSpec{RowFilter: where}, tb.RowSet{
-	Name: "rank", Assignments: []tb.RowAssignment{tb.Assign(rank, value.Expr())},
+	Orders: []tplan.RowOrder{{Name: "forward", Terms: []tplan.RowTerm{tplan.Asc(id)}}, {Name: "reverse", Terms: []tplan.RowTerm{tplan.Desc(id)}}},
+}, tplan.Project(tplan.Output(out, "id", tplan.Int8()), id.Expr()))
+var change, _ = tplan.TryDefineUpdateMany(src, "change_rank", tplan.MutationSpec{RowFilter: where}, tplan.RowSet{
+	Name: "rank", Assignments: []tplan.RowAssignment{tplan.Assign(rank, value.Expr())},
 })
-var remove = tb.DefineDeleteMany(src, "remove_items", tb.MutationSpec{RowFilter: where})
+var remove = tplan.DefineDeleteMany(src, "remove_items", tplan.MutationSpec{RowFilter: where})
 
 // Definitions returns the matching snapshot inputs.
 func Definitions() ([]tb.Definition, []tb.ViewDefinition) { return reg.Defined(), reg.DefinedViews() }
 
-func use(ctx context.Context, s tb.Session[struct{}], indirect *tb.BoundRowsPlan[result, struct{}]) {
+func use(ctx context.Context, s tb.Session[struct{}], indirect *tplan.BoundRowsPlan[result, struct{}]) {
 	bound := plan.Bind(s)
-	_, _, _ = bound.List(ctx, tb.RowChoice{Order: "forward"}, tb.BindValue(value, 1))
-	_, _ = (*tb.BoundRowsPlan[result, struct{}]).Count(bound, ctx, nil, tb.BindValue(value, 1))
-	_, _ = bound.Exists(ctx, nil, tb.BindValue(value, 1))
-	_, _ = indirect.Find(ctx, tb.RowChoice{}, tb.BindValue(value, 1))
-	_, _ = change.Bind(s).UpdateMany(ctx, "rank", nil, tb.BindValue(value, 2))
-	_, _ = remove.Bind(s).DeleteMany(ctx, nil, tb.BindValue(value, 3))
+	_, _, _ = bound.List(ctx, tplan.RowChoice{Order: "forward"}, tplan.BindValue(value, 1))
+	_, _ = (*tplan.BoundRowsPlan[result, struct{}]).Count(bound, ctx, nil, tplan.BindValue(value, 1))
+	_, _ = bound.Exists(ctx, nil, tplan.BindValue(value, 1))
+	_, _ = indirect.Find(ctx, tplan.RowChoice{}, tplan.BindValue(value, 1))
+	_, _ = change.Bind(s).UpdateMany(ctx, "rank", nil, tplan.BindValue(value, 2))
+	_, _ = remove.Bind(s).DeleteMany(ctx, nil, tplan.BindValue(value, 3))
 }

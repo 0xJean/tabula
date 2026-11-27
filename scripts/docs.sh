@@ -39,6 +39,33 @@ if [[ "$mode" == --check ]]; then
     echo 'Update the public package and command links in docs/INTEGRATION.md.' >&2
     exit 1
   fi
+
+  # Verify cross-document version consistency across INTEGRATION, MIGRATION, README and CHANGELOG.
+  IFS= read -r mig_title < docs/MIGRATION.md
+  if [[ "$mig_title" != "# Migrating to Tabula $series" ]]; then
+    echo "docs/MIGRATION.md title must be '# Migrating to Tabula $series' (got '$mig_title')." >&2
+    exit 1
+  fi
+  if grep -Eq '^## Working from the v[0-9]+\.[0-9]+ checkout' README.md; then
+    echo 'README.md contains a stale versioned checkout heading.' >&2
+    exit 1
+  fi
+  latest_released=$(awk '/^## v[0-9]+\.[0-9]+\.[0-9]+/ && $0 !~ /Unreleased/ { print $2; exit }' CHANGELOG.md)
+  if [[ -z "$latest_released" ]]; then
+    echo 'CHANGELOG.md must contain at least one released vX.Y.Z heading.' >&2
+    exit 1
+  fi
+  install_ver=$(awk '/^## Install v[0-9]+\.[0-9]+\.[0-9]+$/ { print $3; exit }' README.md)
+  if [[ "$install_ver" != "$latest_released" ]]; then
+    echo "README.md '## Install $install_ver' does not match latest released CHANGELOG version '$latest_released'." >&2
+    exit 1
+  fi
+  for mod_pkg in github.com/0xJean/tabula github.com/0xJean/tabula/pgxdriver github.com/0xJean/tabula/oteltabula; do
+    if ! grep -Fq "go get ${mod_pkg}@${latest_released}" README.md; then
+      echo "README.md must reference 'go get ${mod_pkg}@${latest_released}'." >&2
+      exit 1
+    fi
+  done
 fi
 
 {

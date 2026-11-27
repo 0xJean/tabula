@@ -13,97 +13,69 @@ Items keep the red lines in [docs/DESIGN.md](docs/DESIGN.md).
 - `pqdriver`; `sqlcheck`: snapshots, schema columns, privilege derivation and role grants,
   `PrepareStatement` / `VerifyStatements` (PREPARE plus EXPLAIN EXECUTE on a real database).
 
-## v0.3.0
+## v0.3 — released (`v0.3.0`–`v0.3.11`)
 
 - **Immutable descriptors & generic row scope**: `TableSpec` / `ViewSpec`, bound-scope
   sessions (`Scope` / `Unscoped` / `db:"...,scope"`), driver-independent `tabula.Retry` and
   SQLSTATE helpers.
-- **Single-table writes & table modes**: `UpdateWhere` / `SetWhere` (0 rows is not an
-  error), controlled upsert (`DefineUpsert` / `Upsert` / `UpsertMany`; key, scope and `once`
-  columns can never be updated), `SetExpr` (`Add`, `SetNow`), opt-in physical deletes
-  (`TableSpec.AllowDelete` + `Delete` / `DeleteWhere`), `TableSpec.ReadOnly` mode,
-  `InsertReturning` / `SaveReturning`, multi-row `InsertMany` (chunked at PostgreSQL's
-  65,535 param limit).
-- **Schema shapes & codecs**: composite keys (struct `K`) with tuple `IN` for `GetMany` /
-  `LockMany`; configurable soft delete (`*time.Time`, `bool`, or status value via
-  `TableSpec.SoftDelete`); built-in `net/netip` and `int32`/`float64`/`bool` array codecs.
-- **Queries, streaming & projections**: `iter.Seq2` streaming (`Iter`, `SelectIter`),
-  `LockMode` (`FOR UPDATE`, `SKIP LOCKED`, `NOWAIT`, `FOR SHARE`), keyset pagination
-  (`ListKeyset`), count strategies (`CountExact`, `CountNone`, `CountEstimate`), `Filter`
-  (`AndIf`, `In`, `Range`, `??`), `View` nested struct prefixes and `SelectAs`.
-- **Drivers, sessions & transactions**: `stdsql` (`*sql.DB` / `*sql.Tx` Runner,
-  `ScopePolicy` RLS plug-in, `Savepoint`, read-only `Direct` pools) and separate
-  `pgxdriver` (`pgx/v5`) module including `Direct` pools and `CopyFrom` binary `COPY`.
-- **Errors & observability**: PostgreSQL error classes and sentinels, opt-in `log/slog`
-  per [docs/LOGGING.md](docs/LOGGING.md) (`LogOff`/`LogErrors`/`LogSlow`/`LogAll`,
-  atomic level switch, `secret` tag, `Quiet()`/`Secret()`), plus explicit `Tracer` and
-  `Metrics` hooks on `RegistryConfig`.
-- **Verification, quality gates & docs**: `sqlcheck.ParseSnapshot`, `RenderAllSnapshot`,
-  `VerifyViewStatements`, `VerifyViewSchema` (regular & materialized views), `DELETE` &
-  function `EXECUTE` privilege checks, `CheckRLS` + `cmd/tabula` CLI (`tabula check` &
-  `tabula check-rls`), `GuardNoSessionEscape` & `GuardReadOnly`, `.golangci.yml`,
-  `scripts/check.sh`, `AGENTS.md`, [docs/TESTING.md](docs/TESTING.md),
-  [docs/MIGRATION.md](docs/MIGRATION.md), [docs/COOKBOOK.md](docs/COOKBOOK.md),
-  [examples/multitenant](examples/multitenant/README.md), and
-  [benchmarks](benchmarks/README.md).
+- **Single-table writes & table modes**: `UpdateWhere` / `SetWhere`, controlled upsert
+  (`DefineUpsert` / `Upsert` / `UpsertMany`), `SetExpr` (`Add`, `SetNow`), opt-in physical
+  deletes (`TableSpec.AllowDelete`), `TableSpec.ReadOnly`, `TableSpec.WriteMode`,
+  `InsertReturning` / `SaveReturning`, chunked `InsertMany`.
+- **Role-bound runners and guarded sessions**: `stdsql` and separate `pgxdriver` (`pgx/v5`)
+  modules with role pinning, per-role timeouts, `ScopePolicy`, `WithinShared`, `WithinRetry`,
+  `WithinRaw` (`ExposeTx`), `Direct` pools, `CopyFrom`, sealed sessions (`SessionKey` /
+  `Registry.Seal`), capability policy (`Deny`), session-level observability, and separate
+  `oteltabula` OpenTelemetry module.
+- **PostgreSQL authorization & fixture tooling**: `sqlcheck` static/dynamic SQL inventory,
+  security call targets, direct grant manifests, revocation trials (`MinimizeGrants`),
+  policy snapshots and classification, RLS behavior matrix (`RunRLSMatrix`), login-role
+  hygiene (`CheckLoginRole`), `cmd/tabula` CLI, and `postgresfixture` content-addressed test
+  templates with process login leases and idle clone pruning. [Authorization guide](docs/AUTHORIZATION.md)
 
-### PostgreSQL authorization and RLS verification
+## v0.4 — released (`v0.4.0`–`v0.4.4`)
 
-- Collect static and dynamic handwritten SQL sites, review exceptions and verify explicit per-role workloads.
-- Compare direct role grants against a manifest. Trial individual revocations in a disposable database and produce reviewable GRANT and REVOKE SQL.
-- Snapshot policies, FORCE RLS tables, grants and SECURITY DEFINER routines. Classify policies with application rules, check command coverage and exercise a role/scope/statement matrix.
-- Distinguish RLS and privilege denials, configure session guards and clone content-addressed PostgreSQL test templates through a chosen migration. [Design and configuration](docs/AUTHORIZATION.md)
+- **Registered PostgreSQL statements & `SQLAuthority`**: strict `DenyLegacySQL` execution
+  channel, typed predicates, single-table row/mutation/existence plans, row locks,
+  transaction advisory locks and declared PostgreSQL functions.
+- **Explicit joins, mappings and expressions**: inner/left/cross/self-joins, `DefinePlanSource`,
+  `MapTable`, `pgtype`, scalar expressions, computed groups/orders, aggregate filters and
+  ordered aggregates, `Distinct` / `DistinctOn`, finite joined lists and catalog-proven
+  keyset cursors. [v0.4 design](docs/DESIGN-v0.4.md)
+- **Composable query graphs & typed writes**: derived/lateral sources, correlated subqueries,
+  set operations, read/recursive CTEs, window functions and frames, multiple row-lock clauses,
+  typed `INSERT`/`UPDATE`/`DELETE` with defaults/conflicts/batches/`RETURNING`/modifying CTEs,
+  guarded `OperationSession` savepoints and non-executing `pgxdriver.SQLVerifier`. [M3 design](docs/DESIGN-M3.md)
 
-## v0.3.1 candidate — included in v0.3.2
+## v0.5 — released (`v0.5.0`–`v0.5.1`)
 
-Design record: [docs/DESIGN-v0.3.1.md](docs/DESIGN-v0.3.1.md).
+- **Named-parameter SQL tier (`DefineSQL*`)**: `DefineSQL`, `DefineSQLExec`, `DefineSQLReturning`,
+  `DefineSQLList`, `ScopeParam`, Go type families (`TypeFamilyOf`, `RegisterTypeFamily`),
+  bidirectional `AllowedTypes` catalog verification with lossless input integer widening (`v0.5.1`),
+  and custom `RegistryConfig.SessionGuard`.
+- **Table-level grant granularity**: `GranularityTable` across `ReadCatalog`, `CheckGrantManifest`,
+  `MinimizeGrants`, `cmd/tabula --granularity=table`, and `ReadinessNeeds.TableSelect/Insert/Update/Delete`.
 
-- **Role-bound runners and guarded sessions**: runners pinned to one PostgreSQL role with
-  per-role timeouts, context-derived session variables, scoped and unscoped sessions in
-  one transaction (`WithinShared`), sealed sessions (`SessionKey` / `Registry.Seal`),
-  opt-in raw `Tx()` escape (`ExposeTx` / `WithinRaw`), registry capability policy (`Deny`),
-  transaction-level retry (`WithinRetry`), and login role hygiene check (`CheckLoginRole` /
-  `tabula check-login-role`).
-- **Session-level observability**: tracer, metrics, structured logger and `TagStatements` on
-  runners so hand-written SQL is observed too; separate `oteltabula` OpenTelemetry module;
-  server-side slow log guidance in [docs/LOGGING.md](docs/LOGGING.md).
-- **Query composition, aggregates and embedded SQL**: typed single-table aggregates
-  (`Max`/`Min`/`Sum`/`Avg`/`CountBy`) and filtered `Rows.Exists`, view-owned composed
-  queries (`View.DefineQuery` with `Select`/`Where`/`Tail`/`CountBase`, local `$1…$m`
-  filters, three-state scope, verified C3 variants, keyset `Next` cursors and
-  `FuzzCompileQueryFragment`), embedded `.sql` files (`MustSQLFiles`), and extended
-  `sqlcheck` / `tabula inventory` support. Applications write the joins.
+## v0.6 — released (`v0.6.0`)
 
-## v0.3.2 — released
+- **API surface convergence (`github.com/0xJean/tabula/plan`)**: extract the Typed Plan AST
+  and scalar/aggregate/window expression DSL into a dedicated stdlib-only core subpackage
+  `tabula/plan`, reducing root `package tabula`'s exported surface by roughly two-thirds while
+  preserving `SQLAuthority` unforgeability and zero-global-state guarantees.
+- **Documentation & version hygiene**: add the one-page [Choosing an API](docs/CHOOSING-AN-API.md)
+  decision guide with a minimal starter binding, declutter `README.md`, and enforce doc/tag
+  version consistency in `scripts/docs.sh` and `scripts/release.sh`.
 
-- Transactions and savepoints close unfinished database cursors on callback exit.
-- Shared transactions can use a dedicated unscoped reader role alongside scoped writes.
-- Tables can register individual scalar aggregates for SQL snapshots and role verification.
-- Composed lists accept a maximum offset. Table keyset lists report invalid options through their error result. [Migration guide](docs/MIGRATION.md#from-v030-to-v032)
+Note: expression-level `COLLATE`, recursive `SEARCH`/`CYCLE` clauses and native record paths
+are already usable via `DefineSQL*` and remain optional future AST additions rather than
+blockers for `v1.0`.
 
-## v0.4 — registered PostgreSQL statements
+## v1.0 — stability checklist
 
-Tabula v0.4.0 registers single-table reads, aggregates and conditional writes. Each permitted predicate, ordering and page variant has SQL that can be prepared and explained under its assigned role. A registry can require this execution path for selected runners and read-only pools.
-
-The same registry records row locks, transaction advisory locks and calls to declared PostgreSQL functions. Tabula v0.4.1 registers explicit inner, left, cross and self-joins, fixed-list and array membership, and string pattern matches. In v0.4.2 a physical source can derive all its grants from typed plans. Reusable table mappings support narrow reads and self-joins. Exact-cardinality, first-row and existence queries register their own bounded forms when requested.
-
-In v0.4.3, reads and conditional updates share typed PostgreSQL expressions. Queries can group, sort and aggregate computed values. An explicit join can register filtered pages, exact counts and keyset orders whose uniqueness is checked against the catalog. [Release sequence](docs/DESIGN-v0.4.md#release-sequence-and-acceptance)
-
-Tabula v0.4.4 adds composable query sources, subqueries, set operations,
-read and recursive common tables, windows and final-result pagination. Multiple
-row-lock clauses retain per-target grants and wait modes. Explicit materialized
-result fields support row-local reuse of volatile arrays without treating them
-as stable cursor keys. Typed write plans cover defaults, conflicts, batches,
-matching sources, RETURNING and modifying common tables, with guarded operation
-savepoints and non-executing result verification. [M3 contracts](docs/DESIGN-M3.md)
-
-Explicit expression-level COLLATE provenance, recursive SEARCH/CYCLE decorators
-and native record paths remain separate future work.
-
-## v1.0 — stability and ecosystem adapters
-
-- API freeze and semver compatibility promise.
-- Optional Prometheus adapter module over `Metrics` (the OpenTelemetry adapter is included in v0.3.2).
+- Freeze public APIs and semver guarantees across `tabula`, `tabula/plan`, `tabula/pgtype`,
+  `tabula/stdsql`, `tabula/sqlcheck`, `tabula/pgxdriver` and `tabula/oteltabula`.
+- Retire or clearly quarantine deprecated `v0.3` string-fragment helpers if needed prior to freeze.
+- Optional Prometheus adapter module over `Metrics`.
 - Optional prepared-statement cache.
 
 ## Out of scope

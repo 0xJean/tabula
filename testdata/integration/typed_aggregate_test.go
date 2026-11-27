@@ -13,6 +13,7 @@ import (
 	t "github.com/0xJean/tabula"
 	pg "github.com/0xJean/tabula/pgtype"
 	"github.com/0xJean/tabula/pgxdriver"
+	"github.com/0xJean/tabula/plan"
 	"github.com/0xJean/tabula/pqdriver"
 	"github.com/0xJean/tabula/sqlcheck"
 	"github.com/stretchr/testify/require"
@@ -78,45 +79,45 @@ func TestAggregateClausesBothDrivers(test *testing.T) {
 			}
 			reg := t.NewRegistry(cfg)
 			table := t.DefinePlanSource(reg, t.TableSpec[aggregateItem, int32]{Name: ns + ".items", RelationScope: t.Global()})
-			src := t.MapTable(table).As("i")
-			id, rank := t.FieldOf(src.Rel(), "id", pg.Int4()), t.FieldOf(src.Rel(), "rank", pg.Int4())
-			label, flag := t.FieldOf(src.Rel(), "label", pg.Text()), t.FieldOf(src.Rel(), "flag", pg.Bool())
-			floor, delimiter := t.Input("floor", pg.Int4()), t.Input("delimiter", pg.Text())
-			condition := t.Ge(rank.Expr(), floor.Expr())
+			src := plan.MapTable(table).As("i")
+			id, rank := plan.FieldOf(src.Rel(), "id", pg.Int4()), plan.FieldOf(src.Rel(), "rank", pg.Int4())
+			label, flag := plan.FieldOf(src.Rel(), "label", pg.Text()), plan.FieldOf(src.Rel(), "flag", pg.Bool())
+			floor, delimiter := plan.Input("floor", pg.Int4()), plan.Input("delimiter", pg.Text())
+			condition := plan.Ge(rank.Expr(), floor.Expr())
 			out := t.DefineView(reg, t.ViewSpec[aggregateResult]{Name: "entries"})
-			project := []t.Projection{
-				t.Project(t.Output(out, "count", pg.Int8()), t.FilterWhere(t.CountDistinct(label.Expr()), condition)),
-				t.Project(t.Output(out, "text", pg.Text()), t.FilterWhere(t.AggregateOrder(t.StringAgg(label.Expr(), delimiter.Expr()), t.Desc(rank), t.Asc(id)), condition)),
-				t.Project(t.Output(out, "ids", pg.ArrayOf(pg.Int4())), t.FilterWhere(t.AggregateOrder(t.ArrayAgg(id.Expr()), t.Desc(rank), t.Asc(id)), condition)),
-				t.Project(t.Output(out, "document", pg.JSON[json.RawMessage]()), t.FilterWhere(t.AggregateOrder(t.JSONAgg(pg.JSON[json.RawMessage](), label.Expr()), t.Desc(rank), t.Asc(id)), condition)),
-				t.Project(t.Output(out, "binary_document", pg.JSONB[json.RawMessage]()), t.FilterWhere(t.AggregateOrder(t.JSONBAgg(pg.JSONB[json.RawMessage](), label.Expr()), t.Desc(rank), t.Asc(id)), condition)),
-				t.Project(t.Output(out, "any", pg.Bool()), t.FilterWhere(t.BoolOr(flag.Expr()), condition)),
-				t.Project(t.Output(out, "all", pg.Bool()), t.FilterWhere(t.BoolAnd(flag.Expr()), condition)),
+			project := []plan.Projection{
+				plan.Project(plan.Output(out, "count", pg.Int8()), plan.FilterWhere(plan.CountDistinct(label.Expr()), condition)),
+				plan.Project(plan.Output(out, "text", pg.Text()), plan.FilterWhere(plan.AggregateOrder(plan.StringAgg(label.Expr(), delimiter.Expr()), plan.Desc(rank), plan.Asc(id)), condition)),
+				plan.Project(plan.Output(out, "ids", pg.ArrayOf(pg.Int4())), plan.FilterWhere(plan.AggregateOrder(plan.ArrayAgg(id.Expr()), plan.Desc(rank), plan.Asc(id)), condition)),
+				plan.Project(plan.Output(out, "document", pg.JSON[json.RawMessage]()), plan.FilterWhere(plan.AggregateOrder(plan.JSONAgg(pg.JSON[json.RawMessage](), label.Expr()), plan.Desc(rank), plan.Asc(id)), condition)),
+				plan.Project(plan.Output(out, "binary_document", pg.JSONB[json.RawMessage]()), plan.FilterWhere(plan.AggregateOrder(plan.JSONBAgg(pg.JSONB[json.RawMessage](), label.Expr()), plan.Desc(rank), plan.Asc(id)), condition)),
+				plan.Project(plan.Output(out, "any", pg.Bool()), plan.FilterWhere(plan.BoolOr(flag.Expr()), condition)),
+				plan.Project(plan.Output(out, "all", pg.Bool()), plan.FilterWhere(plan.BoolAnd(flag.Expr()), condition)),
 			}
-			single := t.DefineRows(out, "totals", src, t.RowsSpec{}, project...)
-			explicit := t.DefineRead(out, "explicit", t.Select(project...).From(src))
+			single := plan.DefineRows(out, "totals", src, plan.RowsSpec{}, project...)
+			explicit := plan.DefineRead(out, "explicit", plan.Select(project...).From(src))
 			groupOut := t.DefineView(reg, t.ViewSpec[aggregateGroup]{Name: "groups"})
-			key := t.IsNull(label.Expr())
-			groups := []t.Projection{t.Project(t.Output(groupOut, "missing", pg.Bool()), key), t.Project(t.Output(groupOut, "count", pg.Int8()), t.CountAll())}
-			grouped := t.DefineRows(groupOut, "pages", src, t.RowsSpec{GroupBy: []t.RowColumn{t.GroupExpr(key)}, Orders: []t.RowOrder{{Name: "count", Terms: []t.RowTerm{t.DescExpr(t.CountAll()), t.AscExpr(key)}}}, Pages: t.RowPages{Unpaged: true, Keyset: true, MaxLimit: 2}}, groups...)
-			minimum := t.Input("minimum", pg.Int8())
-			groupRead := t.DefineRead(groupOut, "read", t.Select(groups...).From(src).GroupBy(key).Having(t.Ge(t.CountAll(), minimum.Expr())).OrderBy(t.AscExpr(key)))
-			winners := t.DefineTableRead(src, "winners", t.SelectColumns(label.Column(), id.Column(), rank.Column()), t.Select().DistinctOn(label.Expr()).OrderBy(t.Asc(label).NullsFirst(), t.Desc(rank), t.Asc(id)))
-			distinct := t.DefineTableRead(src, "labels", t.SelectColumns(label.Column()), t.Select().Distinct().OrderBy(t.Asc(label).NullsFirst()))
-			var pages []*t.RowsPlan[aggregateItem, itemScope]
-			for i, term := range []t.RowTerm{t.AscExpr(label.Expr()).NullsFirst(), t.AscExpr(label.Expr()).NullsLast(), t.DescExpr(label.Expr()).NullsFirst(), t.DescExpr(label.Expr()).NullsLast()} {
-				pages = append(pages, t.DefineTableRows(src, fmt.Sprintf("page_%d", i), t.RowsSpec{Orders: []t.RowOrder{{Name: "key", Terms: []t.RowTerm{term, t.Asc(id)}}}, Pages: t.RowPages{Unpaged: true, Keyset: true, MaxLimit: 2}}, t.SelectColumns(label.Column(), id.Column())))
+			key := plan.IsNull(label.Expr())
+			groups := []plan.Projection{plan.Project(plan.Output(groupOut, "missing", pg.Bool()), key), plan.Project(plan.Output(groupOut, "count", pg.Int8()), plan.CountAll())}
+			grouped := plan.DefineRows(groupOut, "pages", src, plan.RowsSpec{GroupBy: []plan.RowColumn{plan.GroupExpr(key)}, Orders: []plan.RowOrder{{Name: "count", Terms: []plan.RowTerm{plan.DescExpr(plan.CountAll()), plan.AscExpr(key)}}}, Pages: plan.RowPages{Unpaged: true, Keyset: true, MaxLimit: 2}}, groups...)
+			minimum := plan.Input("minimum", pg.Int8())
+			groupRead := plan.DefineRead(groupOut, "read", plan.Select(groups...).From(src).GroupBy(key).Having(plan.Ge(plan.CountAll(), minimum.Expr())).OrderBy(plan.AscExpr(key)))
+			winners := plan.DefineTableRead(src, "winners", plan.SelectColumns(label.Column(), id.Column(), rank.Column()), plan.Select().DistinctOn(label.Expr()).OrderBy(plan.Asc(label).NullsFirst(), plan.Desc(rank), plan.Asc(id)))
+			distinct := plan.DefineTableRead(src, "labels", plan.SelectColumns(label.Column()), plan.Select().Distinct().OrderBy(plan.Asc(label).NullsFirst()))
+			var pages []*plan.RowsPlan[aggregateItem, itemScope]
+			for i, term := range []plan.RowTerm{plan.AscExpr(label.Expr()).NullsFirst(), plan.AscExpr(label.Expr()).NullsLast(), plan.DescExpr(label.Expr()).NullsFirst(), plan.DescExpr(label.Expr()).NullsLast()} {
+				pages = append(pages, plan.DefineTableRows(src, fmt.Sprintf("page_%d", i), plan.RowsSpec{Orders: []plan.RowOrder{{Name: "key", Terms: []plan.RowTerm{term, plan.Asc(id)}}}, Pages: plan.RowPages{Unpaged: true, Keyset: true, MaxLimit: 2}}, plan.SelectColumns(label.Column(), id.Column())))
 			}
 			notes := t.DefinePlanSource(reg, t.TableSpec[aggregateNote, int32]{Name: ns + ".notes", RelationScope: t.Global()})
-			right := t.MapTable(notes).As("n")
-			nid, parent, nrank := t.FieldOf(right.Rel(), "id", pg.Int4()), t.FieldOf(right.Rel(), "item_id", pg.Int4()), t.FieldOf(right.Rel(), "rank", pg.Int4())
-			joined := t.DefineRead(groupOut, "joined", t.Select(groups[0], t.Project(t.Output(groupOut, "count", pg.Int8()), t.FilterWhere(t.CountDistinct(nid.Expr()), t.Ge(nrank.Expr(), floor.Expr())))).From(src).LeftJoin(right, t.Eq(parent.Expr(), id.Expr())).GroupBy(key).OrderBy(t.AscExpr(key)))
+			right := plan.MapTable(notes).As("n")
+			nid, parent, nrank := plan.FieldOf(right.Rel(), "id", pg.Int4()), plan.FieldOf(right.Rel(), "item_id", pg.Int4()), plan.FieldOf(right.Rel(), "rank", pg.Int4())
+			joined := plan.DefineRead(groupOut, "joined", plan.Select(groups[0], plan.Project(plan.Output(groupOut, "count", pg.Int8()), plan.FilterWhere(plan.CountDistinct(nid.Expr()), plan.Ge(nrank.Expr(), floor.Expr())))).From(src).LeftJoin(right, plan.Eq(parent.Expr(), id.Expr())).GroupBy(key).OrderBy(plan.AscExpr(key)))
 			distinctOut := t.DefineView(reg, t.ViewSpec[aggregateDistinct]{Name: "notes"})
-			distinctInputs := t.DefineRead(distinctOut, "arguments", t.Select(
-				t.Project(t.Output(distinctOut, "text", pg.Text()), t.AggregateOrder(t.DistinctInputs(t.StringAgg(label.Expr(), delimiter.Expr())), t.Desc(label))),
-				t.Project(t.Output(distinctOut, "ranks", pg.ArrayOf(pg.Int4())), t.AggregateOrder(t.DistinctInputs(t.ArrayAgg(rank.Expr())), t.Desc(rank))),
-				t.Project(t.Output(distinctOut, "any", pg.Bool()), t.DistinctInputs(t.BoolOr(flag.Expr()))),
-				t.Project(t.Output(distinctOut, "all", pg.Bool()), t.DistinctInputs(t.BoolAnd(flag.Expr()))),
+			distinctInputs := plan.DefineRead(distinctOut, "arguments", plan.Select(
+				plan.Project(plan.Output(distinctOut, "text", pg.Text()), plan.AggregateOrder(plan.DistinctInputs(plan.StringAgg(label.Expr(), delimiter.Expr())), plan.Desc(label))),
+				plan.Project(plan.Output(distinctOut, "ranks", pg.ArrayOf(pg.Int4())), plan.AggregateOrder(plan.DistinctInputs(plan.ArrayAgg(rank.Expr())), plan.Desc(rank))),
+				plan.Project(plan.Output(distinctOut, "any", pg.Bool()), plan.DistinctInputs(plan.BoolOr(flag.Expr()))),
+				plan.Project(plan.Output(distinctOut, "all", pg.Bool()), plan.DistinctInputs(plan.BoolAnd(flag.Expr()))),
 			).From(src))
 			verifyAggregateDefinitions(test, db, role, reg)
 			run := func(body rowCallback) {
@@ -124,8 +125,8 @@ func TestAggregateClausesBothDrivers(test *testing.T) {
 				require.NoError(test, runRowPlan(test, db, pool, driver, reg.SQLAuthority(), role, 1, t.LogConfig{}, body))
 			}
 			run(func(ctx context.Context, session t.Session[itemScope]) error {
-				bindings := []t.Binding{t.BindValue(floor, 3), t.BindValue(delimiter, ",")}
-				rows, total, err := single.Bind(session).List(ctx, t.RowChoice{}, bindings...)
+				bindings := []plan.Binding{plan.BindValue(floor, 3), plan.BindValue(delimiter, ",")}
+				rows, total, err := single.Bind(session).List(ctx, plan.RowChoice{}, bindings...)
 				require.NoError(test, err)
 				require.EqualValues(test, 1, total)
 				require.Len(test, rows, 1)
@@ -139,19 +140,19 @@ func TestAggregateClausesBothDrivers(test *testing.T) {
 				repeated, err := explicit.Bind(session).Find(ctx, bindings...)
 				require.NoError(test, err)
 				require.Equal(test, rows, repeated)
-				empty, err := explicit.Bind(session).Find(ctx, t.BindValue(floor, 100), t.BindValue(delimiter, ","))
+				empty, err := explicit.Bind(session).Find(ctx, plan.BindValue(floor, 100), plan.BindValue(delimiter, ","))
 				require.NoError(test, err)
 				require.Equal(test, []aggregateResult{{}}, empty)
-				all, total, err := grouped.Bind(session).List(ctx, t.RowChoice{Order: "count"})
+				all, total, err := grouped.Bind(session).List(ctx, plan.RowChoice{Order: "count"})
 				require.NoError(test, err)
 				require.EqualValues(test, 2, total)
 				require.Equal(test, []aggregateGroup{{false, 3}, {true, 2}}, all)
-				readGroups, err := groupRead.Bind(session).Find(ctx, t.BindValue(minimum, 2))
+				readGroups, err := groupRead.Bind(session).Find(ctx, plan.BindValue(minimum, 2))
 				require.NoError(test, err)
 				require.Equal(test, all, readGroups)
 				cursor, err := grouped.CursorFrom("count", all[0])
 				require.NoError(test, err)
-				next, total, err := grouped.Bind(session).List(ctx, t.RowChoice{Order: "count", Page: t.AfterPage, Limit: 1, After: cursor})
+				next, total, err := grouped.Bind(session).List(ctx, plan.RowChoice{Order: "count", Page: plan.AfterPage, Limit: 1, After: cursor})
 				require.NoError(test, err)
 				require.EqualValues(test, 2, total)
 				require.Equal(test, all[1:], next)
@@ -161,17 +162,17 @@ func TestAggregateClausesBothDrivers(test *testing.T) {
 				labels, err := distinct.Bind(session).Find(ctx)
 				require.NoError(test, err)
 				require.Equal(test, []aggregateItem{{}, {Label: new("a")}, {Label: new("b")}}, labels)
-				joinedRows, err := joined.Bind(session).Find(ctx, t.BindValue(floor, 3))
+				joinedRows, err := joined.Bind(session).Find(ctx, plan.BindValue(floor, 3))
 				require.NoError(test, err)
 				require.Equal(test, []aggregateGroup{{false, 2}, {true, 0}}, joinedRows)
-				unique, err := distinctInputs.Bind(session).Find(ctx, t.BindValue(delimiter, ","))
+				unique, err := distinctInputs.Bind(session).Find(ctx, plan.BindValue(delimiter, ","))
 				require.NoError(test, err)
 				require.Equal(test, []aggregateDistinct{{Text: new("b,a"), Ranks: []int32{9, 7, 3, 1, 0}, Any: new(true), All: new(false)}}, unique)
 				for _, page := range pages {
-					all, err := page.Bind(session).Find(ctx, t.RowChoice{Order: "key"})
+					all, err := page.Bind(session).Find(ctx, plan.RowChoice{Order: "key"})
 					require.NoError(test, err)
 					var traversed []aggregateItem
-					choice := t.RowChoice{Order: "key", Page: t.FirstPage, Limit: 1}
+					choice := plan.RowChoice{Order: "key", Page: plan.FirstPage, Limit: 1}
 					for range len(all) + 1 {
 						chunk, err := page.Bind(session).Find(ctx, choice)
 						require.NoError(test, err)
@@ -181,14 +182,14 @@ func TestAggregateClausesBothDrivers(test *testing.T) {
 						traversed = append(traversed, chunk...)
 						choice.After, err = page.CursorFrom("key", chunk[0])
 						require.NoError(test, err)
-						manual := t.NullAtExpr(label.Expr())
+						manual := plan.NullAtExpr(label.Expr())
 						if chunk[0].Label != nil {
-							manual = t.AtExpr(label.Expr(), *chunk[0].Label)
+							manual = plan.AtExpr(label.Expr(), *chunk[0].Label)
 						}
-						boundary, err := page.Cursor("key", manual, t.At(id, chunk[0].ID))
+						boundary, err := page.Cursor("key", manual, plan.At(id, chunk[0].ID))
 						require.NoError(test, err)
 						require.Equal(test, boundary, choice.After)
-						choice.Page = t.AfterPage
+						choice.Page = plan.AfterPage
 					}
 					require.Equal(test, all, traversed)
 				}
@@ -202,7 +203,7 @@ func TestAggregateClausesBothDrivers(test *testing.T) {
 				return nil
 			})
 			err := runRowPlan(test, db, pool, driver, reg.SQLAuthority(), role, 1, t.LogConfig{}, func(ctx context.Context, session t.Session[itemScope]) error {
-				_, err := explicit.Bind(session).Find(ctx, t.BindValue(floor, 3), t.BindValue(delimiter, ","))
+				_, err := explicit.Bind(session).Find(ctx, plan.BindValue(floor, 3), plan.BindValue(delimiter, ","))
 				return err
 			})
 			require.Equal(test, "42501", t.SQLState(err))

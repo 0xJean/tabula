@@ -47,7 +47,7 @@ func TestCollectLockAndRoutineShapes(t *testing.T) {
 			}
 			if site.QueryKey == "" {
 				require.Equal(t, "All", site.Method)
-				require.Equal(t, tabulaPkgPath+".BoundRoutinePlan", site.Receiver)
+				require.Equal(t, planPkgPath+".BoundRoutinePlan", site.Receiver)
 				require.Empty(t, site.Definition)
 				indirect = site
 				b.Definition, b.Plan = "entries", "change_items"

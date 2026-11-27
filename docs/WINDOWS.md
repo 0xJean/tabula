@@ -1,15 +1,15 @@
 # Windows, row locks and network addresses
 
-Window functions retain the rows of their input query. Wrap a ranking/value
+Window functions and multi-target row locks live in `github.com/0xJean/tabula/plan` (`package plan`). Window functions retain the rows of their input query. Wrap a ranking/value
 function or an ordinary aggregate in `Over`, then project it or use it in the
 final `OrderBy`. `WindowSpec.Partition` lists typed expressions and `Order` uses
 the existing `RowTerm` direction and NULL placement. No implicit order or frame
 is added.
 
 ```go
-position := tabula.Over(tabula.RowNumber(), tabula.WindowSpec{
-    Partition: []tabula.Scalar{groupID.Expr()},
-    Order: []tabula.RowTerm{tabula.Asc(rank), tabula.Asc(id)},
+position := plan.Over(plan.RowNumber(), plan.WindowSpec{
+    Partition: []plan.Scalar{groupID.Expr()},
+    Order: []plan.RowTerm{plan.Asc(rank), plan.Asc(id)},
 })
 ```
 
@@ -43,11 +43,11 @@ peer of the current row when ordered. In particular, default `LastValue` need
 not return the partition's final value.
 
 ```go
-frame := tabula.WindowFrame{
-    Mode: tabula.FrameGroups,
-    Start: tabula.Preceding(distance.Expr()), // exact int8 input
-    End: tabula.CurrentRow(),
-    Exclude: tabula.ExcludeTies,
+frame := plan.WindowFrame{
+    Mode: plan.FrameGroups,
+    Start: plan.Preceding(distance.Expr()), // exact int8 input
+    End: plan.CurrentRow(),
+    Exclude: plan.ExcludeTies,
 }
 ```
 
@@ -95,8 +95,8 @@ limited query remains available for ordinary reads and bounded offset pages.
 
 ```go
 query = query.Locks(
-    tabula.ForRows(tabula.ForUpdate, items.Rel(), tabula.NoWait),
-    tabula.ForRows(tabula.ForShare, notes.Rel(), tabula.SkipLocked),
+    plan.ForRows(plan.ForUpdate, items.Rel(), plan.NoWait),
+    plan.ForRows(plan.ForShare, notes.Rel(), plan.SkipLocked),
 )
 ```
 

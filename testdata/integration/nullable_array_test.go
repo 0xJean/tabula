@@ -11,6 +11,7 @@ import (
 	q "github.com/0xJean/tabula"
 	pg "github.com/0xJean/tabula/pgtype"
 	"github.com/0xJean/tabula/pgxdriver"
+	"github.com/0xJean/tabula/plan"
 	"github.com/0xJean/tabula/pqdriver"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
@@ -78,15 +79,15 @@ func TestNullableArrayElementsOnMappedReads(t *testing.T) {
 			reg := q.NewRegistry(cfg)
 			kind := pg.ArrayOfNullable(pg.Int4())
 			tab := q.DefinePlanSource(reg, q.TableSpec[item, int64]{Name: tableName, RelationScope: q.Global()})
-			layout := q.MapTable(tab, q.ColumnType("ranks", kind))
+			layout := plan.MapTable(tab, plan.ColumnType("ranks", kind))
 			src := layout.As("i")
-			id := q.MappedColumn[int64](layout, "id").On(src.Rel())
-			ranks := q.MappedColumn[[]*int32](layout, "ranks").On(src.Rel())
-			rows := q.DefineTableRead(src, "records", q.SelectColumns(ranks.Column(), id.Column()), q.Select().OrderBy(q.Asc(id)))
-			in, key := q.Input("values", kind), q.Input("key", pg.Int8())
+			id := plan.MappedColumn[int64](layout, "id").On(src.Rel())
+			ranks := plan.MappedColumn[[]*int32](layout, "ranks").On(src.Rel())
+			rows := plan.DefineTableRead(src, "records", plan.SelectColumns(ranks.Column(), id.Column()), plan.Select().OrderBy(plan.Asc(id)))
+			in, key := plan.Input("values", kind), plan.Input("key", pg.Int8())
 			out := q.DefineView(reg, q.ViewSpec[result]{Name: "entries"})
-			probe := q.DefineRead(out, "values", q.Select(q.Project(q.Output(out, "ranks", kind), in.Expr())).
-				From(src).Where(q.Eq(id.Expr(), key.Expr())))
+			probe := plan.DefineRead(out, "values", plan.Select(plan.Project(plan.Output(out, "ranks", kind), in.Expr())).
+				From(src).Where(plan.Eq(id.Expr(), key.Expr())))
 			run := authorizedEffectRunner(t, driverName, db, pool, "", reg.SQLAuthority(), q.StatementPolicy{}, nil, false)
 			require.NoError(t, run(t.Context(), func(ctx context.Context, s session) error {
 				actual, err := rows.Bind(s).Find(ctx)
@@ -94,15 +95,15 @@ func TestNullableArrayElementsOnMappedReads(t *testing.T) {
 				require.Equal(t, []item{{ID: 1}, {ID: 2, Ranks: []*int32{}},
 					{ID: 3, Ranks: []*int32{new(int32(0)), nil, new(int32(7))}}}, actual)
 				populated := []*int32{new(int32(4)), nil}
-				bound := q.BindValue(in, populated)
+				bound := plan.BindValue(in, populated)
 				*populated[0], populated[1] = 8, new(int32(9))
 				for range 2 {
-					got, err := probe.Bind(s).One(ctx, bound, q.BindValue(key, int64(1)))
+					got, err := probe.Bind(s).One(ctx, bound, plan.BindValue(key, int64(1)))
 					require.NoError(t, err)
 					require.Equal(t, []*int32{new(int32(4)), nil}, got.Ranks)
 				}
 				for _, values := range [][]*int32{nil, {}} {
-					got, err := probe.Bind(s).One(ctx, q.BindValue(in, values), q.BindValue(key, int64(1)))
+					got, err := probe.Bind(s).One(ctx, plan.BindValue(in, values), plan.BindValue(key, int64(1)))
 					require.NoError(t, err)
 					require.Equal(t, values, got.Ranks)
 				}

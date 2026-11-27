@@ -8,43 +8,44 @@ import (
 
 	q "github.com/0xJean/tabula"
 	pg "github.com/0xJean/tabula/pgtype"
+	"github.com/0xJean/tabula/plan"
 	"github.com/stretchr/testify/require"
 )
 
 func TestScalarConditionalAndArithmetic(t *testing.T) {
 	scalarDrivers(t, func(f *scalarFixture) {
-		a, b := q.Input("a", pg.Int4()), q.Input("b", pg.Int4())
-		x, y := q.BindValue(a, int32(7)), q.BindValue(b, int32(3))
+		a, b := plan.Input("a", pg.Int4()), plan.Input("b", pg.Int4())
+		x, y := plan.BindValue(a, int32(7)), plan.BindValue(b, int32(3))
 		for _, c := range []struct {
 			name string
-			expr q.Expr[int32]
+			expr plan.Expr[int32]
 			want int32
 		}{
-			{"plus", q.Plus(a.Expr(), b.Expr()), 10}, {"minus", q.Minus(a.Expr(), b.Expr()), 4},
-			{"times", q.Times(a.Expr(), b.Expr()), 21}, {"divide", q.Divide(a.Expr(), b.Expr()), 2},
-			{"greatest", q.Greatest(a.Expr(), b.Expr()), 7}, {"least", q.Least(a.Expr(), b.Expr()), 3},
-			{"case", q.Case(q.When(q.TypedNull(pg.Bool()), b.Expr())).Else(a.Expr()), 7},
-			{"nullif_different", q.NullIf(a.Expr(), b.Expr()), 7},
+			{"plus", plan.Plus(a.Expr(), b.Expr()), 10}, {"minus", plan.Minus(a.Expr(), b.Expr()), 4},
+			{"times", plan.Times(a.Expr(), b.Expr()), 21}, {"divide", plan.Divide(a.Expr(), b.Expr()), 2},
+			{"greatest", plan.Greatest(a.Expr(), b.Expr()), 7}, {"least", plan.Least(a.Expr(), b.Expr()), 3},
+			{"case", plan.Case(plan.When(plan.TypedNull(pg.Bool()), b.Expr())).Else(a.Expr()), 7},
+			{"nullif_different", plan.NullIf(a.Expr(), b.Expr()), 7},
 		} {
 			scalarCheck(f, c.name, pg.Int4(), c.expr, new(c.want), x, y)
 		}
-		scalarCheck(f, "coalesce", pg.Int4(), q.Coalesce(q.TypedNull(pg.Int4()), a.Expr()), new(int32(7)), x)
-		scalarCheck(f, "nullif_equal", pg.Int4(), q.NullIf(a.Expr(), a.Expr()), nil, x)
-		scalarCheck(f, "nullif_null_lhs", pg.Int4(), q.NullIf(q.TypedNull(pg.Int4()), a.Expr()), nil, x)
-		scalarCheck(f, "nullif_null_rhs", pg.Int4(), q.NullIf(a.Expr(), q.TypedNull(pg.Int4())), new(int32(7)), x)
-		scalarCheck(f, "case_else_null", pg.Int4(), q.Case(q.When(q.TypedNull(pg.Bool()), a.Expr())).ElseNull(), nil, x)
-		big := q.Input("big", pg.Int8())
-		scalarCheck(f, "mixed_integer", pg.Int8(), q.PlusAs(pg.Int8(), a.Expr(), big.Expr()), new(int64(4294967303)), x, q.BindValue(big, int64(4294967296)))
-		arr := q.Input("array", pg.ArrayOf(pg.Int4()))
-		scalarCheck(f, "nullif_array_equal", pg.Text(), q.Cast(pg.Text(), q.NullIf(arr.Expr(), arr.Expr())), nil, q.BindValue(arr, []int32{1, 2}))
-		scalarCheck(f, "nullif_array_empty", pg.Text(), q.Cast(pg.Text(), q.NullIf(arr.Expr(), arr.Expr())), nil, q.BindValue(arr, []int32{}))
-		scalarCheck(f, "nullif_array_null", pg.Text(), q.Cast(pg.Text(), q.NullIf(arr.Expr(), arr.Expr())), nil, q.BindValue(arr, []int32(nil)))
-		scalarCheck(f, "nullif_array_null_rhs", pg.Text(), q.Cast(pg.Text(), q.NullIf(arr.Expr(), q.TypedNull(pg.ArrayOf(pg.Int4())))), new(`{1,2}`), q.BindValue(arr, []int32{1, 2}))
-		scalarCheck(f, "nullif_array_null_elements", pg.Text(), q.Cast(pg.Text(), q.NullIf(q.ArrayExpr(q.TypedNull(pg.Int4())), q.ArrayExpr(a.Expr()))), new(`{NULL}`), x)
-		scalarCheck(f, "nullif_aggregate", pg.Int8(), q.NullIf(q.CountAll(), big.Expr()), nil, q.BindValue(big, int64(1)))
-		text := q.Input("text", pg.Text())
-		scalarCheck(f, "nullif_immutable_array_volatile_rhs", pg.Text(), q.Cast(pg.Text(), q.NullIf(q.ArrayExpr(text.Expr()), q.ArrayExpr(q.Cast(pg.Text(), q.GenRandomUUID())))), new(`{x}`), q.BindValue(text, "x"))
-		scalarCheck(f, "nullif_stable_array_volatile_rhs", pg.Text(), q.Cast(pg.Text(), q.NullIf(q.ArrayExpr(q.Concat(text.Expr())), q.ArrayExpr(q.Cast(pg.Text(), q.GenRandomUUID())))), new(`{x}`), q.BindValue(text, "x"))
+		scalarCheck(f, "coalesce", pg.Int4(), plan.Coalesce(plan.TypedNull(pg.Int4()), a.Expr()), new(int32(7)), x)
+		scalarCheck(f, "nullif_equal", pg.Int4(), plan.NullIf(a.Expr(), a.Expr()), nil, x)
+		scalarCheck(f, "nullif_null_lhs", pg.Int4(), plan.NullIf(plan.TypedNull(pg.Int4()), a.Expr()), nil, x)
+		scalarCheck(f, "nullif_null_rhs", pg.Int4(), plan.NullIf(a.Expr(), plan.TypedNull(pg.Int4())), new(int32(7)), x)
+		scalarCheck(f, "case_else_null", pg.Int4(), plan.Case(plan.When(plan.TypedNull(pg.Bool()), a.Expr())).ElseNull(), nil, x)
+		big := plan.Input("big", pg.Int8())
+		scalarCheck(f, "mixed_integer", pg.Int8(), plan.PlusAs(pg.Int8(), a.Expr(), big.Expr()), new(int64(4294967303)), x, plan.BindValue(big, int64(4294967296)))
+		arr := plan.Input("array", pg.ArrayOf(pg.Int4()))
+		scalarCheck(f, "nullif_array_equal", pg.Text(), plan.Cast(pg.Text(), plan.NullIf(arr.Expr(), arr.Expr())), nil, plan.BindValue(arr, []int32{1, 2}))
+		scalarCheck(f, "nullif_array_empty", pg.Text(), plan.Cast(pg.Text(), plan.NullIf(arr.Expr(), arr.Expr())), nil, plan.BindValue(arr, []int32{}))
+		scalarCheck(f, "nullif_array_null", pg.Text(), plan.Cast(pg.Text(), plan.NullIf(arr.Expr(), arr.Expr())), nil, plan.BindValue(arr, []int32(nil)))
+		scalarCheck(f, "nullif_array_null_rhs", pg.Text(), plan.Cast(pg.Text(), plan.NullIf(arr.Expr(), plan.TypedNull(pg.ArrayOf(pg.Int4())))), new(`{1,2}`), plan.BindValue(arr, []int32{1, 2}))
+		scalarCheck(f, "nullif_array_null_elements", pg.Text(), plan.Cast(pg.Text(), plan.NullIf(plan.ArrayExpr(plan.TypedNull(pg.Int4())), plan.ArrayExpr(a.Expr()))), new(`{NULL}`), x)
+		scalarCheck(f, "nullif_aggregate", pg.Int8(), plan.NullIf(plan.CountAll(), big.Expr()), nil, plan.BindValue(big, int64(1)))
+		text := plan.Input("text", pg.Text())
+		scalarCheck(f, "nullif_immutable_array_volatile_rhs", pg.Text(), plan.Cast(pg.Text(), plan.NullIf(plan.ArrayExpr(text.Expr()), plan.ArrayExpr(plan.Cast(pg.Text(), plan.GenRandomUUID())))), new(`{x}`), plan.BindValue(text, "x"))
+		scalarCheck(f, "nullif_stable_array_volatile_rhs", pg.Text(), plan.Cast(pg.Text(), plan.NullIf(plan.ArrayExpr(plan.Concat(text.Expr())), plan.ArrayExpr(plan.Cast(pg.Text(), plan.GenRandomUUID())))), new(`{x}`), plan.BindValue(text, "x"))
 		// The native equality in NULLIF cannot be replaced by search_path.
 		baseRun := f.run
 		f.run = func(ctx context.Context, body callback) error {
@@ -60,13 +61,13 @@ SET LOCAL search_path=demo,pg_catalog`)
 				return body(ctx, s)
 			})
 		}
-		scalarCheck(f, "qualified_nullif", pg.Int4(), q.NullIf(a.Expr(), b.Expr()), new(int32(7)), x, y)
+		scalarCheck(f, "qualified_nullif", pg.Int4(), plan.NullIf(a.Expr(), b.Expr()), new(int32(7)), x, y)
 	})
 }
 
 func TestScalarNullIfVolatileRows(t *testing.T) {
 	scalarDrivers(t, func(f *scalarFixture) {
-		uuid := q.NullIf(q.GenRandomUUID(), q.TypedNull(pg.UUID[string]()))
+		uuid := plan.NullIf(plan.GenRandomUUID(), plan.TypedNull(pg.UUID[string]()))
 		p := scalarPlan(f, pg.UUID[string](), uuid)
 		// Insert via the same declared physical source, then test repeated rows.
 		var table string
@@ -88,12 +89,12 @@ func TestScalarNullIfVolatileRows(t *testing.T) {
 			return nil
 		}))
 		// Aggregate expressions stay in their original SELECT binding level.
-		big := q.Input("count", pg.Int8())
+		big := plan.Input("count", pg.Int8())
 		out := q.DefineView(f.reg, q.ViewSpec[scalarValue[int64]]{Name: "groups"})
-		id := q.FieldOf(f.src.Rel(), "id", pg.Int8())
-		grouped := q.DefineRead(out, "counts", q.Select(q.Project(q.Output(out, "value", pg.Int8()), q.NullIf(q.CountAll(), big.Expr()))).From(f.src).GroupBy(id.Expr()))
+		id := plan.FieldOf(f.src.Rel(), "id", pg.Int8())
+		grouped := plan.DefineRead(out, "counts", plan.Select(plan.Project(plan.Output(out, "value", pg.Int8()), plan.NullIf(plan.CountAll(), big.Expr()))).From(f.src).GroupBy(id.Expr()))
 		require.NoError(f.t, f.run(f.t.Context(), func(ctx context.Context, s session) error {
-			rows, err := grouped.Bind(s).Find(ctx, q.BindValue(big, int64(1)))
+			rows, err := grouped.Bind(s).Find(ctx, plan.BindValue(big, int64(1)))
 			require.NoError(f.t, err)
 			require.Len(f.t, rows, 5)
 			for _, row := range rows {

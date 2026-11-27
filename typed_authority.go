@@ -2,15 +2,14 @@ package tabula
 
 import (
 	"context"
-	"fmt"
 	"slices"
+
+	"github.com/0xJean/tabula/internal/planrt"
 )
 
 // SQLAuthority verifies registered statements for a driver on behalf of one
 // registry. It cannot sign SQL or change which statements that registry owns.
-type SQLAuthority struct{ issuer *statementIssuer }
-
-type statementIssuer struct{ strict bool }
+type SQLAuthority struct{ issuer *planrt.Issuer }
 
 // SQLAuthority returns this registry's verification credential. Pass it to a
 // driver that executes authorized statements for this registry.
@@ -21,7 +20,7 @@ func (a SQLAuthority) IsZero() bool { return a.issuer == nil }
 
 // DeniesLegacySQL reports whether this credential requires registered SQL on
 // its runner or Direct pool. A zero credential leaves ordinary SQL available.
-func (a SQLAuthority) DeniesLegacySQL() bool { return a.issuer != nil && a.issuer.strict }
+func (a SQLAuthority) DeniesLegacySQL() bool { return a.issuer != nil && a.issuer.Strict }
 
 // ErrStatementAuthority reports an unregistered call, a different registry's
 // credential, or a call delivered to a different session.
@@ -43,30 +42,12 @@ const (
 	CallReturningEach
 )
 
-func (s *compiledShape) permitsMethod(method CallMethod) bool {
-	if s.fixedMethod != 0 {
-		return s.fixedMethod == method
-	}
-	write := s.shape.Effects&EffectWrite != 0
-	rows := len(s.shape.Result) != 0
-	switch method {
-	case CallExec:
-		return write && !rows
-	case CallScan, CallEach:
-		return !write && rows
-	case CallReturning, CallReturningEach:
-		return write && rows
-	default:
-		return false
-	}
-}
-
 // AuthorizedStatement is an opaque call bound to one registered shape, one
 // session instance and its ordered parameters. Applications cannot construct it
 // from SQL text, a snapshot or a verification credential.
 type AuthorizedStatement struct {
 	method           CallMethod
-	shape            *compiledShape
+	shape            *planrt.CompiledShape
 	owner            any
 	args             []any
 	secret           []bool
@@ -108,13 +89,13 @@ func (a SQLAuthority) Open(owner any, method CallMethod, call AuthorizedStatemen
 	}
 	s := call.shape
 	return AuthorizedSQL{
-		Query: s.sql, Key: s.observationKey, Args: slices.Clone(call.args), Effects: s.shape.Effects,
-		SecretArgs: slices.Clone(call.secret), table: s.tableName, action: s.action, quiet: call.quiet, allSecret: call.allSecret,
+		Query: s.SQL, Key: s.ObservationKey, Args: slices.Clone(call.args), Effects: ShapeEffects(s.Effects),
+		SecretArgs: slices.Clone(call.secret), table: s.TableName, action: s.Action, quiet: call.quiet, allSecret: call.allSecret,
 	}, nil
 }
 
 func (a SQLAuthority) checkCall(owner any, method CallMethod, call AuthorizedStatement) error {
-	if a.IsZero() || method != call.method || call.shape == nil || call.shape.authority != a.issuer || !eligibleOwner(owner) || call.owner != owner {
+	if a.IsZero() || method != call.method || call.shape == nil || call.shape.Authority != a.issuer || !eligibleOwner(owner) || call.owner != owner {
 		return ErrStatementAuthority
 	}
 	return nil
@@ -127,66 +108,4 @@ type AuthorizedSession interface {
 	ExecAuthorized(context.Context, AuthorizedStatement) (int64, error)
 	ScanAuthorized(context.Context, AuthorizedStatement, ...any) error
 	EachAuthorized(context.Context, AuthorizedStatement, func(func(...any) error) error) error
-}
-
-// bindCall binds a typed shape to a driver call. Validate the registry's
-// session proof before consulting session scope or invoking the driver.
-func (r *Registry[S]) bindCall(shape *compiledShape, s Session[S], method CallMethod, values []Binding) (AuthorizedStatement, error) {
-	if err := r.checkSession(s); err != nil {
-		return AuthorizedStatement{}, err
-	}
-	if shape == nil || shape.authority == nil || shape.authority != r.statementIssuer || !eligibleOwner(s) {
-		return AuthorizedStatement{}, ErrStatementAuthority
-	}
-	if !shape.permitsMethod(method) {
-		return AuthorizedStatement{}, ErrStatementAuthority
-	}
-	if shape.shape.UnscopedOnly && !s.Unscoped() {
-		return AuthorizedStatement{}, ErrStatementAuthority
-	}
-	effects := shape.shape.Effects
-	if effects&(EffectWrite|EffectRowLock) != 0 {
-		if ro, ok := s.(interface{ ReadOnly() bool }); ok && ro.ReadOnly() {
-			return AuthorizedStatement{}, ErrReadOnly
-		}
-	}
-	if effects&EffectWrite != 0 && r.deny&DenyUnscopedWrites != 0 && s.Unscoped() {
-		return AuthorizedStatement{}, ErrCapabilityDenied
-	}
-	var scope any
-	if shape.layout.scoped {
-		if s.Unscoped() {
-			return AuthorizedStatement{}, ErrStatementAuthority
-		}
-		kind := shape.layout.scopeType
-		if r.scopeID != nil {
-			scope = kind.snapshot(r.scopeID(s.Scope()))
-		} else {
-			b := kind.bindScope(s.Scope())
-			if b.err != nil {
-				return AuthorizedStatement{}, fmt.Errorf("tabula: encode scope: %w", b.err)
-			}
-			scope = b.value
-		}
-	}
-	args, err := shape.layout.bind(scope, values)
-	if err != nil {
-		return AuthorizedStatement{}, err
-	}
-	if r.arrayArgFn != nil {
-		if shape.layout.scoped && shape.layout.scopeType.element != nil {
-			args[0] = r.arrayArgFn(args[0])
-		}
-		for _, slot := range shape.layout.order {
-			if slot.kind.element != nil {
-				i := shape.layout.positions[slot]
-				args[i] = r.arrayArgFn(args[i])
-			}
-		}
-	}
-	secret := make([]bool, len(shape.shape.Inputs))
-	for i, input := range shape.shape.Inputs {
-		secret[i] = input.Secret
-	}
-	return AuthorizedStatement{method: method, shape: shape, owner: s, args: args, secret: secret}, nil
 }

@@ -45,14 +45,14 @@ func resolveFilterWhen[Args any](
 	whenKey := strings.TrimSpace(explicitWhen)
 	if whenKey != "" {
 		if argsDesc.ambiguous[whenKey] {
-			return nil, "", fmt.Errorf("When %q matches multiple Args fields; use the db tag name", whenKey)
+			return nil, "", fmt.Errorf("filter When %q matches multiple Args fields; use the db tag name", whenKey)
 		}
 		wf, ok := argsDesc.whenByKey[whenKey]
 		if !ok {
 			if _, exists := argsDesc.byName[whenKey]; exists {
-				return nil, "", fmt.Errorf("When field %q must have bool, pointer, slice or string type", whenKey)
+				return nil, "", fmt.Errorf("filter When field %q must have bool, pointer, slice or string type", whenKey)
 			}
-			return nil, "", fmt.Errorf("When field %q not found on Args (or has unsupported switch type)", whenKey)
+			return nil, "", fmt.Errorf("filter When field %q not found on Args (or has unsupported switch type)", whenKey)
 		}
 		return wf.active, wf.tagName, nil
 	}

@@ -460,7 +460,7 @@ Generate `statements.sql` from the tables and views used by the assigned roles. 
 
 ## Physical sources with column grants
 
-This declaration permits a plan to update `rank` when it finds a matching key. A role with schema usage, `SELECT(id)` and `UPDATE(rank)` can execute it.
+Typed query and write plan builders live in `github.com/0xJean/tabula/plan` (`package plan`). This declaration permits a plan to update `rank` when it finds a matching key. A role with schema usage, `SELECT(id)` and `UPDATE(rank)` can execute it.
 
 ```go
 type Item struct {
@@ -471,13 +471,13 @@ items := tabula.DefinePlanSource(reg, tabula.TableSpec[Item, int64]{
 	Name: "public.items", RelationScope: tabula.Global(),
 	WriteMode: tabula.WriteUpdateOnly, UpdateColumns: []string{"rank"},
 })
-i := tabula.FromTable(items, "i", tabula.Global())
-id, rank := tabula.FieldOf(i, "id", tabula.Int8()), tabula.FieldOf(i, "rank", tabula.Int4())
-key, value := tabula.Input("id", tabula.Int8()), tabula.Input("value", tabula.Int4())
-change := tabula.DefineUpdateMany(tabula.RowsFrom(items, i), "change",
-	tabula.MutationSpec{RowFilter: tabula.RowFilter{Where: tabula.Eq(id.Expr(), key.Expr())}},
-	tabula.RowSet{Name: "rank", Assignments: []tabula.RowAssignment{tabula.Assign(rank, value.Expr())}})
-n, err := change.Bind(session).UpdateMany(ctx, "rank", nil, tabula.BindValue(key, 1), tabula.BindValue(value, 5))
+i := plan.FromTable(items, "i", tabula.Global())
+id, rank := plan.FieldOf(i, "id", plan.Int8()), plan.FieldOf(i, "rank", plan.Int4())
+key, value := plan.Input("id", plan.Int8()), plan.Input("value", plan.Int4())
+change := plan.DefineUpdateMany(plan.RowsFrom(items, i), "change",
+	plan.MutationSpec{RowFilter: plan.RowFilter{Where: plan.Eq(id.Expr(), key.Expr())}},
+	plan.RowSet{Name: "rank", Assignments: []plan.RowAssignment{plan.Assign(rank, value.Expr())}})
+n, err := change.Bind(session).UpdateMany(ctx, "rank", nil, plan.BindValue(key, 1), plan.BindValue(value, 5))
 ```
 
 ## Registered single-table reads and writes
@@ -487,37 +487,37 @@ Declare a physical table and an output view at startup. This example uses
 one Go field, `ID int64` tagged `db:"id"`.
 
 ```go
-rel := tabula.FromTable(items, "i", tabula.Global())
-src := tabula.RowsFrom(items, rel)
-id := tabula.FieldOf(rel, "id", tabula.Int8())
-rank := tabula.FieldOf(rel, "rank", tabula.Int4())
-minimum := tabula.Input("minimum", tabula.Int4())
-byRank := tabula.Ge(rank.Expr(), minimum.Expr())
+rel := plan.FromTable(items, "i", tabula.Global())
+src := plan.RowsFrom(items, rel)
+id := plan.FieldOf(rel, "id", plan.Int8())
+rank := plan.FieldOf(rel, "rank", plan.Int4())
+minimum := plan.Input("minimum", plan.Int4())
+byRank := plan.Ge(rank.Expr(), minimum.Expr())
 
-find := tabula.DefineRows(out, "search", src, tabula.RowsSpec{
-    RowFilter: tabula.RowFilter{Optional: []tabula.RowPredicate{
+find := plan.DefineRows(out, "search", src, plan.RowsSpec{
+    RowFilter: plan.RowFilter{Optional: []plan.RowPredicate{
         {Name: "minimum", When: byRank},
     }},
     WithExists: true,
-    Orders: []tabula.RowOrder{{Name: "by_id", Terms: []tabula.RowTerm{tabula.Asc(id)}}},
-    Pages:  tabula.RowPages{Offset: true, Keyset: true, MaxLimit: 50, MaxOffset: 500},
-}, tabula.Project(tabula.Output(out, "id", tabula.Int8()), id.Expr()))
+    Orders: []plan.RowOrder{{Name: "by_id", Terms: []plan.RowTerm{plan.Asc(id)}}},
+    Pages:  plan.RowPages{Offset: true, Keyset: true, MaxLimit: 50, MaxOffset: 500},
+}, plan.Project(plan.Output(out, "id", plan.Int8()), id.Expr()))
 
 // Inside a callback with an authorized session.
-choice := tabula.RowChoice{
-    Filters: []string{"minimum"}, Order: "by_id", Page: tabula.FirstPage, Limit: 10,
+choice := plan.RowChoice{
+    Filters: []string{"minimum"}, Order: "by_id", Page: plan.FirstPage, Limit: 10,
 }
 bound := find.Bind(session)
-rows, total, err := bound.List(ctx, choice, tabula.BindValue(minimum, 3))
+rows, total, err := bound.List(ctx, choice, plan.BindValue(minimum, 3))
 // For a boolean answer, select the predicates without a page or count.
-present, err := bound.Exists(ctx, choice.Filters, tabula.BindValue(minimum, 3))
+present, err := bound.Exists(ctx, choice.Filters, plan.BindValue(minimum, 3))
 ```
 
 `Find` executes the selected data statement. `Count` counts the unpaged result
 for the selected predicates. `List` validates the bindings for both statements,
 then runs the count and the page. Use a repeatable-read transaction when both
 must see the same database snapshot. For a subsequent keyset page, call
-`find.Cursor("by_id", tabula.At(id, last.ID))` with the last result. Set
+`find.Cursor("by_id", plan.At(id, last.ID))` with the last result. Set
 `choice.Page` to `AfterPage` and `choice.After` to that cursor. Each keyset
 order projects its terms and ends in the complete table key or grouping key.
 Mixed directions and nullable terms use the same NULL ordering for comparisons
@@ -542,14 +542,14 @@ aggregate has one result row even on an empty input. Grouped counts count
 groups before the page bounds.
 
 ```go
-next := tabula.Input("new_rank", tabula.Int4())
-change := tabula.DefineUpdateMany(src, "change_rank", tabula.MutationSpec{
-    RowFilter: tabula.RowFilter{Where: byRank},
-}, tabula.RowSet{
-    Name: "rank", Assignments: []tabula.RowAssignment{tabula.Assign(rank, next.Expr())},
+next := plan.Input("new_rank", plan.Int4())
+change := plan.DefineUpdateMany(src, "change_rank", plan.MutationSpec{
+    RowFilter: plan.RowFilter{Where: byRank},
+}, plan.RowSet{
+    Name: "rank", Assignments: []plan.RowAssignment{plan.Assign(rank, next.Expr())},
 })
 affected, err := change.Bind(session).UpdateMany(ctx, "rank", nil,
-    tabula.BindValue(minimum, 3), tabula.BindValue(next, 7))
+    plan.BindValue(minimum, 3), plan.BindValue(next, 7))
 ```
 
 Every mutation requires a fixed typed predicate. Optional predicates narrow it.
@@ -592,23 +592,23 @@ reg := q.NewRegistry(q.RegistryConfig[struct{}]{
     DefaultTypes: []q.TypeDefault{q.TypeMapping(pg.UUID[GroupID]())},
 })
 items := q.DefinePlanSource(reg, q.TableSpec[Item, int64]{Name: "public.items", RelationScope: q.ByRLS()})
-layout := q.MapTable(items)
+layout := plan.MapTable(items)
 src := layout.As("i")
-group := q.MappedColumn[GroupID](layout, "group_id")
+group := plan.MappedColumn[GroupID](layout, "group_id")
 key := group.Input("group")
-filter := q.RowFilter{Where: q.Eq(group.On(src.Rel()).Expr(), key.Expr())}
+filter := plan.RowFilter{Where: plan.Eq(group.On(src.Rel()).Expr(), key.Expr())}
 
-plan := q.DefineTableRows(src, "items_by_group", q.RowsSpec{RowFilter: filter}, q.SelectAll())
-exists := q.DefineExists(src, "has_group", filter)
-value := q.BindValue(key, groupID)
-rows, err := plan.Bind(session).Find(ctx, q.RowChoice{}, value)
+byGroup := plan.DefineTableRows(src, "items_by_group", plan.RowsSpec{RowFilter: filter}, plan.SelectAll())
+exists := plan.DefineExists(src, "has_group", filter)
+value := plan.BindValue(key, groupID)
+rows, err := byGroup.Bind(session).Find(ctx, plan.RowChoice{}, value)
 if err != nil {
     return err
 }
 found, err := exists.Bind(session).Exists(ctx, nil, value)
 ```
 
-Here `q` denotes the root package and `pg` denotes `github.com/0xJean/tabula/pgtype`. Supply the request's `groupID` and handle each call's error before continuing. `SelectAll()` expands the table's declared fields. For a narrow read, pass `SelectColumns(field.On(src.Rel()).Column(), ...)`. The result has type `Item`, with unselected fields left at their Go zero values. A field requested by a predicate or an order still contributes its physical read grant. A self-join uses a second `layout.As("peer")` and the same field declarations on that occurrence.
+Here `q` denotes the root package, `plan` denotes `github.com/0xJean/tabula/plan`, and `pg` denotes `github.com/0xJean/tabula/pgtype`. Supply the request's `groupID` and handle each call's error before continuing. `SelectAll()` expands the table's declared fields. For a narrow read, pass `SelectColumns(field.On(src.Rel()).Column(), ...)`. The result has type `Item`, with unselected fields left at their Go zero values. A field requested by a predicate or an order still contributes its physical read grant. A self-join uses a second `layout.As("peer")` and the same field declarations on that occurrence.
 
 | Read method | Empty result | Multiple matches |
 | --- | --- | --- |
@@ -639,31 +639,31 @@ Use the same expression for a projected group key and its grouping declaration.
 keys are also legal; a field inside a computed key is not independently grouped.
 
 ```go
-missing := tabula.IsNull(label.Expr())
-hits := tabula.FilterWhere(tabula.CountDistinct(id.Expr()),
-    tabula.Ge(rank.Expr(), floor.Expr()))
-query := tabula.Select(
-    tabula.Project(outMissing, missing),
-    tabula.Project(outCount, hits),
-).From(source).GroupBy(missing).OrderBy(tabula.AscExpr(missing))
-report := tabula.DefineRead(summary, "counts", query)
-rows, err := report.Bind(session).Find(ctx, tabula.BindValue(floor, int32(3)))
+missing := plan.IsNull(label.Expr())
+hits := plan.FilterWhere(plan.CountDistinct(id.Expr()),
+    plan.Ge(rank.Expr(), floor.Expr()))
+query := plan.Select(
+    plan.Project(outMissing, missing),
+    plan.Project(outCount, hits),
+).From(source).GroupBy(missing).OrderBy(plan.AscExpr(missing))
+report := plan.DefineRead(summary, "counts", query)
+rows, err := report.Bind(session).Find(ctx, plan.BindValue(floor, int32(3)))
 ```
 
 The `missing` predicate projects directly into a Go `bool`. For a comparison that can yield SQL UNKNOWN, use a nullable output such as `*bool`. PostgreSQL requires `SELECT` on the columns read by either predicate.
 
-The equivalent single-table grouping is `[]tabula.RowColumn{tabula.GroupExpr(missing)}`.
+The equivalent single-table grouping is `[]plan.RowColumn{plan.GroupExpr(missing)}`.
 `AscExpr` and `DescExpr` accept computed expressions in either read form. Call
 `NullsFirst` or `NullsLast` on a term to override PostgreSQL's direction-dependent
 default. An ordered aggregate consumes its own terms independently of the result
 order:
 
 ```go
-names := tabula.AggregateOrder(
-    tabula.StringAgg(label.Expr(), separator.Expr()),
-    tabula.Desc(rank).NullsLast(), tabula.Asc(id),
+names := plan.AggregateOrder(
+    plan.StringAgg(label.Expr(), separator.Expr()),
+    plan.Desc(rank).NullsLast(), plan.Asc(id),
 )
-matchingNames := tabula.FilterWhere(names, tabula.Ge(rank.Expr(), floor.Expr()))
+matchingNames := plan.FilterWhere(names, plan.Ge(rank.Expr(), floor.Expr()))
 ```
 
 `DistinctInputs` removes duplicate argument tuples. When combined with an input
@@ -698,24 +698,24 @@ result, after aggregate evaluation.
 Suppose `groups` and `jobs` are scoped table descriptors with bigint keys, and `out` is a view with `GroupID int64` and `JobID *int64`. Each call to `FromTable` creates a distinct occurrence. A self-join uses two occurrences of the same descriptor. Here the scope uses the named Go type `ScopeID` and the PostgreSQL type `bigint`.
 
 ```go
-g := q.FromTable(groups, "g", q.ByScopeColumn())
-j := q.FromTable(jobs, "j", q.ByScopeColumn())
-groupID := q.FieldOf(g, "id", q.Int8())
-jobID := q.FieldOf(j, "id", q.Int8())
-jobGroup := q.FieldOf(j, "group_id", q.Int8())
-keys := q.Input("keys", q.ArrayOf(q.Int8()))
+g := plan.FromTable(groups, "g", q.ByScopeColumn())
+j := plan.FromTable(jobs, "j", q.ByScopeColumn())
+groupID := plan.FieldOf(g, "id", plan.Int8())
+jobID := plan.FieldOf(j, "id", plan.Int8())
+jobGroup := plan.FieldOf(j, "group_id", plan.Int8())
+keys := plan.Input("keys", plan.ArrayOf(plan.Int8()))
 scope := q.CatalogType[ScopeID]("pg_catalog", "int8", nil)
-left := q.RowsFrom(groups, g, q.FieldOf(g, "scope_id", scope).Column())
-right := q.RowsFrom(jobs, j, q.FieldOf(j, "scope_id", scope).Column())
+left := plan.RowsFrom(groups, g, plan.FieldOf(g, "scope_id", scope).Column())
+right := plan.RowsFrom(jobs, j, plan.FieldOf(j, "scope_id", scope).Column())
 
-plan := q.DefineRead(out, "group_jobs", q.Select(
-    q.Project(q.Output(out, "group_id", q.Int8()), groupID.Expr()),
-    q.Project(q.Output(out, "job_id", q.Int8()), jobID.Expr()),
-).From(left).LeftJoin(right, q.Eq(groupID.Expr(), jobGroup.Expr())).
-    Where(q.Any(groupID.Expr(), keys.Expr())).
-    OrderBy(q.Asc(groupID), q.Asc(jobID)))
+groupJobs := plan.DefineRead(out, "group_jobs", plan.Select(
+    plan.Project(plan.Output(out, "group_id", plan.Int8()), groupID.Expr()),
+    plan.Project(plan.Output(out, "job_id", plan.Int8()), jobID.Expr()),
+).From(left).LeftJoin(right, plan.Eq(groupID.Expr(), jobGroup.Expr())).
+    Where(plan.Any(groupID.Expr(), keys.Expr())).
+    OrderBy(plan.Asc(groupID), plan.Asc(jobID)))
 
-rows, err := plan.Bind(session).Find(ctx, q.BindValue(keys, []int64{1, 2}))
+rows, err := groupJobs.Bind(session).Find(ctx, plan.BindValue(keys, []int64{1, 2}))
 ```
 
 The right occurrence's scope and soft-delete conditions belong in `ON`. A group with only hidden jobs still produces one row with a nil job ID. A `Where` condition on the right occurrence filters the joined result after matching. To count visible jobs, project `CountOf(jobID.Expr())` and group by `groupID.Expr()`. Configure `RegistryConfig.ArrayArg` with `pqdriver.Array` for lib/pq, or use native slice encoding with pgx. An empty array matches zero rows.
@@ -724,20 +724,20 @@ Column-scoped occurrences in a join share one scope parameter. Use the same Post
 
 ## Registered locks and functions
 
-These examples use `q` for the root package, a global `public.items` table and a one-column view named `entries` with an `int64` field tagged `db:"id"`. Configure the session adapter with the registry's `SQLAuthority()`. Execute locking reads inside a writable transaction.
+These examples use `q` for the root package, `plan` for `github.com/0xJean/tabula/plan`, a global `public.items` table and a one-column view named `entries` with an `int64` field tagged `db:"id"`. Configure the session adapter with the registry's `SQLAuthority()`. Execute locking reads inside a writable transaction.
 
 ```go
-i := q.FromTable(items, "i", q.Global())
-id := q.FieldOf(i, "id", q.Int8())
-key := q.Input("key", q.Int8())
-locked := q.DefineRows(entries, "lock_item", q.RowsFrom(items, i), q.RowsSpec{
-    RowFilter: q.RowFilter{Where: q.Ge(id.Expr(), key.Expr())},
-    Orders: []q.RowOrder{{Name: "by_id", Terms: []q.RowTerm{q.Asc(id)}}},
-    Pages: q.RowPages{Keyset: true, MaxLimit: 1},
-    Lock: q.ForRows(q.ForNoKeyUpdate, i, q.SkipLocked),
-}, q.Project(q.Output(entries, "id", q.Int8()), id.Expr()))
-choice := q.RowChoice{Order: "by_id", Page: q.FirstPage, Limit: 1}
-rows, err := locked.Bind(session).Find(ctx, choice, q.BindValue(key, int64(7)))
+i := plan.FromTable(items, "i", q.Global())
+id := plan.FieldOf(i, "id", plan.Int8())
+key := plan.Input("key", plan.Int8())
+locked := plan.DefineRows(entries, "lock_item", plan.RowsFrom(items, i), plan.RowsSpec{
+    RowFilter: plan.RowFilter{Where: plan.Ge(id.Expr(), key.Expr())},
+    Orders: []plan.RowOrder{{Name: "by_id", Terms: []plan.RowTerm{plan.Asc(id)}}},
+    Pages: plan.RowPages{Keyset: true, MaxLimit: 1},
+    Lock: plan.ForRows(plan.ForNoKeyUpdate, i, plan.SkipLocked),
+}, plan.Project(plan.Output(entries, "id", plan.Int8()), id.Expr()))
+choice := plan.RowChoice{Order: "by_id", Page: plan.FirstPage, Limit: 1}
+rows, err := locked.Bind(session).Find(ctx, choice, plan.BindValue(key, int64(7)))
 ```
 
 This reads the first visible, available row at or above the bound key. `SkipLocked` moves past conflicting rows in the declared order. `NoWait` returns SQLSTATE `55P03` on conflict. `Wait` waits for acquisition. For a single locking read, declare `OrderedFirst` to lock at most one row or `Exact` to check up to two matches. Grouped or aggregate projections and `WithExists` fail at declaration. `Count`, `List` and `Exists` return `ErrOperationDenied` before executing a statement.
@@ -747,10 +747,10 @@ Column-scoped, RLS-enforced and soft-deleting tables use the same `RowsFrom` dec
 For a transaction advisory lock, declare a one-boolean view. Each key binds separately. The two-integer key space is independent of the bigint key space.
 
 ```go
-first, second := q.Input("first", q.Int4()), q.Input("second", q.Int4())
-pair := q.AdvisoryXactLockPair(q.Shared, q.Try, first.Expr(), second.Expr())
-lock := q.DefineAdvisoryLock(flags, "group_lock", pair)
-held, err := lock.Bind(session).Acquire(ctx, q.BindValue(first, int32(1)), q.BindValue(second, int32(7)))
+first, second := plan.Input("first", plan.Int4()), plan.Input("second", plan.Int4())
+pair := plan.AdvisoryXactLockPair(plan.Shared, plan.Try, first.Expr(), second.Expr())
+lock := plan.DefineAdvisoryLock(flags, "group_lock", pair)
+held, err := lock.Bind(session).Acquire(ctx, plan.BindValue(first, int32(1)), plan.BindValue(second, int32(7)))
 ```
 
 `Try` reports contention as `false, nil`. `Wait` reports successful acquisition as `true, nil`. Both commit and rollback release the lock. An explicit read-only transaction can acquire a transaction advisory lock. Direct accepts only reads without lock effects.
@@ -758,13 +758,13 @@ held, err := lock.Bind(session).Acquire(ctx, q.BindValue(first, int32(1)), q.Bin
 To call a scalar function, declare its signature and assign a typed expression to each formal. Reusing an input slot reuses its bind position. The function's declaration order determines the SQL argument order.
 
 ```go
-find := q.DeclareRoutine(q.RoutineSpec[int64]{
-    Schema: "public", Name: "lookup", Result: q.Int8(),
-    Cardinality: q.RoutineOne, ReadOnly: true,
-}, q.Parameter("id", q.Int8()))
-lookup := q.DefineRoutine(entries, "lookup_item", find,
-    q.Arg(q.FormalOf(find, "id", q.Int8()), key.Expr()))
-row, err := lookup.Bind(session).One(ctx, q.BindValue(key, int64(7)))
+find := plan.DeclareRoutine(plan.RoutineSpec[int64]{
+    Schema: "public", Name: "lookup", Result: plan.Int8(),
+    Cardinality: plan.RoutineOne, ReadOnly: true,
+}, plan.Parameter("id", plan.Int8()))
+lookup := plan.DefineRoutine(entries, "lookup_item", find,
+    plan.Arg(plan.FormalOf(find, "id", plan.Int8()), key.Expr()))
+row, err := lookup.Bind(session).One(ctx, plan.BindValue(key, int64(7)))
 ```
 
 Use `RoutineSet` and `All` for a set of values. Declare `Nullable` and a nullable view column for results that can be SQL NULL. The default function effect requires write authorization. A write call returning one or many results runs under the session's `Returning` policy. A command allowlist for writes rejects its outer `SELECT` unless `StatementPolicy.AllowAuthorizedWriteRoutine` explicitly admits the signed call. Direct SQL retains the command restriction, and read-only sessions still reject the write. Verify each overload under its executing role. [Role readiness](AUTHORIZATION.md#check-a-role-at-startup)
@@ -776,30 +776,30 @@ The existing fixed query and bounded helpers retain their own keys. For the
 explicit join above, declare both occurrence keys in the list order:
 
 ```go
-query := q.Select(
-    q.Project(q.Output(out, "group_id", q.Int8()), groupID.Expr()),
-    q.Project(q.Output(out, "job_id", q.Int8()), jobID.Expr()),
-).From(left).LeftJoin(right, q.Eq(jobGroup.Expr(), groupID.Expr())).
-    WithList(q.ReadListSpec{
-        Optional: []q.RowPredicate{{Name: "selected", When: q.Any(groupID.Expr(), keys.Expr())}},
-        Orders: []q.RowOrder{{Name: "ids", Terms: []q.RowTerm{
-            q.Asc(groupID), q.Asc(jobID).NullsLast(),
+query := plan.Select(
+    plan.Project(plan.Output(out, "group_id", plan.Int8()), groupID.Expr()),
+    plan.Project(plan.Output(out, "job_id", plan.Int8()), jobID.Expr()),
+).From(left).LeftJoin(right, plan.Eq(jobGroup.Expr(), groupID.Expr())).
+    WithList(plan.ReadListSpec{
+        Optional: []plan.RowPredicate{{Name: "selected", When: plan.Any(groupID.Expr(), keys.Expr())}},
+        Orders: []plan.RowOrder{{Name: "ids", Terms: []plan.RowTerm{
+            plan.Asc(groupID), plan.Asc(jobID).NullsLast(),
         }}},
-        Pages: q.RowPages{Offset: true, Keyset: true, MaxLimit: 50, MaxOffset: 500},
+        Pages: plan.RowPages{Offset: true, Keyset: true, MaxLimit: 50, MaxOffset: 500},
         ExactCount: true,
     })
-plan := q.DefineRead(out, "group_job_pages", query)
-choice := q.RowChoice{Order: "ids", Filters: []string{"selected"}, Page: q.FirstPage, Limit: 20}
-page, total, err := plan.Bind(session).List(ctx, choice, q.BindValue(keys, []int64{1, 3}))
+listPlan := plan.DefineRead(out, "group_job_pages", query)
+choice := plan.RowChoice{Order: "ids", Filters: []string{"selected"}, Page: plan.FirstPage, Limit: 20}
+page, total, err := listPlan.Bind(session).List(ctx, choice, plan.BindValue(keys, []int64{1, 3}))
 if err != nil {
     return err
 }
 if len(page) != 0 {
-    cursor, err := plan.CursorFrom("ids", page[len(page)-1])
+    cursor, err := listPlan.CursorFrom("ids", page[len(page)-1])
     if err != nil {
         return err
     }
-    choice.Page, choice.After = q.AfterPage, cursor
+    choice.Page, choice.After = plan.AfterPage, cursor
 }
 _ = total
 ```

@@ -1,6 +1,10 @@
 package tabula
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/0xJean/tabula/internal/planrt"
+)
 
 // DefinePlanSource registers a physical table for typed plans. The source
 // contributes its column and key metadata. Each plan declares its own SQL
@@ -31,7 +35,7 @@ func TryDefinePlanSource[T, K, S any](r *Registry[S], spec TableSpec[T, K]) (*Ta
 }
 
 func (spec TableSpec[T, K]) checkPlanSource() error {
-	if _, err := parsePhysicalName(spec.Name); err != nil {
+	if _, err := planrt.ParsePhysicalName(spec.Name); err != nil {
 		return err
 	}
 	if spec.Order != "" || len(spec.GroupBy) != 0 {

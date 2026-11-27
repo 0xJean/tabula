@@ -8,6 +8,7 @@ import (
 
 	q "github.com/0xJean/tabula"
 	"github.com/0xJean/tabula/pgxdriver"
+	tplan "github.com/0xJean/tabula/plan"
 	"github.com/0xJean/tabula/sqlcheck"
 	"github.com/stretchr/testify/require"
 )
@@ -22,21 +23,21 @@ INSERT INTO `+schema+`.items VALUES(1,0,'note')`)
 	reg := q.NewRegistry(q.RegistryConfig[struct{}]{Deny: q.DenyLegacySQL})
 	table := q.DefinePlanSource(reg, q.TableSpec[writeItem, int64]{Name: schema + ".items", RelationScope: q.Global()})
 	kind := q.CatalogType[string](schema, "kind", nil)
-	src := q.MapTable(table, q.ColumnType("label", kind)).As("i")
-	id, rank, label := q.FieldOf(src.Rel(), "id", q.Int8()), q.FieldOf(src.Rel(), "rank", q.Int4()), q.FieldOf(src.Rel(), "label", kind)
-	value := q.Input("rank", q.Int4())
+	src := tplan.MapTable(table, tplan.ColumnType("label", kind)).As("i")
+	id, rank, label := tplan.FieldOf(src.Rel(), "id", tplan.Int8()), tplan.FieldOf(src.Rel(), "rank", tplan.Int4()), tplan.FieldOf(src.Rel(), "label", kind)
+	value := tplan.Input("rank", tplan.Int4())
 	type result struct {
 		Value int64 `db:"value"`
 	}
 	out := q.DefineView(reg, q.ViewSpec[result]{Name: "entries"})
-	plan := q.DefineReturning(out, "cast", q.WithReturning(q.UpdateOf(src).Set(q.Assign(rank, value.Expr())).AllRows(),
-		q.Project(q.Output(out, "value", q.Int8()), q.Cast(q.Int8(), id.Expr()))))
+	plan := tplan.DefineReturning(out, "cast", tplan.WithReturning(tplan.UpdateOf(src).Set(tplan.Assign(rank, value.Expr())).AllRows(),
+		tplan.Project(tplan.Output(out, "value", tplan.Int8()), tplan.Cast(tplan.Int8(), id.Expr()))))
 	type domainResult struct {
 		Value string `db:"value"`
 	}
 	domainOut := q.DefineView(reg, q.ViewSpec[domainResult]{Name: "groups"})
-	domainPlan := q.DefineReturning(domainOut, "domain", q.WithReturning(q.UpdateOf(src).Set(q.Assign(rank, value.Expr())).AllRows(),
-		q.Project(q.Output(domainOut, "value", kind), label.Expr())))
+	domainPlan := tplan.DefineReturning(domainOut, "domain", tplan.WithReturning(tplan.UpdateOf(src).Set(tplan.Assign(rank, value.Expr())).AllRows(),
+		tplan.Project(tplan.Output(domainOut, "value", kind), label.Expr())))
 	def := out.Definition()
 	domainDef := domainOut.Definition()
 	require.Contains(t, def.Statements, "cast.global.write")
@@ -73,10 +74,10 @@ INSERT INTO `+schema+`.items VALUES(1,0,'note')`)
 		t.Run(driver, func(t *testing.T) {
 			run := authorizedEffectRunner(t, driver, db, pool, "", reg.SQLAuthority(), q.StatementPolicy{}, nil, false)
 			require.NoError(t, run(ctx, func(ctx context.Context, s session) error {
-				rows, err := plan.Bind(s).All(ctx, q.BindValue(value, int32(1)))
+				rows, err := plan.Bind(s).All(ctx, tplan.BindValue(value, int32(1)))
 				require.NoError(t, err)
 				require.Equal(t, []result{{Value: 1}}, rows)
-				domainRows, err := domainPlan.Bind(s).All(ctx, q.BindValue(value, int32(1)))
+				domainRows, err := domainPlan.Bind(s).All(ctx, tplan.BindValue(value, int32(1)))
 				require.NoError(t, err)
 				require.Equal(t, []domainResult{{Value: "note"}}, domainRows)
 				return nil

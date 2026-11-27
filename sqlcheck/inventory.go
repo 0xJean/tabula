@@ -13,6 +13,7 @@ import (
 
 const (
 	tabulaPkgPath    = "github.com/0xJean/tabula"
+	planPkgPath      = "github.com/0xJean/tabula/plan"
 	stdsqlPkgPath    = "github.com/0xJean/tabula/stdsql"
 	pgxdriverPkgPath = "github.com/0xJean/tabula/pgxdriver"
 )

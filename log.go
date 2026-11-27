@@ -9,6 +9,8 @@ import (
 	"reflect"
 	"sync/atomic"
 	"time"
+
+	"github.com/0xJean/tabula/internal/planrt"
 )
 
 // LogLevel controls which statement executions are emitted to the configured
@@ -88,7 +90,7 @@ func Quiet() StatementOption { return func(m *stmtMeta) { m.quiet = true } }
 func Secret() StatementOption { return func(m *stmtMeta) { m.secret = true } }
 
 type stmtMeta struct {
-	fixed  *compiledShape
+	fixed  *planrt.CompiledShape
 	key    string
 	quiet  bool
 	secret bool

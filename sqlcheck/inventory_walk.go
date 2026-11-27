@@ -279,7 +279,7 @@ func (p buildPackage) inventory(
 					rel = filepath.ToSlash(rel)
 
 					if kind := typedPlanSiteKind(fnPkg, fnName); kind != "" {
-						site := SQLSite{File: rel, Line: pos.Line, Receiver: tabulaPkgPath, Method: fnName, Kind: kind}
+						site := SQLSite{File: rel, Line: pos.Line, Receiver: fnPkg, Method: fnName, Kind: kind}
 						var expr ast.Expr = node
 						if call := identCalls[node]; call != nil {
 							site.Definition, site.QueryKey = source.rowPlan(call, 0)

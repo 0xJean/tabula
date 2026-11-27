@@ -14,6 +14,7 @@ import (
 
 	q "github.com/0xJean/tabula"
 	pg "github.com/0xJean/tabula/pgtype"
+	tplan "github.com/0xJean/tabula/plan"
 	"github.com/0xJean/tabula/pqdriver"
 	"github.com/stretchr/testify/require"
 )
@@ -59,11 +60,11 @@ func typeRoundTrip[V any](f typeFixture, name, sqlType string, kind q.PGType[V],
 	qualified := f.schema + ".read_" + name
 	_, err := f.db.ExecContext(t.Context(), "CREATE FUNCTION "+qualified+"("+sqlType+") RETURNS text LANGUAGE SQL STABLE AS 'SELECT $1::text'")
 	require.NoError(t, err)
-	input := q.Input("value", kind)
-	fn := q.DeclareRoutine(q.RoutineSpec[string]{
-		Schema: f.schema, Name: "read_" + name, Result: pg.Text(), Cardinality: q.RoutineOne, ReadOnly: true, Nullable: true,
-	}, q.Parameter("value", kind))
-	plan := q.DefineRoutine(f.view, name, fn, q.Arg(q.FormalOf(fn, "value", kind), input.Expr()))
+	input := tplan.Input("value", kind)
+	fn := tplan.DeclareRoutine(tplan.RoutineSpec[string]{
+		Schema: f.schema, Name: "read_" + name, Result: pg.Text(), Cardinality: tplan.RoutineOne, ReadOnly: true, Nullable: true,
+	}, tplan.Parameter("value", kind))
+	plan := tplan.DefineRoutine(f.view, name, fn, tplan.Arg(tplan.FormalOf(fn, "value", kind), input.Expr()))
 	tx, err := f.db.BeginTx(t.Context(), nil)
 	require.NoError(t, err)
 	defer func() { _ = tx.Rollback() }()
@@ -86,7 +87,7 @@ WHERE statement=$1 AND parameter_types=ARRAY[pg_catalog.to_regtype($2)])`,
 	query := "SELECT $1::" + compareType + " IS NOT DISTINCT FROM $2::" + compareType
 	return func(ctx context.Context, s session) error {
 		for i, c := range cases {
-			binding := q.BindValue(input, c.value)
+			binding := tplan.BindValue(input, c.value)
 			got, err := plan.Bind(s).One(ctx, binding)
 			require.NoError(t, err, "%s case %d", name, i)
 			require.Equal(t, c.want == nil, got.Value == nil, "%s case %d SQL NULL", name, i)

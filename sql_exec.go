@@ -41,7 +41,7 @@ func TryDefineSQLExec[Args, S any](r *Registry[S], spec SQLSpec) (*SQLExec[Args,
 func (q *SQLExec[Args, S]) Name() string { return q.plan.name }
 
 // SQL returns the compiled positional PostgreSQL SQL ($1..$n).
-func (q *SQLExec[Args, S]) SQL() string { return q.plan.shape.sql }
+func (q *SQLExec[Args, S]) SQL() string { return q.plan.shape.SQL }
 
 // Definition returns a deep copy of the registered Definition for sqlcheck.
 func (q *SQLExec[Args, S]) Definition() Definition { return q.plan.definition() }
@@ -145,7 +145,7 @@ func TryDefineSQLReturning[Row, Args, S any](r *Registry[S], spec SQLSpec) (*SQL
 func (q *SQLReturning[Row, Args, S]) Name() string { return q.plan.name }
 
 // SQL returns the compiled positional PostgreSQL SQL ($1..$n).
-func (q *SQLReturning[Row, Args, S]) SQL() string { return q.plan.shape.sql }
+func (q *SQLReturning[Row, Args, S]) SQL() string { return q.plan.shape.SQL }
 
 // Definition returns a deep copy of the registered Definition for sqlcheck.
 func (q *SQLReturning[Row, Args, S]) Definition() Definition { return q.plan.definition() }

@@ -2,6 +2,7 @@ package tabula
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"reflect"
 	"strings"
@@ -11,12 +12,24 @@ type staticError string
 
 func (e staticError) Error() string { return string(e) }
 
+type notFoundError string
+
+func (e notFoundError) Error() string { return string(e) }
+func (notFoundError) Unwrap() error   { return sql.ErrNoRows }
+
 type readOnlyPolicyError string
 
 func (e readOnlyPolicyError) Error() string { return string(e) }
 func (readOnlyPolicyError) Unwrap() error   { return ErrReadOnly }
 
 const (
+	// ErrNotFound means One or First found no matching result row.
+	// It also matches database/sql.ErrNoRows with errors.Is.
+	ErrNotFound notFoundError = "tabula: no matching result row"
+
+	// ErrMultipleRows means an exact read found a second result row.
+	ErrMultipleRows staticError = "tabula: more than one matching result row"
+
 	// ErrCallbackContext means a live runner handle received a context that
 	// does not belong to its callback when RequireCallbackContext is enabled.
 	ErrCallbackContext staticError = "context does not belong to this session callback"

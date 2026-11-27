@@ -15,6 +15,7 @@ import (
 
 	"github.com/0xJean/tabula"
 	"github.com/0xJean/tabula/pgxdriver"
+	"github.com/0xJean/tabula/plan"
 )
 
 func TestOperationAdapterBoundaries(t *testing.T) {
@@ -40,10 +41,10 @@ func TestOperationAdapterBoundaries(t *testing.T) {
 	}
 	reg := tabula.NewRegistry(tabula.RegistryConfig[string]{SessionKey: key})
 	table := tabula.DefinePlanSource(reg, tabula.TableSpec[item, int64]{Name: ns + ".items", RelationScope: tabula.Global()})
-	rel := tabula.FromTable(table, "i", tabula.Global())
-	id := tabula.FieldOf(rel, "id", tabula.Int8())
+	rel := plan.FromTable(table, "i", tabula.Global())
+	id := plan.FieldOf(rel, "id", plan.Int8())
 	view := tabula.DefineView(reg, tabula.ViewSpec[result]{Name: ns + ".result"})
-	rows := tabula.DefineRead(view, "read", tabula.Select(tabula.Project(tabula.Output(view, "id", tabula.Int8()), id.Expr())).From(rel))
+	rows := plan.DefineRead(view, "read", plan.Select(plan.Project(plan.Output(view, "id", plan.Int8()), id.Expr())).From(rel))
 	policy := pgxdriver.ScopePolicy[string]{ManagedVars: []string{"demo.scope"}, ScopeVars: func(s string) map[string]string { return map[string]string{"demo.scope": s} }}
 	runner, err := pgxdriver.NewRunner(pool, policy, pgxdriver.RunnerOptions{ExposeTx: true, SessionKey: key, Unscoped: pgxdriver.UnscopedReadWrite, SQLAuthority: reg.SQLAuthority()})
 	require.NoError(t, err)

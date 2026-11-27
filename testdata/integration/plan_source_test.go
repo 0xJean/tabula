@@ -10,6 +10,7 @@ import (
 	"time"
 
 	q "github.com/0xJean/tabula"
+	"github.com/0xJean/tabula/plan"
 	"github.com/0xJean/tabula/sqlcheck"
 	"github.com/stretchr/testify/require"
 )
@@ -90,20 +91,20 @@ func TestPlanSourceDrivers(t *testing.T) {
 
 			table := q.DefinePlanSource(reg, q.TableSpec[sourceItem, int64]{Name: items, RelationScope: q.ByRLS(),
 				WriteMode: q.WriteUpdateOnly, UpdateColumns: []string{"rank"}})
-			i := q.FromTable(table, "i", q.ByRLS())
-			src := q.RowsFrom(table, i)
-			id, label, rank := q.FieldOf(i, "id", q.Int8()), q.FieldOf(i, "label", q.Text()), q.FieldOf(i, "rank", q.Int4())
-			key, value := q.Input("key", q.Int8()), q.Input("value", q.Int4())
-			where := q.RowFilter{Where: q.Eq(id.Expr(), key.Expr())}
+			i := plan.FromTable(table, "i", q.ByRLS())
+			src := plan.RowsFrom(table, i)
+			id, label, rank := plan.FieldOf(i, "id", plan.Int8()), plan.FieldOf(i, "label", plan.Text()), plan.FieldOf(i, "rank", plan.Int4())
+			key, value := plan.Input("key", plan.Int8()), plan.Input("value", plan.Int4())
+			where := plan.RowFilter{Where: plan.Eq(id.Expr(), key.Expr())}
 			out := q.DefineView(reg, q.ViewSpec[sourceResult]{Name: "entries"})
-			projection := []q.Projection{q.Project(q.Output(out, "id", q.Int8()), id.Expr()), q.Project(q.Output(out, "label", q.Text()), label.Expr())}
-			search := q.DefineRows(out, "search", src, q.RowsSpec{RowFilter: where}, projection...)
-			other := q.FromTable(table, "j", q.ByRLS())
-			lookup := q.DefineRead(out, "lookup", q.Select(projection[0],
-				q.Project(q.Output(out, "label", q.Text()), q.FieldOf(other, "label", q.Text()).Expr())).
-				From(src).InnerJoin(other, q.Eq(id.Expr(), q.FieldOf(other, "id", q.Int8()).Expr())).Where(where.Where))
-			change := q.DefineUpdateMany(src, "change", q.MutationSpec{RowFilter: where}, q.RowSet{
-				Name: "rank", Assignments: []q.RowAssignment{q.Assign(rank, value.Expr())},
+			projection := []plan.Projection{plan.Project(plan.Output(out, "id", plan.Int8()), id.Expr()), plan.Project(plan.Output(out, "label", plan.Text()), label.Expr())}
+			search := plan.DefineRows(out, "search", src, plan.RowsSpec{RowFilter: where}, projection...)
+			other := plan.FromTable(table, "j", q.ByRLS())
+			lookup := plan.DefineRead(out, "lookup", plan.Select(projection[0],
+				plan.Project(plan.Output(out, "label", plan.Text()), plan.FieldOf(other, "label", plan.Text()).Expr())).
+				From(src).InnerJoin(other, plan.Eq(id.Expr(), plan.FieldOf(other, "id", plan.Int8()).Expr())).Where(where.Where))
+			change := plan.DefineUpdateMany(src, "change", plan.MutationSpec{RowFilter: where}, plan.RowSet{
+				Name: "rank", Assignments: []plan.RowAssignment{plan.Assign(rank, value.Expr())},
 			})
 			read, write := q.Definition(out.Definition()), table.Definition()
 			needs, empty := sqlcheck.CollectPrivilegeNeeds([]q.Definition{write, read})
@@ -113,10 +114,10 @@ func TestPlanSourceDrivers(t *testing.T) {
 			checkSourceRole(t, db, reader, read)
 			checkSourceRole(t, db, writer, write)
 			require.NoError(t, run(reader, func(ctx context.Context, s q.Session[itemScope]) error {
-				got, err := search.Bind(s).Find(ctx, q.RowChoice{}, q.BindValue(key, 1))
+				got, err := search.Bind(s).Find(ctx, plan.RowChoice{}, plan.BindValue(key, 1))
 				require.NoError(t, err)
 				require.Equal(t, []sourceResult{{1, "first"}}, got)
-				joined, err := lookup.Bind(s).Find(ctx, q.BindValue(key, 1))
+				joined, err := lookup.Bind(s).Find(ctx, plan.BindValue(key, 1))
 				require.NoError(t, err)
 				require.Equal(t, got, joined)
 				_, err = table.Bind(s).Get(ctx, 1)
@@ -124,7 +125,7 @@ func TestPlanSourceDrivers(t *testing.T) {
 				return nil
 			}))
 			update := func(ctx context.Context, s q.Session[itemScope]) error {
-				n, err := change.Bind(s).UpdateMany(ctx, "rank", nil, q.BindValue(key, 1), q.BindValue(value, 7))
+				n, err := change.Bind(s).UpdateMany(ctx, "rank", nil, plan.BindValue(key, 1), plan.BindValue(value, 7))
 				if err == nil {
 					require.EqualValues(t, 1, n)
 				}
@@ -158,18 +159,18 @@ func checkSourceKeyLock(t *testing.T, db *sql.DB, schema, role string, exec func
 	exec("INSERT INTO " + name + " VALUES (3,5)")
 	exec("GRANT SELECT (item_id), UPDATE (group_id) ON " + name + " TO " + role)
 	table := q.DefinePlanSource(reg, q.TableSpec[sourceKey, sourceKey]{Name: name, RelationScope: q.Global()})
-	g := q.FromTable(table, "g", q.Global())
+	g := plan.FromTable(table, "g", q.Global())
 	type itemID struct {
 		ID int64 `db:"id"`
 	}
 	out := q.DefineView(reg, q.ViewSpec[itemID]{Name: "notes"})
-	hold := q.DefineRows(out, "hold", q.RowsFrom(table, g), q.RowsSpec{Lock: q.ForRows(q.ForUpdate, g, q.NoWait)},
-		q.Project(q.Output(out, "id", q.Int8()), q.FieldOf(g, "item_id", q.Int8()).Expr()))
+	hold := plan.DefineRows(out, "hold", plan.RowsFrom(table, g), plan.RowsSpec{Lock: plan.ForRows(plan.ForUpdate, g, plan.NoWait)},
+		plan.Project(plan.Output(out, "id", plan.Int8()), plan.FieldOf(g, "item_id", plan.Int8()).Expr()))
 	require.Empty(t, table.Definition().Statements)
 	d := q.Definition(out.Definition())
 	checkSourceRole(t, db, role, d)
 	lock := func(ctx context.Context, s q.Session[itemScope]) error {
-		rows, err := hold.Bind(s).Find(ctx, q.RowChoice{})
+		rows, err := hold.Bind(s).Find(ctx, plan.RowChoice{})
 		if err == nil {
 			require.Equal(t, []itemID{{5}}, rows)
 			// A separate transaction encounters the lock before the callback commits.

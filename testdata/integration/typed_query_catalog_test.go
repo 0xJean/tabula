@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	q "github.com/0xJean/tabula"
+	tplan "github.com/0xJean/tabula/plan"
 	"github.com/0xJean/tabula/sqlcheck"
 	"github.com/stretchr/testify/require"
 )
@@ -32,20 +33,20 @@ func TestQueryCatalogLineageDrivers(t *testing.T) {
 					reg := q.NewRegistry(q.RegistryConfig[struct{}]{Deny: q.DenyLegacySQL})
 					kind := q.CatalogType[string](schema, test.typ, nil)
 					table := q.DefinePlanSource(reg, q.TableSpec[item, int64]{Name: schema + "." + test.table, RelationScope: q.Global()})
-					source := q.MapTable(table, q.ColumnType("value", kind)).As("i")
-					field := q.FieldOf(source.Rel(), "value", kind)
-					input := q.Input("wanted", kind)
-					value := q.Export("value", field.Expr())
-					common := q.CTE("groups", q.Select(value.Project()).From(source).Where(q.Eq(field.Expr(), input.Expr())), q.Materialized)
+					source := tplan.MapTable(table, tplan.ColumnType("value", kind)).As("i")
+					field := tplan.FieldOf(source.Rel(), "value", kind)
+					input := tplan.Input("wanted", kind)
+					value := tplan.Export("value", field.Expr())
+					common := tplan.CTE("groups", tplan.Select(value.Project()).From(source).Where(tplan.Eq(field.Expr(), input.Expr())), tplan.Materialized)
 					n := common.As("n")
 					out := q.DefineView(reg, q.ViewSpec[result]{Name: "entries"})
-					output := q.Output(out, "value", kind)
-					selected := q.Select(q.Project(output, value.From(n))).From(n).With(common)
-					d := q.Derived("d", selected)
-					plan := q.DefineRead(out, "typed", q.Select(q.Project(output, q.ResultOf(d, output))).From(d))
+					output := tplan.Output(out, "value", kind)
+					selected := tplan.Select(tplan.Project(output, value.From(n))).From(n).With(common)
+					d := tplan.Derived("d", selected)
+					plan := tplan.DefineRead(out, "typed", tplan.Select(tplan.Project(output, tplan.ResultOf(d, output))).From(d))
 					run := authorizedEffectRunner(t, driver, db, pool, "", reg.SQLAuthority(), q.StatementPolicy{}, nil, false)
 					require.NoError(t, run(t.Context(), func(ctx context.Context, s session) error {
-						rows, err := plan.Bind(s).Find(ctx, q.BindValue(input, "a"))
+						rows, err := plan.Bind(s).Find(ctx, tplan.BindValue(input, "a"))
 						require.NoError(t, err)
 						require.Equal(t, []result{{new("a")}}, rows)
 						return nil

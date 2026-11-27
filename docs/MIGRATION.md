@@ -1,6 +1,26 @@
-# Migrating to Tabula v0.5
+# Migrating to Tabula v0.6
 
-Start with the section for the version you are adopting. The integration guide lists the APIs and commands available in this checkout. [Integration guide](INTEGRATION.md)
+Start with the section for the version you are adopting. The integration guide lists the APIs and commands available in this checkout. [Integration guide](INTEGRATION.md) · [Choosing an API](CHOOSING-AN-API.md)
+
+## From v0.5 to v0.6
+
+v0.6 extracts Tabula's Typed Plan AST and expression DSL out of root `package tabula` into a dedicated stdlib-only core subpackage **`github.com/0xJean/tabula/plan`** (`package plan`). Applications that use only `Table` CRUD, `View`, `DefineSQL*`, `stdsql`, `pgxdriver`, `oteltabula`, and `sqlcheck` require no code changes.
+
+### What stays in `github.com/0xJean/tabula`
+
+- `Registry`, `RegistryConfig`, `Table`, `TableSpec`, `Define`, `TryDefine`, `DefinePlanSource`, `TryDefinePlanSource`, `View`, `ViewSpec`, `DefineView`, `TryDefineView`, `Rows`, `ViewRows`, `Filter`, `OrderSpec`, `UpsertSpec`, `SQLFiles`, aggregates (`Max`, `Min`, `Sum`, `Avg`, `CountBy`).
+- Named-parameter SQL: `DefineSQL`, `DefineSQLExec`, `DefineSQLReturning`, `DefineSQLList` (and `Try*` partners), `SQLSpec`, `SQLListSpec`, `SQLFilter`, `NoArgs`, `ScopeParam`, `TypeFamily`, `TypeFamilyOf`, `RegisterTypeFamily`.
+- Shared catalog type primitives, relation scope, verification metadata and authority runtime: `PGType`, `CatalogType`, `Varchar`, `ArrayOf`, `ArrayOfNullable`, `TypeDefault`, `TypeMapping`, `RelationScope`, `ByScopeColumn`, `ByRLS`, `Global`, `SQLAuthority`, `AuthorizedStatement`, `AuthorizedSQL`, `AuthorizedSession`, `OperationSession`, `SessionKey`, `StatementGuard`, `StatementShape`, `Shape*`, `Effect*`, `*Requirement`, `ResultLineage`, errors, retry, logging and telemetry interfaces.
+
+### What moved to `github.com/0xJean/tabula/plan`
+
+1. **Import `github.com/0xJean/tabula/plan`** in files that declare typed AST plans or expressions.
+2. **Qualify typed plan symbols with `plan.`**:
+   - Table occurrences & layouts: `plan.FromTable`, `plan.RowsFrom`, `plan.MapTable`, `plan.TryMapTable`, `plan.MappedColumn`, `plan.ColumnType`, `plan.FieldOf`, `plan.Output`, `plan.Project`, `plan.SelectAll`, `plan.SelectColumns`, `plan.Input`, `plan.BindValue`, `plan.Slot`, `plan.Binding`, `plan.Rel`, `plan.Field`, `plan.RowSource`, `plan.TableLayout`, `plan.TableField`.
+   - Plan constructors & handle types: `plan.DefineRows`, `plan.DefineRowsWithForms`, `plan.DefineTableRows`, `plan.DefineRead`, `plan.DefineTableRead`, `plan.DefineExists`, `plan.DefineWrite`, `plan.DefineReturning`, `plan.DefineTableReturning`, `plan.DefineUpdateMany`, `plan.DefineDeleteMany`, `plan.DefineUpdateReturning`, `plan.DefineDeleteReturning`, `plan.DeclareRoutine`, `plan.DefineRoutine`, `plan.DefineAdvisoryLock` (and all `Try*` partners and `Bound*Plan` / `*Spec` types).
+   - Query, write, expression, aggregate, window and lock builders: `plan.Select`, `plan.InsertInto`, `plan.UpdateOf`, `plan.DeleteFrom`, `plan.WithReturning`, `plan.WriteCTE`, `plan.EffectCTE`, `plan.Derived`, `plan.CTE`, `plan.RecursiveCTE`, `plan.Union*`, `plan.Over`, `plan.ForRows`, `plan.AdvisoryXactLock*`, `plan.Assign`, `plan.DefaultOf`, `plan.Excluded`, and all scalar/predicate/aggregate/window constructors.
+   - Primitive type shorthands: `tabula.Bool()`, `tabula.Int4()`, `tabula.Int8()`, `tabula.Text()`, and `tabula.Timestamptz()` moved out of root `tabula`; call `plan.Bool()`/`plan.Int4()`/`plan.Int8()`/`plan.Text()`/`plan.Timestamptz()` or `pgtype.Bool()`/`pgtype.Int4()`/`pgtype.Int8()`/`pgtype.Text()`/`pgtype.Timestamptz()`.
+3. **Refresh `sqlcheck` role bindings for typed plans (if pinned by site ID)**: `sqlcheck.CollectSQL` now emits `github.com/0xJean/tabula/plan` receiver paths for typed plan declaration and execution sites. Generated SQL text and `StatementShape` snapshots are unchanged.
 
 ## From v0.4.4 to v0.5.0
 

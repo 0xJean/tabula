@@ -8,11 +8,12 @@ import (
 	"strings"
 
 	"github.com/0xJean/tabula/internal/pgstmt"
+	"github.com/0xJean/tabula/internal/planrt"
 )
 
 type sqlClassification struct {
 	effects     ShapeEffects
-	stmtEffects statementEffects
+	stmtEffects planrt.StatementEffects
 	fixedMethod CallMethod
 }
 
@@ -67,9 +68,9 @@ func classifySQLStatement(query string, kind sqlStmtKind, advisoryLock bool) (sq
 		return sqlClassification{}, errors.New("session-level advisory lock functions are not allowed; use transaction-level pg_*advisory_xact_lock*")
 	}
 
-	writes := make([]statementWrite, 0, len(writeCmdSet))
+	writes := make([]planrt.WriteEffect, 0, len(writeCmdSet))
 	for _, cmd := range slices.Sorted(maps.Keys(writeCmdSet)) {
-		writes = append(writes, statementWrite{command: cmd})
+		writes = append(writes, planrt.WriteEffect{Command: cmd})
 	}
 
 	switch kind {
@@ -89,7 +90,7 @@ func classifySQLStatement(query string, kind sqlStmtKind, advisoryLock bool) (sq
 		}
 		return sqlClassification{
 			effects:     eff,
-			stmtEffects: statementEffects{bits: eff},
+			stmtEffects: planrt.StatementEffects{Bits: uint8(eff)},
 		}, nil
 
 	case sqlKindExec:
@@ -100,7 +101,7 @@ func classifySQLStatement(query string, kind sqlStmtKind, advisoryLock bool) (sq
 			eff := EffectRead | EffectAdvisoryLock
 			return sqlClassification{
 				effects:     eff,
-				stmtEffects: statementEffects{bits: eff},
+				stmtEffects: planrt.StatementEffects{Bits: uint8(eff)},
 				fixedMethod: CallEach,
 			}, nil
 		}
@@ -115,10 +116,10 @@ func classifySQLStatement(query string, kind sqlStmtKind, advisoryLock bool) (sq
 		}
 		return sqlClassification{
 			effects: EffectWrite,
-			stmtEffects: statementEffects{
-				bits:     EffectWrite,
-				writes:   writes,
-				writeCTE: hasModifyingCTE,
+			stmtEffects: planrt.StatementEffects{
+				Bits:     uint8(EffectWrite),
+				Writes:   writes,
+				WriteCTE: hasModifyingCTE,
 			},
 		}, nil
 
@@ -135,10 +136,10 @@ func classifySQLStatement(query string, kind sqlStmtKind, advisoryLock bool) (sq
 		}
 		return sqlClassification{
 			effects: EffectWrite,
-			stmtEffects: statementEffects{
-				bits:     EffectWrite,
-				writes:   writes,
-				writeCTE: hasModifyingCTE,
+			stmtEffects: planrt.StatementEffects{
+				Bits:     uint8(EffectWrite),
+				Writes:   writes,
+				WriteCTE: hasModifyingCTE,
 			},
 		}, nil
 

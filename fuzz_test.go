@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/0xJean/tabula/internal/pgstmt"
+	"github.com/0xJean/tabula/internal/planrt"
 )
 
 func FuzzParseColumnTag(f *testing.F) {
@@ -176,7 +177,7 @@ func FuzzGuardNoSessionEscape(f *testing.F) {
 		f.Fatal(err)
 	}
 	f.Fuzz(func(t *testing.T, query string) {
-		authority, owner, call := signedPolicyCall(query, statementEffects{writeCTE: true, writes: []statementWrite{{command: "INSERT"}}})
+		authority, owner, call := signedPolicyCall(query, planrt.StatementEffects{WriteCTE: true, Writes: []planrt.WriteEffect{{Command: "INSERT"}}})
 		if err := signed.CheckAuthorized(authority, owner, CallReturningEach, call); err == nil && GuardSingleStatement(query) != nil {
 			t.Fatal("signed statement policy admitted stacked or incomplete SQL")
 		}

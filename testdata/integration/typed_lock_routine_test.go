@@ -12,6 +12,7 @@ import (
 
 	q "github.com/0xJean/tabula"
 	"github.com/0xJean/tabula/pgxdriver"
+	"github.com/0xJean/tabula/plan"
 	"github.com/0xJean/tabula/sqlcheck"
 	"github.com/0xJean/tabula/stdsql"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -36,12 +37,12 @@ type effectFixture struct {
 	flags               *q.View[advisoryResult, struct{}]
 	role, schema, table string
 
-	id          q.Slot[int64]
-	small, part q.Slot[int32]
-	row         map[q.LockWait]*q.RowsPlan[lockResult, struct{}]
-	statusLocks map[string]*q.RowsPlan[lockResult, struct{}]
-	advisory    map[string]*q.AdvisoryLockPlan[advisoryResult, struct{}]
-	routines    map[string]*q.RoutinePlan[lockResult, struct{}]
+	id          plan.Slot[int64]
+	small, part plan.Slot[int32]
+	row         map[plan.LockWait]*plan.RowsPlan[lockResult, struct{}]
+	statusLocks map[string]*plan.RowsPlan[lockResult, struct{}]
+	advisory    map[string]*plan.AdvisoryLockPlan[advisoryResult, struct{}]
+	routines    map[string]*plan.RoutinePlan[lockResult, struct{}]
 }
 
 func newEffectFixture(t *testing.T, db *sql.DB, reg *q.Registry[struct{}]) *effectFixture {
@@ -82,44 +83,44 @@ func newEffectFixture(t *testing.T, db *sql.DB, reg *q.Registry[struct{}]) *effe
 	f.view = q.DefineView(f.reg, q.ViewSpec[lockResult]{Name: "entries"})
 	f.flags = q.DefineView(f.reg, q.ViewSpec[advisoryResult]{Name: "notes"})
 	tab := q.Define(f.reg, q.TableSpec[lockItem, int64]{Name: f.table, RelationScope: q.Global()})
-	rel := q.FromTable(tab, "i", q.Global())
-	id := q.FieldOf(rel, "id", q.Int8()).Expr()
-	f.id, f.small, f.part = q.Input("key", q.Int8()), q.Input("first", q.Int4()), q.Input("second", q.Int4())
-	f.row = make(map[q.LockWait]*q.RowsPlan[lockResult, struct{}])
-	for wait, key := range map[q.LockWait]string{q.Wait: "hold", q.NoWait: "nowait", q.SkipLocked: "skip"} {
-		f.row[wait] = q.DefineRows(f.view, key, q.RowsFrom(tab, rel), q.RowsSpec{
-			Lock: q.ForRows(q.ForUpdate, rel, wait), RowFilter: q.RowFilter{Where: q.Eq(id, f.id.Expr())},
-		}, q.Project(q.Output(f.view, "id", q.Int8()), id))
+	rel := plan.FromTable(tab, "i", q.Global())
+	id := plan.FieldOf(rel, "id", plan.Int8()).Expr()
+	f.id, f.small, f.part = plan.Input("key", plan.Int8()), plan.Input("first", plan.Int4()), plan.Input("second", plan.Int4())
+	f.row = make(map[plan.LockWait]*plan.RowsPlan[lockResult, struct{}])
+	for wait, key := range map[plan.LockWait]string{plan.Wait: "hold", plan.NoWait: "nowait", plan.SkipLocked: "skip"} {
+		f.row[wait] = plan.DefineRows(f.view, key, plan.RowsFrom(tab, rel), plan.RowsSpec{
+			Lock: plan.ForRows(plan.ForUpdate, rel, wait), RowFilter: plan.RowFilter{Where: plan.Eq(id, f.id.Expr())},
+		}, plan.Project(plan.Output(f.view, "id", plan.Int8()), id))
 	}
-	f.advisory = make(map[string]*q.AdvisoryLockPlan[advisoryResult, struct{}])
-	for key, lock := range map[string]q.AdvisoryLock{
-		"big":       q.AdvisoryXactLock(q.Exclusive, q.Wait, f.id.Expr()),
-		"attempt":   q.AdvisoryXactLock(q.Exclusive, q.Try, f.id.Expr()),
-		"pair":      q.AdvisoryXactLockPair(q.Shared, q.Wait, f.small.Expr(), f.part.Expr()),
-		"share":     q.AdvisoryXactLockPair(q.Shared, q.Try, f.small.Expr(), f.part.Expr()),
-		"exclusive": q.AdvisoryXactLockPair(q.Exclusive, q.Try, f.small.Expr(), f.part.Expr()),
+	f.advisory = make(map[string]*plan.AdvisoryLockPlan[advisoryResult, struct{}])
+	for key, lock := range map[string]plan.AdvisoryLock{
+		"big":       plan.AdvisoryXactLock(plan.Exclusive, plan.Wait, f.id.Expr()),
+		"attempt":   plan.AdvisoryXactLock(plan.Exclusive, plan.Try, f.id.Expr()),
+		"pair":      plan.AdvisoryXactLockPair(plan.Shared, plan.Wait, f.small.Expr(), f.part.Expr()),
+		"share":     plan.AdvisoryXactLockPair(plan.Shared, plan.Try, f.small.Expr(), f.part.Expr()),
+		"exclusive": plan.AdvisoryXactLockPair(plan.Exclusive, plan.Try, f.small.Expr(), f.part.Expr()),
 	} {
-		f.advisory[key] = q.DefineAdvisoryLock(f.flags, key, lock)
+		f.advisory[key] = plan.DefineAdvisoryLock(f.flags, key, lock)
 	}
-	f.routines = make(map[string]*q.RoutinePlan[lockResult, struct{}])
-	spec := q.RoutineSpec[int64]{Schema: ns, Name: "lookup", Result: q.Int8(), Cardinality: q.RoutineOne, ReadOnly: true}
-	small := q.DeclareRoutine(spec, q.Parameter("id", q.Int4()))
-	f.routines["small"] = q.DefineRoutine(f.view, "small", small, q.Arg(q.FormalOf(small, "id", q.Int4()), f.small.Expr()))
-	call := func(key string, spec q.RoutineSpec[int64]) {
-		fn := q.DeclareRoutine(spec, q.Parameter("id", q.Int8()))
-		f.routines[key] = q.DefineRoutine(f.view, key, fn, q.Arg(q.FormalOf(fn, "id", q.Int8()), f.id.Expr()))
+	f.routines = make(map[string]*plan.RoutinePlan[lockResult, struct{}])
+	spec := plan.RoutineSpec[int64]{Schema: ns, Name: "lookup", Result: plan.Int8(), Cardinality: plan.RoutineOne, ReadOnly: true}
+	small := plan.DeclareRoutine(spec, plan.Parameter("id", plan.Int4()))
+	f.routines["small"] = plan.DefineRoutine(f.view, "small", small, plan.Arg(plan.FormalOf(small, "id", plan.Int4()), f.small.Expr()))
+	call := func(key string, spec plan.RoutineSpec[int64]) {
+		fn := plan.DeclareRoutine(spec, plan.Parameter("id", plan.Int8()))
+		f.routines[key] = plan.DefineRoutine(f.view, key, fn, plan.Arg(plan.FormalOf(fn, "id", plan.Int8()), f.id.Expr()))
 	}
 	call("large", spec)
-	spec.Name, spec.Cardinality = "series", q.RoutineSet
+	spec.Name, spec.Cardinality = "series", plan.RoutineSet
 	call("series", spec)
-	spec.Name, spec.Cardinality, spec.ReadOnly, spec.SecurityDefiner = "add_one", q.RoutineOne, false, true
+	spec.Name, spec.Cardinality, spec.ReadOnly, spec.SecurityDefiner = "add_one", plan.RoutineOne, false, true
 	call("add_one", spec)
-	spec.Name, spec.Cardinality = "add_set", q.RoutineSet
+	spec.Name, spec.Cardinality = "add_set", plan.RoutineSet
 	call("add_set", spec)
-	f.statusLocks = make(map[string]*q.RowsPlan[lockResult, struct{}])
+	f.statusLocks = make(map[string]*plan.RowsPlan[lockResult, struct{}])
 	exec("CREATE TYPE " + ns + ".item_state AS ENUM ('open', 'closed')")
 	exec("CREATE DOMAIN " + ns + ".item_rank AS integer")
-	addStatusLock(t, db, f, "notes", "text", q.Text(), `open'\entry`, "closed", true)
+	addStatusLock(t, db, f, "notes", "text", plan.Text(), `open'\entry`, "closed", true)
 	addStatusLock(t, db, f, "groups", ns+".item_state", q.CatalogType[string](ns, "item_state", nil), "open", "closed", true)
 	addStatusLock(t, db, f, "jobs", ns+".item_rank", q.CatalogType[int32](ns, "item_rank", nil), int32(2), int32(7), false)
 	return f

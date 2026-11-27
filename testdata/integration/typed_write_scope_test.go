@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	q "github.com/0xJean/tabula"
+	tplan "github.com/0xJean/tabula/plan"
 	"github.com/stretchr/testify/require"
 )
 
@@ -25,16 +26,16 @@ GRANT SELECT(id,rank) ON `+schema+`.notes TO `+role)
 			require.NoError(t, err)
 			reg := q.NewRegistry(q.RegistryConfig[itemScope]{Deny: q.DenyLegacySQL, ScopeID: func(s itemScope) any { return int64(s) }})
 			table := q.DefinePlanSource(reg, q.TableSpec[planItem, int64]{Name: schema + ".items", AllowDelete: true})
-			src := q.MapTable(table, q.ColumnType("scope_id", q.CatalogType[itemScope]("pg_catalog", "int8", nil))).As("i")
-			notes := q.MapTable(q.DefinePlanSource(reg, q.TableSpec[writeItem, int64]{Name: schema + ".notes", RelationScope: q.Global()})).As("n")
-			id, rank, revision := q.FieldOf(src.Rel(), "id", q.Int8()), q.FieldOf(src.Rel(), "rank", q.Int4()), q.FieldOf(src.Rel(), "revision", q.Int4())
-			nid, nrank := q.FieldOf(notes.Rel(), "id", q.Int8()), q.FieldOf(notes.Rel(), "rank", q.Int4())
-			key, value, previous := q.Input("id", q.Int8()), q.Input("rank", q.Int4()), q.Input("previous", q.Int4())
-			copyRows := q.DefineWrite(src, "copy", q.InsertInto(src).Columns(id.Column(), rank.Column()).FromSelect(
-				q.Select(q.Export("id", nid.Expr()).Project(), q.Export("rank", nrank.Expr()).Project()).From(notes)))
-			insert := q.DefineWrite(src, "append", q.InsertInto(src).Values(q.Assign(id, key.Expr()), q.Assign(rank, value.Expr())))
-			update := q.DefineWrite(src, "change", q.UpdateOf(src).Set(q.Assign(rank, value.Expr())).AllRows().Version(q.ExpectVersion(revision, previous)))
-			remove := q.DefineWrite(src, "remove", q.DeleteFrom(src).AllRows().Version(q.ExpectVersion(revision, previous)))
+			src := tplan.MapTable(table, tplan.ColumnType("scope_id", q.CatalogType[itemScope]("pg_catalog", "int8", nil))).As("i")
+			notes := tplan.MapTable(q.DefinePlanSource(reg, q.TableSpec[writeItem, int64]{Name: schema + ".notes", RelationScope: q.Global()})).As("n")
+			id, rank, revision := tplan.FieldOf(src.Rel(), "id", tplan.Int8()), tplan.FieldOf(src.Rel(), "rank", tplan.Int4()), tplan.FieldOf(src.Rel(), "revision", tplan.Int4())
+			nid, nrank := tplan.FieldOf(notes.Rel(), "id", tplan.Int8()), tplan.FieldOf(notes.Rel(), "rank", tplan.Int4())
+			key, value, previous := tplan.Input("id", tplan.Int8()), tplan.Input("rank", tplan.Int4()), tplan.Input("previous", tplan.Int4())
+			copyRows := tplan.DefineWrite(src, "copy", tplan.InsertInto(src).Columns(id.Column(), rank.Column()).FromSelect(
+				tplan.Select(tplan.Export("id", nid.Expr()).Project(), tplan.Export("rank", nrank.Expr()).Project()).From(notes)))
+			insert := tplan.DefineWrite(src, "append", tplan.InsertInto(src).Values(tplan.Assign(id, key.Expr()), tplan.Assign(rank, value.Expr())))
+			update := tplan.DefineWrite(src, "change", tplan.UpdateOf(src).Set(tplan.Assign(rank, value.Expr())).AllRows().Version(tplan.ExpectVersion(revision, previous)))
+			remove := tplan.DefineWrite(src, "remove", tplan.DeleteFrom(src).AllRows().Version(tplan.ExpectVersion(revision, previous)))
 			run := func(scope itemScope, body rowCallback) error {
 				return runRowPlan(t, db, pool, driver, reg.SQLAuthority(), role, scope, q.LogConfig{}, body)
 			}
@@ -45,19 +46,19 @@ GRANT SELECT(id,rank) ON `+schema+`.notes TO `+role)
 				return nil
 			}))
 			require.NoError(t, run(2, func(ctx context.Context, s q.Session[itemScope]) error {
-				_, err := insert.Bind(s).Exec(ctx, q.BindValue(key, int64(3)), q.BindValue(value, int32(4)))
+				_, err := insert.Bind(s).Exec(ctx, tplan.BindValue(key, int64(3)), tplan.BindValue(value, int32(4)))
 				return err
 			}))
 			_, err = db.ExecContext(ctx, "UPDATE "+schema+".items SET removed=true WHERE id=2")
 			require.NoError(t, err)
 			require.NoError(t, run(1, func(ctx context.Context, s q.Session[itemScope]) error {
-				n, err := update.Bind(s).Exec(ctx, q.BindValue(value, int32(9)), q.BindValue(previous, int32(0)))
+				n, err := update.Bind(s).Exec(ctx, tplan.BindValue(value, int32(9)), tplan.BindValue(previous, int32(0)))
 				require.NoError(t, err)
 				require.EqualValues(t, 1, n)
-				n, err = update.Bind(s).Exec(ctx, q.BindValue(value, int32(10)), q.BindValue(previous, int32(0)))
+				n, err = update.Bind(s).Exec(ctx, tplan.BindValue(value, int32(10)), tplan.BindValue(previous, int32(0)))
 				require.NoError(t, err)
 				require.Zero(t, n)
-				n, err = remove.Bind(s).Exec(ctx, q.BindValue(previous, int32(1)))
+				n, err = remove.Bind(s).Exec(ctx, tplan.BindValue(previous, int32(1)))
 				require.NoError(t, err)
 				require.EqualValues(t, 1, n)
 				return nil
@@ -97,12 +98,12 @@ GRANT INSERT(id,rank),UPDATE(rank) ON `+schema+`.items TO `+role)
 			require.NoError(t, err)
 			reg := q.NewRegistry(q.RegistryConfig[itemScope]{Deny: q.DenyLegacySQL})
 			table := q.DefinePlanSource(reg, q.TableSpec[item, int64]{Name: schema + ".items", RelationScope: q.ByRLS()})
-			src := q.MapTable(table).As("i")
-			id, rank := q.FieldOf(src.Rel(), "id", q.Int8()), q.FieldOf(src.Rel(), "rank", q.Int4())
-			key, value := q.Input("id", q.Int8()), q.Input("rank", q.Int4())
-			plan := q.DefineWrite(src, "append", q.InsertInto(src).Columns(id.Column(), rank.Column()).FromSelect(
-				q.Select(q.Export("id", key.Expr()).Project(), q.Export("rank", value.Expr()).Project())))
-			update := q.DefineWrite(src, "change", q.UpdateOf(src).Set(q.Assign(rank, value.Expr())).AllRows())
+			src := tplan.MapTable(table).As("i")
+			id, rank := tplan.FieldOf(src.Rel(), "id", tplan.Int8()), tplan.FieldOf(src.Rel(), "rank", tplan.Int4())
+			key, value := tplan.Input("id", tplan.Int8()), tplan.Input("rank", tplan.Int4())
+			plan := tplan.DefineWrite(src, "append", tplan.InsertInto(src).Columns(id.Column(), rank.Column()).FromSelect(
+				tplan.Select(tplan.Export("id", key.Expr()).Project(), tplan.Export("rank", value.Expr()).Project())))
+			update := tplan.DefineWrite(src, "change", tplan.UpdateOf(src).Set(tplan.Assign(rank, value.Expr())).AllRows())
 			for _, shape := range table.Definition().StatementShapes {
 				require.Len(t, shape.ForceRLS, 1)
 				for _, input := range shape.Inputs {
@@ -111,12 +112,12 @@ GRANT INSERT(id,rank),UPDATE(rank) ON `+schema+`.items TO `+role)
 			}
 			for _, scope := range []itemScope{1, 2} {
 				require.NoError(t, runRowPlan(t, db, pool, driver, reg.SQLAuthority(), role, scope, q.LogConfig{}, func(ctx context.Context, s q.Session[itemScope]) error {
-					_, err := plan.Bind(s).Exec(ctx, q.BindValue(key, int64(scope)), q.BindValue(value, int32(3)))
+					_, err := plan.Bind(s).Exec(ctx, tplan.BindValue(key, int64(scope)), tplan.BindValue(value, int32(3)))
 					return err
 				}))
 			}
 			require.NoError(t, runRowPlan(t, db, pool, driver, reg.SQLAuthority(), role, 1, q.LogConfig{}, func(ctx context.Context, s q.Session[itemScope]) error {
-				n, err := update.Bind(s).Exec(ctx, q.BindValue(value, int32(8)))
+				n, err := update.Bind(s).Exec(ctx, tplan.BindValue(value, int32(8)))
 				require.NoError(t, err)
 				require.EqualValues(t, 1, n)
 				return nil

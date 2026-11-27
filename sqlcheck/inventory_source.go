@@ -185,7 +185,7 @@ func (s inventorySource) definitionName(expr ast.Expr) string {
 			if sel := s.info.Selections[callee]; sel != nil {
 				_, declared := methodReceiverNames(sel)
 				if declared == tabulaPkgPath+".Table" && callee.Sel.Name == "Bind" ||
-					declared == tabulaPkgPath+".TableLayout" && callee.Sel.Name == "As" {
+					declared == planPkgPath+".TableLayout" && callee.Sel.Name == "As" {
 					return s.definitionName(methodReceiver(callee, sel, e))
 				}
 				return ""
@@ -193,17 +193,21 @@ func (s inventorySource) definitionName(expr ast.Expr) string {
 			id = callee.Sel
 		}
 		fn, ok := s.info.Uses[id].(*types.Func)
-		if !ok || fn.Pkg() == nil || fn.Pkg().Path() != tabulaPkgPath {
+		if !ok || fn.Pkg() == nil {
 			return ""
 		}
-		switch fn.Name() {
-		case "RowsFrom", "MapTable", "TryMapTable":
-			if len(e.Args) == 0 {
+		if fn.Pkg().Path() == planPkgPath {
+			switch fn.Name() {
+			case "RowsFrom", "MapTable", "TryMapTable":
+				if len(e.Args) == 0 {
+					return ""
+				}
+				return s.definitionName(e.Args[0])
+			default:
 				return ""
 			}
-			return s.definitionName(e.Args[0])
 		}
-		if len(e.Args) != 2 {
+		if fn.Pkg().Path() != tabulaPkgPath || len(e.Args) != 2 {
 			return ""
 		}
 		switch fn.Name() {

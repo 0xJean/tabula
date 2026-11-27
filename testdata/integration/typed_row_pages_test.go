@@ -8,6 +8,7 @@ import (
 	"time"
 
 	q "github.com/0xJean/tabula"
+	"github.com/0xJean/tabula/plan"
 	"github.com/0xJean/tabula/sqlcheck"
 	"github.com/stretchr/testify/require"
 )
@@ -30,16 +31,16 @@ func TestRegisteredLockedPageAndExists(t *testing.T) {
 			}
 			table := q.Define(reg, q.TableSpec[item, int64]{Name: f.table, RelationScope: q.Global()})
 			view := q.DefineView(reg, q.ViewSpec[lockResult]{Name: "entries"})
-			rel := q.FromTable(table, "i", q.Global())
-			src := q.RowsFrom(table, rel)
-			id, note := q.FieldOf(rel, "id", q.Int8()), q.FieldOf(rel, "note", q.Text())
-			key := q.Input("key", q.Int8())
-			projection := q.Project(q.Output(view, "id", q.Int8()), id.Expr())
-			lock := q.DefineRows(view, "take", src, q.RowsSpec{
-				Lock:      q.ForRows(q.ForUpdate, rel, q.SkipLocked),
-				RowFilter: q.RowFilter{Where: q.Ge(id.Expr(), key.Expr())},
-				Orders:    []q.RowOrder{{Name: "next", Terms: []q.RowTerm{q.Asc(id)}}},
-				Pages:     q.RowPages{Keyset: true, Offset: true, MaxLimit: 1, MaxOffset: 4},
+			rel := plan.FromTable(table, "i", q.Global())
+			src := plan.RowsFrom(table, rel)
+			id, note := plan.FieldOf(rel, "id", plan.Int8()), plan.FieldOf(rel, "note", plan.Text())
+			key := plan.Input("key", plan.Int8())
+			projection := plan.Project(plan.Output(view, "id", plan.Int8()), id.Expr())
+			lock := plan.DefineRows(view, "take", src, plan.RowsSpec{
+				Lock:      plan.ForRows(plan.ForUpdate, rel, plan.SkipLocked),
+				RowFilter: plan.RowFilter{Where: plan.Ge(id.Expr(), key.Expr())},
+				Orders:    []plan.RowOrder{{Name: "next", Terms: []plan.RowTerm{plan.Asc(id)}}},
+				Pages:     plan.RowPages{Keyset: true, Offset: true, MaxLimit: 1, MaxOffset: 4},
 			}, projection)
 			work := make(sqlcheck.RoleStatements)
 			work.AddViews(f.role, view.Definition())
@@ -59,8 +60,8 @@ func TestRegisteredLockedPageAndExists(t *testing.T) {
 			require.Empty(t, findings)
 
 			run := authorizedEffectRunner(t, driver, db, pool, f.role, reg.SQLAuthority(), q.StatementPolicy{}, nil, false)
-			first := q.RowChoice{Order: "next", Page: q.FirstPage, Limit: 1}
-			lower := q.BindValue(key, 1)
+			first := plan.RowChoice{Order: "next", Page: plan.FirstPage, Limit: 1}
+			lower := plan.BindValue(key, 1)
 			require.NoError(t, run(ctx, func(c context.Context, s session) error {
 				rows, err := lock.Bind(s).Find(c, first, lower)
 				require.NoError(t, err)
@@ -85,9 +86,9 @@ func TestRegisteredLockedPageAndExists(t *testing.T) {
 				Note *string `db:"note"`
 			}
 			notes := q.DefineView(reg, q.ViewSpec[textResult]{Name: "notes"})
-			visible := q.DefineRows(notes, "visible", src, q.RowsSpec{WithExists: true,
-				RowFilter: q.RowFilter{Optional: []q.RowPredicate{{Name: "item", When: q.Eq(id.Expr(), key.Expr())}}},
-			}, q.Project(q.Output(notes, "note", q.Text()), note.Expr()))
+			visible := plan.DefineRows(notes, "visible", src, plan.RowsSpec{WithExists: true,
+				RowFilter: plan.RowFilter{Optional: []plan.RowPredicate{{Name: "item", When: plan.Eq(id.Expr(), key.Expr())}}},
+			}, plan.Project(plan.Output(notes, "note", plan.Text()), note.Expr()))
 			require.NoError(t, run(ctx, func(c context.Context, s session) error {
 				b := visible.Bind(s)
 				found, err := b.Exists(c, nil)
@@ -97,14 +98,14 @@ func TestRegisteredLockedPageAndExists(t *testing.T) {
 					id   int64
 					want bool
 				}{{1, true}, {2, false}, {5, false}} {
-					found, err := b.Exists(c, []string{"item"}, q.BindValue(key, tc.id))
+					found, err := b.Exists(c, []string{"item"}, plan.BindValue(key, tc.id))
 					require.NoError(t, err)
 					require.Equal(t, tc.want, found)
 				}
 				return nil
 			}))
 			err = run(ctx, func(c context.Context, s session) error {
-				_, err := visible.Bind(s).Find(c, q.RowChoice{})
+				_, err := visible.Bind(s).Find(c, plan.RowChoice{})
 				return err
 			})
 			require.Equal(t, "42501", q.SQLState(err))
@@ -112,17 +113,17 @@ func TestRegisteredLockedPageAndExists(t *testing.T) {
 			_, err = db.ExecContext(ctx, "GRANT SELECT(note) ON "+f.table+" TO "+f.role)
 			require.NoError(t, err)
 			// A nullable value retains SQL NULL through the bind codec.
-			text := q.Input("note", q.CatalogType[string]("pg_catalog", "text", func(s string) any {
+			text := plan.Input("note", q.CatalogType[string]("pg_catalog", "text", func(s string) any {
 				if s == "" {
 					return nil
 				}
 				return s
 			}))
-			compare := q.DefineRows(view, "compare", src, q.RowsSpec{WithExists: true,
-				RowFilter: q.RowFilter{
-					Where: q.Eq(id.Expr(), key.Expr()),
-					Optional: []q.RowPredicate{{Name: "equal", When: q.IsNotDistinct(note.Expr(), text.Expr())},
-						{Name: "different", When: q.IsDistinct(note.Expr(), text.Expr())}},
+			compare := plan.DefineRows(view, "compare", src, plan.RowsSpec{WithExists: true,
+				RowFilter: plan.RowFilter{
+					Where: plan.Eq(id.Expr(), key.Expr()),
+					Optional: []plan.RowPredicate{{Name: "equal", When: plan.IsNotDistinct(note.Expr(), text.Expr())},
+						{Name: "different", When: plan.IsDistinct(note.Expr(), text.Expr())}},
 				},
 			}, projection)
 			require.NoError(t, run(ctx, func(c context.Context, s session) error {
@@ -133,7 +134,7 @@ func TestRegisteredLockedPageAndExists(t *testing.T) {
 				}{
 					{1, "", true}, {1, "ready", false}, {3, "", false}, {3, "ready", true}, {3, "other", false},
 				} {
-					args := []q.Binding{q.BindValue(key, tc.id), q.BindValue(text, tc.note)}
+					args := []plan.Binding{plan.BindValue(key, tc.id), plan.BindValue(text, tc.note)}
 					match, err := compare.Bind(s).Exists(c, []string{"equal"}, args...)
 					require.NoError(t, err)
 					require.Equal(t, tc.equal, match)

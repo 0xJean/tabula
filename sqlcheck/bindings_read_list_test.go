@@ -24,7 +24,7 @@ func TestExplicitReadInventorySeparatesPagesAndCounts(t *testing.T) {
 		}
 	}
 	definitions := map[string][]tabula.Definition{owner: {d}}
-	site := SQLSite{ID: "site", Kind: "typed_rows", Definition: owner, QueryKey: plan, Receiver: tabulaPkgPath + ".BoundReadPlan"}
+	site := SQLSite{ID: "site", Kind: "typed_rows", Definition: owner, QueryKey: plan, Receiver: planPkgPath + ".BoundReadPlan"}
 	check := func(method, binding string, want ...string) {
 		t.Helper()
 		site.Method = method

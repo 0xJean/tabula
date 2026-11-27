@@ -11,6 +11,7 @@ import (
 	t "github.com/0xJean/tabula"
 	pg "github.com/0xJean/tabula/pgtype"
 	"github.com/0xJean/tabula/pgxdriver"
+	tplan "github.com/0xJean/tabula/plan"
 	"github.com/0xJean/tabula/pqdriver"
 	"github.com/stretchr/testify/require"
 )
@@ -48,22 +49,22 @@ func TestAggregateNullableInputsBothDrivers(test *testing.T) {
 			reg := t.NewRegistry(cfg)
 			items := t.DefinePlanSource(reg, t.TableSpec[aggregateItem, int32]{Name: ns + ".items", RelationScope: t.Global()})
 			notes := t.DefinePlanSource(reg, t.TableSpec[aggregateNote, int32]{Name: ns + ".notes", RelationScope: t.Global()})
-			left, right := t.MapTable(items).As("i"), t.MapTable(notes).As("n")
-			id, nid, parent := t.FieldOf(left.Rel(), "id", pg.Int4()), t.FieldOf(right.Rel(), "id", pg.Int4()), t.FieldOf(right.Rel(), "item_id", pg.Int4())
+			left, right := tplan.MapTable(items).As("i"), tplan.MapTable(notes).As("n")
+			id, nid, parent := tplan.FieldOf(left.Rel(), "id", pg.Int4()), tplan.FieldOf(right.Rel(), "id", pg.Int4()), tplan.FieldOf(right.Rel(), "item_id", pg.Int4())
 			out := t.DefineView(reg, t.ViewSpec[aggregateNullable]{Name: "entries"})
 			kind := pg.ArrayOfNullable(pg.Int4())
-			floor := t.Input("floor", pg.Int4())
-			aggregate := t.AggregateOrder(t.ArrayAggAs(kind, nid.Expr()), t.Asc(id))
-			plan := t.DefineRead(out, "ids", t.Select(t.Project(t.Output(out, "ids", kind), aggregate)).From(left).LeftJoin(right, t.Eq(id.Expr(), parent.Expr())).Where(t.Ge(id.Expr(), floor.Expr())))
+			floor := tplan.Input("floor", pg.Int4())
+			aggregate := tplan.AggregateOrder(tplan.ArrayAggAs(kind, nid.Expr()), tplan.Asc(id))
+			plan := tplan.DefineRead(out, "ids", tplan.Select(tplan.Project(tplan.Output(out, "ids", kind), aggregate)).From(left).LeftJoin(right, tplan.Eq(id.Expr(), parent.Expr())).Where(tplan.Ge(id.Expr(), floor.Expr())))
 			verifyAggregateDefinitions(test, db, role, reg)
 			require.NoError(test, runRowPlan(test, db, pool, driver, reg.SQLAuthority(), role, 1, t.LogConfig{}, func(ctx context.Context, s t.Session[itemScope]) error {
-				got, err := plan.Bind(s).Find(ctx, t.BindValue(floor, 1))
+				got, err := plan.Bind(s).Find(ctx, tplan.BindValue(floor, 1))
 				require.NoError(test, err)
 				require.Equal(test, []aggregateNullable{{IDs: []*int32{new(int32(11)), nil}}}, got)
-				got, err = plan.Bind(s).Find(ctx, t.BindValue(floor, 2))
+				got, err = plan.Bind(s).Find(ctx, tplan.BindValue(floor, 2))
 				require.NoError(test, err)
 				require.Equal(test, []aggregateNullable{{IDs: []*int32{nil}}}, got)
-				got, err = plan.Bind(s).Find(ctx, t.BindValue(floor, 3))
+				got, err = plan.Bind(s).Find(ctx, tplan.BindValue(floor, 3))
 				require.NoError(test, err)
 				require.Equal(test, []aggregateNullable{{}}, got)
 				return nil

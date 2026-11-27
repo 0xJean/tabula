@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	q "github.com/0xJean/tabula"
+	tplan "github.com/0xJean/tabula/plan"
 	"github.com/0xJean/tabula/pqdriver"
 	"github.com/0xJean/tabula/sqlcheck"
 	"github.com/stretchr/testify/require"
@@ -36,22 +37,22 @@ func TestGroupedReadUsesScalarValuesAndIndependentCount(t *testing.T) {
 			}
 			reg := q.NewRegistry(cfg)
 			table := q.DefinePlanSource(reg, q.TableSpec[item, int64]{Name: tableName, RelationScope: q.Global()})
-			layout := q.MapTable(table)
+			layout := tplan.MapTable(table)
 			src := layout.As("i")
-			id := q.MappedColumn[int64](layout, "id").On(src.Rel())
-			key := q.Lower(q.MappedColumn[string](layout, "label").On(src.Rel()).Expr())
-			count := q.CountAll()
-			one, zero := q.Input("one", q.Int8()), q.Input("zero", q.Int8())
-			ids := q.Input("ids", q.ArrayOf(q.Int8()))
-			value := q.Case(q.When(q.Gt(count, one.Expr()), q.Coalesce(q.NullIf(count, one.Expr()), zero.Expr()))).Else(zero.Expr())
+			id := tplan.MappedColumn[int64](layout, "id").On(src.Rel())
+			key := tplan.Lower(tplan.MappedColumn[string](layout, "label").On(src.Rel()).Expr())
+			count := tplan.CountAll()
+			one, zero := tplan.Input("one", tplan.Int8()), tplan.Input("zero", tplan.Int8())
+			ids := tplan.Input("ids", q.ArrayOf(tplan.Int8()))
+			value := tplan.Case(tplan.When(tplan.Gt(count, one.Expr()), tplan.Coalesce(tplan.NullIf(count, one.Expr()), zero.Expr()))).Else(zero.Expr())
 			out := q.DefineView(reg, q.ViewSpec[result]{Name: "entries"})
-			plan := q.DefineRead(out, "summary", q.Select(
-				q.Project(q.Output(out, "label", q.Text()), key),
-				q.Project(q.Output(out, "amount", q.Int8()), value),
-			).From(src).GroupBy(key).WithList(q.ReadListSpec{
-				Optional: []q.RowPredicate{{Name: "selected", When: q.Any(id.Expr(), ids.Expr())}},
-				Orders:   []q.RowOrder{{Name: "by_label", Terms: []q.RowTerm{q.AscExpr(key)}}},
-				Pages:    q.RowPages{Keyset: true, MaxLimit: 2}, ExactCount: true,
+			plan := tplan.DefineRead(out, "summary", tplan.Select(
+				tplan.Project(tplan.Output(out, "label", tplan.Text()), key),
+				tplan.Project(tplan.Output(out, "amount", tplan.Int8()), value),
+			).From(src).GroupBy(key).WithList(tplan.ReadListSpec{
+				Optional: []tplan.RowPredicate{{Name: "selected", When: tplan.Any(id.Expr(), ids.Expr())}},
+				Orders:   []tplan.RowOrder{{Name: "by_label", Terms: []tplan.RowTerm{tplan.AscExpr(key)}}},
+				Pages:    tplan.RowPages{Keyset: true, MaxLimit: 2}, ExactCount: true,
 			}))
 			for name, shape := range out.Definition().StatementShapes {
 				require.Contains(t, shape.Privileges, q.DefinedPrivilege{Function: "pg_catalog.count()", Privilege: "EXECUTE"}, name)
@@ -59,16 +60,16 @@ func TestGroupedReadUsesScalarValuesAndIndependentCount(t *testing.T) {
 			run := authorizedEffectRunner(t, driver, db, pool, "", reg.SQLAuthority(), q.StatementPolicy{}, nil, true)
 			require.NoError(t, run(t.Context(), func(ctx context.Context, s session) error {
 				list := plan.Bind(s)
-				choice := q.RowChoice{Filters: []string{"selected"}, Order: "by_label", Page: q.FirstPage, Limit: 2}
+				choice := tplan.RowChoice{Filters: []string{"selected"}, Order: "by_label", Page: tplan.FirstPage, Limit: 2}
 				values := []int64{1, 2, 3, 4}
-				selected := q.BindValue(ids, values)
+				selected := tplan.BindValue(ids, values)
 				values[0] = 9
-				bindings := []q.Binding{selected, q.BindValue(one, int64(1)), q.BindValue(zero, int64(0))}
+				bindings := []tplan.Binding{selected, tplan.BindValue(one, int64(1)), tplan.BindValue(zero, int64(0))}
 				first, total, err := list.List(ctx, choice, bindings...)
 				require.NoError(t, err)
 				require.Equal(t, []result{{"a", 2}, {"b", 0}}, first)
 				require.EqualValues(t, 3, total)
-				choice.Page = q.AfterPage
+				choice.Page = tplan.AfterPage
 				choice.After, err = plan.CursorFrom(choice.Order, first[len(first)-1])
 				require.NoError(t, err)
 				last, total, err := list.List(ctx, choice, bindings...)
@@ -102,14 +103,14 @@ func TestMappedRowAndReadKeysetShareCatalogProof(t *testing.T) {
 			require.NoError(t, db.QueryRowContext(t.Context(), "SELECT CURRENT_USER").Scan(&role))
 			reg := q.NewRegistry(q.RegistryConfig[struct{}]{Deny: q.DenyLegacySQL})
 			table := q.DefinePlanSource(reg, q.TableSpec[item, int64]{Name: physical, RelationScope: q.Global()})
-			layout := q.MapTable(table)
+			layout := tplan.MapTable(table)
 			src := layout.As("i")
-			id := q.MappedColumn[int64](layout, "id").On(src.Rel())
-			label := q.MappedColumn[string](layout, "label").On(src.Rel())
-			orders := []q.RowOrder{{Name: "key", Terms: []q.RowTerm{q.AscExpr(label.Expr()).NullsLast(), q.Asc(id)}}}
-			pages := q.RowPages{Keyset: true, MaxLimit: 2}
-			rows := q.DefineTableRows(src, "rows", q.RowsSpec{Orders: orders, Pages: pages}, q.SelectAll())
-			read := q.DefineTableRead(src, "selection", q.SelectAll(), q.Select().WithList(q.ReadListSpec{Orders: orders, Pages: pages}))
+			id := tplan.MappedColumn[int64](layout, "id").On(src.Rel())
+			label := tplan.MappedColumn[string](layout, "label").On(src.Rel())
+			orders := []tplan.RowOrder{{Name: "key", Terms: []tplan.RowTerm{tplan.AscExpr(label.Expr()).NullsLast(), tplan.Asc(id)}}}
+			pages := tplan.RowPages{Keyset: true, MaxLimit: 2}
+			rows := tplan.DefineTableRows(src, "rows", tplan.RowsSpec{Orders: orders, Pages: pages}, tplan.SelectAll())
+			read := tplan.DefineTableRead(src, "selection", tplan.SelectAll(), tplan.Select().WithList(tplan.ReadListSpec{Orders: orders, Pages: pages}))
 			def := table.Definition()
 			a := def.StatementShapes["rows.global.data.sort.key.after"]
 			b := def.StatementShapes["selection.global.list.data.sort.key.after"]
@@ -126,11 +127,11 @@ func TestMappedRowAndReadKeysetShareCatalogProof(t *testing.T) {
 			require.Empty(t, missing)
 			run := authorizedEffectRunner(t, driver, db, pool, role, reg.SQLAuthority(), q.StatementPolicy{}, nil, true)
 			require.NoError(t, run(t.Context(), func(ctx context.Context, s session) error {
-				choice := q.RowChoice{Order: "key", Limit: 1, Page: q.FirstPage}
+				choice := tplan.RowChoice{Order: "key", Limit: 1, Page: tplan.FirstPage}
 				first, err := rows.Bind(s).Find(ctx, choice)
 				require.NoError(t, err)
 				require.Equal(t, []item{{1, "first"}}, first)
-				choice.Page = q.AfterPage
+				choice.Page = tplan.AfterPage
 				choice.After, err = rows.CursorFrom(choice.Order, first[0])
 				require.NoError(t, err)
 				last, err := rows.Bind(s).Find(ctx, choice)
@@ -169,15 +170,15 @@ func TestPhysicalNameColumnRetainsFieldOrder(t *testing.T) {
 	require.NoError(t, err)
 	reg := q.NewRegistry(q.RegistryConfig[struct{}]{Deny: q.DenyLegacySQL})
 	table := q.DefinePlanSource(reg, q.TableSpec[item, int64]{Name: name, RelationScope: q.Global()})
-	layout := q.MapTable(table, q.ColumnType("label", q.CatalogType[string]("pg_catalog", "name", nil)))
+	layout := tplan.MapTable(table, tplan.ColumnType("label", q.CatalogType[string]("pg_catalog", "name", nil)))
 	src := layout.As("i")
-	label := q.MappedColumn[string](layout, "label").On(src.Rel())
-	plan := q.DefineTableRows(src, "labels", q.RowsSpec{GroupBy: []q.RowColumn{label.Column()}, Orders: []q.RowOrder{{Name: "labels", Terms: []q.RowTerm{q.Asc(label)}}}}, q.SelectColumns(label.Column()))
+	label := tplan.MappedColumn[string](layout, "label").On(src.Rel())
+	plan := tplan.DefineTableRows(src, "labels", tplan.RowsSpec{GroupBy: []tplan.RowColumn{label.Column()}, Orders: []tplan.RowOrder{{Name: "labels", Terms: []tplan.RowTerm{tplan.Asc(label)}}}}, tplan.SelectColumns(label.Column()))
 	for _, driver := range []string{"pq", "pgx"} {
 		t.Run(driver, func(t *testing.T) {
 			run := authorizedEffectRunner(t, driver, db, pool, "", reg.SQLAuthority(), q.StatementPolicy{}, nil, true)
 			require.NoError(t, run(t.Context(), func(ctx context.Context, s session) error {
-				items, total, err := plan.Bind(s).List(ctx, q.RowChoice{Order: "labels"})
+				items, total, err := plan.Bind(s).List(ctx, tplan.RowChoice{Order: "labels"})
 				require.NoError(t, err)
 				require.Equal(t, []item{{Label: "a"}, {Label: "b"}}, items)
 				require.EqualValues(t, 2, total)
@@ -205,42 +206,42 @@ func TestGroupedNumericCursorUsesTheDeclaredEquality(t *testing.T) {
 	reg := q.NewRegistry(q.RegistryConfig[struct{}]{Deny: q.DenyLegacySQL})
 	number := q.CatalogType[string]("pg_catalog", "numeric", nil)
 	table := q.DefinePlanSource(reg, q.TableSpec[item, int64]{Name: name, RelationScope: q.Global()})
-	layout := q.MapTable(table, q.ColumnType("amount", number))
+	layout := tplan.MapTable(table, tplan.ColumnType("amount", number))
 	src := layout.As("i")
-	amount := q.MappedColumn[string](layout, "amount").On(src.Rel())
-	spelling := q.Cast(q.Text(), amount.Expr())
+	amount := tplan.MappedColumn[string](layout, "amount").On(src.Rel())
+	spelling := tplan.Cast(tplan.Text(), amount.Expr())
 	out := q.DefineView(reg, q.ViewSpec[result]{Name: "entries"})
-	project := []q.Projection{
-		q.Project(q.Output(out, "amount", number), amount.Expr()),
-		q.Project(q.Output(out, "spelling", q.Text()), spelling),
+	project := []tplan.Projection{
+		tplan.Project(tplan.Output(out, "amount", number), amount.Expr()),
+		tplan.Project(tplan.Output(out, "spelling", tplan.Text()), spelling),
 	}
-	orders := []q.RowOrder{{Name: "amount", Terms: []q.RowTerm{q.AscExpr(spelling), q.Asc(amount)}}}
-	pages := q.RowPages{Keyset: true, MaxLimit: 1}
-	list := q.ReadListSpec{Orders: orders, Pages: pages}
-	base := q.Select(project...).From(src)
-	_, err = q.TryDefineRead(out, "ambiguous", base.GroupBy(amount.Expr()).WithList(list))
+	orders := []tplan.RowOrder{{Name: "amount", Terms: []tplan.RowTerm{tplan.AscExpr(spelling), tplan.Asc(amount)}}}
+	pages := tplan.RowPages{Keyset: true, MaxLimit: 1}
+	list := tplan.ReadListSpec{Orders: orders, Pages: pages}
+	base := tplan.Select(project...).From(src)
+	_, err = tplan.TryDefineRead(out, "ambiguous", base.GroupBy(amount.Expr()).WithList(list))
 	require.ErrorContains(t, err, "representation of equal GROUP BY values")
-	_, err = q.TryDefineRows(out, "ambiguous_rows", src, q.RowsSpec{
-		GroupBy: []q.RowColumn{amount.Column()}, Orders: orders, Pages: pages,
+	_, err = tplan.TryDefineRows(out, "ambiguous_rows", src, tplan.RowsSpec{
+		GroupBy: []tplan.RowColumn{amount.Column()}, Orders: orders, Pages: pages,
 	}, project...)
 	require.ErrorContains(t, err, "representation of equal GROUP BY values")
 	// The spelling has its own fixed equality class when it is also grouped.
-	_, err = q.TryDefineRead(out, "by_spelling", base.GroupBy(amount.Expr(), spelling).WithList(list))
+	_, err = tplan.TryDefineRead(out, "by_spelling", base.GroupBy(amount.Expr(), spelling).WithList(list))
 	require.NoError(t, err)
-	list.Orders = []q.RowOrder{{Name: "amount", Terms: []q.RowTerm{q.Asc(amount)}}}
-	plan := q.DefineRead(out, "native", base.GroupBy(amount.Expr()).WithList(list))
+	list.Orders = []tplan.RowOrder{{Name: "amount", Terms: []tplan.RowTerm{tplan.Asc(amount)}}}
+	plan := tplan.DefineRead(out, "native", base.GroupBy(amount.Expr()).WithList(list))
 	for _, driver := range []string{"pq", "pgx"} {
 		t.Run(driver, func(t *testing.T) {
 			run := authorizedEffectRunner(t, driver, db, pool, "", reg.SQLAuthority(), q.StatementPolicy{}, nil, true)
 			require.NoError(t, run(t.Context(), func(ctx context.Context, s session) error {
-				choice := q.RowChoice{Page: q.FirstPage, Order: "amount", Limit: 1}
+				choice := tplan.RowChoice{Page: tplan.FirstPage, Order: "amount", Limit: 1}
 				first, err := plan.Bind(s).Page(ctx, choice)
 				require.NoError(t, err)
 				require.Len(t, first, 1)
 				require.Contains(t, []string{"1.0", "1.00"}, first[0].Spelling)
 				choice.After, err = plan.CursorFrom("amount", first[0])
 				require.NoError(t, err)
-				choice.Page = q.AfterPage
+				choice.Page = tplan.AfterPage
 				last, err := plan.Bind(s).Page(ctx, choice)
 				require.NoError(t, err)
 				require.Len(t, last, 1)

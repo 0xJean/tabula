@@ -108,7 +108,7 @@ func TestWritePlanBindingRejectsMismatchedForms(t *testing.T) {
 		{"BoundMutationReturningPlan", "DeleteIter", "entries", "change"},
 	} {
 		t.Run(tc.method+"/"+tc.plan, func(t *testing.T) {
-			site := SQLSite{ID: "use", Kind: "typed_rows", Receiver: tabulaPkgPath + "." + tc.receiver,
+			site := SQLSite{ID: "use", Kind: "typed_rows", Receiver: planPkgPath + "." + tc.receiver,
 				Method: tc.method, Definition: tc.owner, QueryKey: tc.plan}
 			bindings := map[string]SQLBinding{"use": {Roles: []string{"writer"}}}
 			_, err := (SQLInventory{Sites: []SQLSite{site}}).BindRolesWithDefinitions(bindings, tables, views)

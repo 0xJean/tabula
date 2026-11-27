@@ -11,24 +11,24 @@ import (
 // builders and intermediate common tables acquire the final owner's inventory.
 func writePlanReceiver(receiver, method string) string {
 	switch receiver {
-	case tabulaPkgPath:
+	case planPkgPath:
 		switch strings.TrimPrefix(method, "Try") {
 		case "DefineWrite":
-			return tabulaPkgPath + ".BoundWritePlan"
+			return planPkgPath + ".BoundWritePlan"
 		case "DefineReturning", "DefineTableReturning":
-			return tabulaPkgPath + ".BoundReturningPlan"
+			return planPkgPath + ".BoundReturningPlan"
 		case "DefineUpdateReturning", "DefineDeleteReturning":
-			return tabulaPkgPath + ".BoundMutationReturningPlan"
+			return planPkgPath + ".BoundMutationReturningPlan"
 		}
-	case tabulaPkgPath + ".BoundWritePlan":
+	case planPkgPath + ".BoundWritePlan":
 		if method == "Exec" || method == "ExecBatch" {
 			return receiver
 		}
-	case tabulaPkgPath + ".BoundReturningPlan":
+	case planPkgPath + ".BoundReturningPlan":
 		if method == "All" || method == "AllBatch" || method == "Iter" {
 			return receiver
 		}
-	case tabulaPkgPath + ".BoundMutationReturningPlan":
+	case planPkgPath + ".BoundMutationReturningPlan":
 		if method == "UpdateMany" || method == "UpdateIter" || method == "DeleteMany" || method == "DeleteIter" {
 			return receiver
 		}

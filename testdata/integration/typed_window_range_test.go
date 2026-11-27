@@ -8,13 +8,14 @@ import (
 
 	q "github.com/0xJean/tabula"
 	pg "github.com/0xJean/tabula/pgtype"
+	"github.com/0xJean/tabula/plan"
 )
 
 func windowRangeNative[A, D any](f *scalarFixture, name string, orderType q.PGType[A], order A, distanceType q.PGType[D], distance D) {
 	f.t.Helper()
-	a, b := q.Input("order", orderType), q.Input("distance", distanceType)
-	spec := q.WindowSpec{Order: []q.RowTerm{q.AscExpr(a.Expr())}, Frame: q.WindowFrame{Mode: q.FrameRange, Start: q.Preceding(b.Expr()), End: q.CurrentRow()}}
-	windowCheck(f, name, pg.Int8(), q.Over(q.CountAll(), spec), windowPointers[int64](6, 6, 6, 6, 6, 6), q.BindValue(a, order), q.BindValue(b, distance))
+	a, b := plan.Input("order", orderType), plan.Input("distance", distanceType)
+	spec := plan.WindowSpec{Order: []plan.RowTerm{plan.AscExpr(a.Expr())}, Frame: plan.WindowFrame{Mode: plan.FrameRange, Start: plan.Preceding(b.Expr()), End: plan.CurrentRow()}}
+	windowCheck(f, name, pg.Int8(), plan.Over(plan.CountAll(), spec), windowPointers[int64](6, 6, 6, 6, 6, 6), plan.BindValue(a, order), plan.BindValue(b, distance))
 }
 
 func TestWindowRangeNativeOverloads(t *testing.T) {

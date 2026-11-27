@@ -11,6 +11,7 @@ import (
 
 	q "github.com/0xJean/tabula"
 	pg "github.com/0xJean/tabula/pgtype"
+	tplan "github.com/0xJean/tabula/plan"
 	"github.com/0xJean/tabula/pqdriver"
 	"github.com/0xJean/tabula/sqlcheck"
 	"github.com/stretchr/testify/require"
@@ -46,24 +47,24 @@ INSERT INTO ` + tableName + ` VALUES (1,10,0,now(),gen_random_uuid(),'{"x":1}',A
 			}
 			reg := q.NewRegistry(cfg)
 			table := q.DefinePlanSource(reg, q.TableSpec[scalarWriteItem, int64]{Name: tableName, RelationScope: q.Global(), WriteMode: q.WriteUpdateOnly, UpdateColumns: []string{"target", "stamp", "uid", "doc", "members"}})
-			layout := q.MapTable(table, q.ColumnType("uid", pg.UUID[string]()), q.ColumnType("doc", pg.JSONB[json.RawMessage]()), q.ColumnType("members", pg.ArrayOf(pg.Int4())))
+			layout := tplan.MapTable(table, tplan.ColumnType("uid", pg.UUID[string]()), tplan.ColumnType("doc", pg.JSONB[json.RawMessage]()), tplan.ColumnType("members", pg.ArrayOf(pg.Int4())))
 			src := layout.As("i")
-			id := q.MappedColumn[int64](layout, "id").On(src.Rel())
-			source, target := q.MappedColumn[int32](layout, "source").On(src.Rel()), q.MappedColumn[int32](layout, "target").On(src.Rel())
-			stamp := q.MappedColumn[time.Time](layout, "stamp").On(src.Rel())
-			uid := q.MappedColumn[string](layout, "uid").On(src.Rel())
-			doc := q.MappedColumn[json.RawMessage](layout, "doc").On(src.Rel())
-			values := q.MappedColumn[[]int32](layout, "members").On(src.Rel())
-			which, value, key := q.Input("id", pg.Int8()), q.Input("value", pg.Int4()), q.Input("key", pg.Text())
-			fallback := q.Coalesce(source.Expr(), value.Expr())
-			plan := q.DefineUpdateMany(src, "change", q.MutationSpec{RowFilter: q.RowFilter{Where: q.Eq(id.Expr(), which.Expr())}},
-				q.RowSet{Name: "slot", Assignments: []q.RowAssignment{q.Assign(target, value.Expr())}},
-				q.RowSet{Name: "conditional", Assignments: []q.RowAssignment{q.Assign(target, q.Case(q.When(q.IsNull(source.Expr()), value.Expr())).Else(fallback))}},
-				q.RowSet{Name: "delta", Assignments: []q.RowAssignment{q.Assign(target, q.Plus(fallback, value.Expr()))}},
-				q.RowSet{Name: "clock", Assignments: []q.RowAssignment{q.Assign(stamp, q.Now())}},
-				q.RowSet{Name: "uuid", Assignments: []q.RowAssignment{q.Assign(uid, q.GenRandomUUID())}},
-				q.RowSet{Name: "json", Assignments: []q.RowAssignment{q.Assign(doc, q.JSONBDeleteKey(doc.Expr(), key.Expr()))}},
-				q.RowSet{Name: "array", Assignments: []q.RowAssignment{q.Assign(values, q.ArrayRemove(values.Expr(), value.Expr()))}},
+			id := tplan.MappedColumn[int64](layout, "id").On(src.Rel())
+			source, target := tplan.MappedColumn[int32](layout, "source").On(src.Rel()), tplan.MappedColumn[int32](layout, "target").On(src.Rel())
+			stamp := tplan.MappedColumn[time.Time](layout, "stamp").On(src.Rel())
+			uid := tplan.MappedColumn[string](layout, "uid").On(src.Rel())
+			doc := tplan.MappedColumn[json.RawMessage](layout, "doc").On(src.Rel())
+			values := tplan.MappedColumn[[]int32](layout, "members").On(src.Rel())
+			which, value, key := tplan.Input("id", pg.Int8()), tplan.Input("value", pg.Int4()), tplan.Input("key", pg.Text())
+			fallback := tplan.Coalesce(source.Expr(), value.Expr())
+			plan := tplan.DefineUpdateMany(src, "change", tplan.MutationSpec{RowFilter: tplan.RowFilter{Where: tplan.Eq(id.Expr(), which.Expr())}},
+				tplan.RowSet{Name: "slot", Assignments: []tplan.RowAssignment{tplan.Assign(target, value.Expr())}},
+				tplan.RowSet{Name: "conditional", Assignments: []tplan.RowAssignment{tplan.Assign(target, tplan.Case(tplan.When(tplan.IsNull(source.Expr()), value.Expr())).Else(fallback))}},
+				tplan.RowSet{Name: "delta", Assignments: []tplan.RowAssignment{tplan.Assign(target, tplan.Plus(fallback, value.Expr()))}},
+				tplan.RowSet{Name: "clock", Assignments: []tplan.RowAssignment{tplan.Assign(stamp, tplan.Now())}},
+				tplan.RowSet{Name: "uuid", Assignments: []tplan.RowAssignment{tplan.Assign(uid, tplan.GenRandomUUID())}},
+				tplan.RowSet{Name: "json", Assignments: []tplan.RowAssignment{tplan.Assign(doc, tplan.JSONBDeleteKey(doc.Expr(), key.Expr()))}},
+				tplan.RowSet{Name: "array", Assignments: []tplan.RowAssignment{tplan.Assign(values, tplan.ArrayRemove(values.Expr(), value.Expr()))}},
 			)
 			defs := reg.Defined()
 			inv := sqlcheck.SQLInventory{Sites: []sqlcheck.SQLSite{{ID: "change", Method: "DefineUpdateMany", Kind: "typed_rows", Definition: tableName, QueryKey: "change"}}}
@@ -87,10 +88,10 @@ INSERT INTO ` + tableName + ` VALUES (1,10,0,now(),gen_random_uuid(),'{"x":1}',A
 				}
 			}
 			run := authorizedEffectRunner(t, driver, db, pool, role, reg.SQLAuthority(), q.StatementPolicy{}, nil, false)
-			generate := q.DefineUpdateMany(src, "generate", q.MutationSpec{RowFilter: q.RowFilter{Where: q.Ge(id.Expr(), which.Expr())}},
-				q.RowSet{Name: "uuid", Assignments: []q.RowAssignment{q.Assign(uid, q.NullIf(q.GenRandomUUID(), q.TypedNull(pg.UUID[string]())))}})
+			generate := tplan.DefineUpdateMany(src, "generate", tplan.MutationSpec{RowFilter: tplan.RowFilter{Where: tplan.Ge(id.Expr(), which.Expr())}},
+				tplan.RowSet{Name: "uuid", Assignments: []tplan.RowAssignment{tplan.Assign(uid, tplan.NullIf(tplan.GenRandomUUID(), tplan.TypedNull(pg.UUID[string]())))}})
 			require.NoError(t, run(ctx, func(ctx context.Context, s session) error {
-				n, err := generate.Bind(s).UpdateMany(ctx, "uuid", nil, q.BindValue(which, int64(1)))
+				n, err := generate.Bind(s).UpdateMany(ctx, "uuid", nil, tplan.BindValue(which, int64(1)))
 				require.NoError(t, err)
 				require.EqualValues(t, 2, n)
 				return nil
@@ -98,7 +99,7 @@ INSERT INTO ` + tableName + ` VALUES (1,10,0,now(),gen_random_uuid(),'{"x":1}',A
 			var distinctUUIDs int
 			require.NoError(t, db.QueryRowContext(ctx, "SELECT count(DISTINCT uid) FROM "+tableName).Scan(&distinctUUIDs))
 			require.Equal(t, 2, distinctUUIDs)
-			change := func(set string, bindings ...q.Binding) error {
+			change := func(set string, bindings ...tplan.Binding) error {
 				return run(ctx, func(ctx context.Context, s session) error {
 					n, err := plan.Bind(s).UpdateMany(ctx, set, nil, bindings...)
 					if err == nil {
@@ -108,7 +109,7 @@ INSERT INTO ` + tableName + ` VALUES (1,10,0,now(),gen_random_uuid(),'{"x":1}',A
 				})
 			}
 			for _, idValue := range []int64{1, 2} {
-				args := []q.Binding{q.BindValue(which, idValue), q.BindValue(value, int32(3))}
+				args := []tplan.Binding{tplan.BindValue(which, idValue), tplan.BindValue(value, int32(3))}
 				require.NoError(t, change("slot", args...))
 				require.NoError(t, change("conditional", args...))
 				require.NoError(t, change("delta", args...))
@@ -119,28 +120,28 @@ INSERT INTO ` + tableName + ` VALUES (1,10,0,now(),gen_random_uuid(),'{"x":1}',A
 					want = 6
 				}
 				require.Equal(t, want, got)
-				require.NoError(t, change("clock", q.BindValue(which, idValue)))
-				require.NoError(t, change("uuid", q.BindValue(which, idValue)))
-				require.NoError(t, change("json", q.BindValue(which, idValue), q.BindValue(key, "x")))
-				require.NoError(t, change("array", q.BindValue(which, idValue), q.BindValue(value, int32(1))))
+				require.NoError(t, change("clock", tplan.BindValue(which, idValue)))
+				require.NoError(t, change("uuid", tplan.BindValue(which, idValue)))
+				require.NoError(t, change("json", tplan.BindValue(which, idValue), tplan.BindValue(key, "x")))
+				require.NoError(t, change("array", tplan.BindValue(which, idValue), tplan.BindValue(value, int32(1))))
 			}
 			exec("REVOKE SELECT(source) ON " + tableName + " FROM " + role)
-			require.NoError(t, change("slot", q.BindValue(which, int64(1)), q.BindValue(value, int32(7))))
-			require.Equal(t, "42501", q.SQLState(change("conditional", q.BindValue(which, int64(1)), q.BindValue(value, int32(7)))))
+			require.NoError(t, change("slot", tplan.BindValue(which, int64(1)), tplan.BindValue(value, int32(7))))
+			require.Equal(t, "42501", q.SQLState(change("conditional", tplan.BindValue(which, int64(1)), tplan.BindValue(value, int32(7)))))
 			missing, err = sqlcheck.CheckReadiness(ctx, db, role, needs)
 			require.NoError(t, err)
 			require.NotEmpty(t, missing)
 			exec("GRANT SELECT(source) ON " + tableName + " TO " + role)
 			exec("REVOKE UPDATE(target) ON " + tableName + " FROM " + role)
-			require.Equal(t, "42501", q.SQLState(change("slot", q.BindValue(which, int64(1)), q.BindValue(value, int32(7)))))
+			require.Equal(t, "42501", q.SQLState(change("slot", tplan.BindValue(which, int64(1)), tplan.BindValue(value, int32(7)))))
 			exec("GRANT UPDATE(target) ON " + tableName + " TO " + role)
 			ro := authorizedEffectRunner(t, driver, db, pool, role, reg.SQLAuthority(), q.StatementPolicy{}, nil, true)
 			err = ro(ctx, func(ctx context.Context, s session) error {
-				_, err := plan.Bind(s).UpdateMany(ctx, "uuid", nil, q.BindValue(which, int64(1)))
+				_, err := plan.Bind(s).UpdateMany(ctx, "uuid", nil, tplan.BindValue(which, int64(1)))
 				return err
 			})
 			require.ErrorIs(t, err, q.ErrReadOnly)
-			_, err = plan.Bind(effectDirect(t, driver, reg.SQLAuthority())).UpdateMany(ctx, "uuid", nil, q.BindValue(which, int64(1)))
+			_, err = plan.Bind(effectDirect(t, driver, reg.SQLAuthority())).UpdateMany(ctx, "uuid", nil, tplan.BindValue(which, int64(1)))
 			require.ErrorIs(t, err, q.ErrReadOnly)
 		})
 	}

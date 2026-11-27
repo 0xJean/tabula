@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	q "github.com/0xJean/tabula"
+	tplan "github.com/0xJean/tabula/plan"
 	"github.com/0xJean/tabula/sqlcheck"
 	"github.com/stretchr/testify/require"
 )
@@ -22,30 +23,30 @@ func TestReadListResultSemanticsBothDrivers(t *testing.T) {
 	for _, driver := range []string{"stdsql", "pgx"} {
 		t.Run(driver, func(t *testing.T) {
 			f := newListFixture(t, db, driver)
-			order := q.RowOrder{Name: "rank", Terms: []q.RowTerm{q.Desc(f.rank).NullsLast(), q.Asc(f.id)}}
-			winners := q.DefineRead(f.out, "winners", f.query.DistinctOn(f.id.Expr()).OrderBy(q.Asc(f.id), q.Desc(f.rank).NullsLast(), q.Asc(f.nid)).WithForms(q.ReadForms{Exact: true}).
-				WithList(q.ReadListSpec{Orders: []q.RowOrder{order}, Pages: q.RowPages{Unpaged: true, Keyset: true, MaxLimit: 3}, ExactCount: true}))
-			nullable := q.DefineRead(f.out, "nullable_keys", f.query.DistinctOn(f.label.Expr()).OrderBy(q.Asc(f.label), q.Asc(f.id), q.Asc(f.nid)).WithList(q.ReadListSpec{ExactCount: true}))
+			order := tplan.RowOrder{Name: "rank", Terms: []tplan.RowTerm{tplan.Desc(f.rank).NullsLast(), tplan.Asc(f.id)}}
+			winners := tplan.DefineRead(f.out, "winners", f.query.DistinctOn(f.id.Expr()).OrderBy(tplan.Asc(f.id), tplan.Desc(f.rank).NullsLast(), tplan.Asc(f.nid)).WithForms(tplan.ReadForms{Exact: true}).
+				WithList(tplan.ReadListSpec{Orders: []tplan.RowOrder{order}, Pages: tplan.RowPages{Unpaged: true, Keyset: true, MaxLimit: 3}, ExactCount: true}))
+			nullable := tplan.DefineRead(f.out, "nullable_keys", f.query.DistinctOn(f.label.Expr()).OrderBy(tplan.Asc(f.label), tplan.Asc(f.id), tplan.Asc(f.nid)).WithList(tplan.ReadListSpec{ExactCount: true}))
 			out := q.DefineView(f.reg, q.ViewSpec[listGroup]{Name: "groups"})
-			hits := q.CountOf(f.nid.Expr())
-			atLeast := q.Input("at_least", q.Int8())
-			grouped := q.DefineRead(out, "grouped", q.Select(q.Project(q.Output(out, "label", q.Text()), f.label.Expr()), q.Project(q.Output(out, "hits", q.Int8()), hits)).
-				From(f.items).LeftJoin(f.notes, q.Eq(f.parent.Expr(), f.id.Expr())).GroupBy(f.label.Expr()).Having(q.Ge(hits, atLeast.Expr())).
-				WithList(q.ReadListSpec{Orders: []q.RowOrder{{Name: "label", Terms: []q.RowTerm{q.Asc(f.label).NullsFirst()}}}, Pages: q.RowPages{Unpaged: true, Keyset: true, MaxLimit: 2}, ExactCount: true}))
+			hits := tplan.CountOf(f.nid.Expr())
+			atLeast := tplan.Input("at_least", tplan.Int8())
+			grouped := tplan.DefineRead(out, "grouped", tplan.Select(tplan.Project(tplan.Output(out, "label", tplan.Text()), f.label.Expr()), tplan.Project(tplan.Output(out, "hits", tplan.Int8()), hits)).
+				From(f.items).LeftJoin(f.notes, tplan.Eq(f.parent.Expr(), f.id.Expr())).GroupBy(f.label.Expr()).Having(tplan.Ge(hits, atLeast.Expr())).
+				WithList(tplan.ReadListSpec{Orders: []tplan.RowOrder{{Name: "label", Terms: []tplan.RowTerm{tplan.Asc(f.label).NullsFirst()}}}, Pages: tplan.RowPages{Unpaged: true, Keyset: true, MaxLimit: 2}, ExactCount: true}))
 			type labelRow struct {
 				Label *string `db:"label"`
 			}
 			labels := q.DefineView(f.reg, q.ViewSpec[labelRow]{Name: "labels"})
-			distinct := q.DefineRead(labels, "distinct", q.Select(q.Project(q.Output(labels, "label", q.Text()), f.label.Expr())).From(f.items).Distinct().WithList(q.ReadListSpec{
-				Orders: []q.RowOrder{{Name: "label", Terms: []q.RowTerm{q.Desc(f.label).NullsLast()}}}, Pages: q.RowPages{Unpaged: true, Keyset: true, MaxLimit: 1}, ExactCount: true}))
+			distinct := tplan.DefineRead(labels, "distinct", tplan.Select(tplan.Project(tplan.Output(labels, "label", tplan.Text()), f.label.Expr())).From(f.items).Distinct().WithList(tplan.ReadListSpec{
+				Orders: []tplan.RowOrder{{Name: "label", Terms: []tplan.RowTerm{tplan.Desc(f.label).NullsLast()}}}, Pages: tplan.RowPages{Unpaged: true, Keyset: true, MaxLimit: 1}, ExactCount: true}))
 			type totalRow struct {
 				Total int64 `db:"total"`
 			}
 			totals := q.DefineView(f.reg, q.ViewSpec[totalRow]{Name: "totals"})
-			ids := q.Input("ids", q.ArrayOf(q.Int8()))
-			aggregate := q.DefineRead(totals, "aggregate", q.Select(q.Project(q.Output(totals, "total", q.Int8()), q.CountAll())).From(f.items).Where(q.Any(f.id.Expr(), ids.Expr())).WithList(q.ReadListSpec{ExactCount: true}))
+			ids := tplan.Input("ids", q.ArrayOf(tplan.Int8()))
+			aggregate := tplan.DefineRead(totals, "aggregate", tplan.Select(tplan.Project(tplan.Output(totals, "total", tplan.Int8()), tplan.CountAll())).From(f.items).Where(tplan.Any(f.id.Expr(), ids.Expr())).WithList(tplan.ReadListSpec{ExactCount: true}))
 
-			orderOnly := q.DefineRead(totals, "order_aggregate", q.Select(q.Project(q.Output(totals, "total", q.Int8()), atLeast.Expr())).From(f.items).Where(q.Any(f.id.Expr(), ids.Expr())).OrderBy(q.AscExpr(q.CountAll())).WithList(q.ReadListSpec{Orders: []q.RowOrder{{Name: "constant", Terms: []q.RowTerm{q.AscExpr(atLeast.Expr())}}}, Pages: q.RowPages{Offset: true, MaxLimit: 1, MaxOffset: 2}, ExactCount: true}))
+			orderOnly := tplan.DefineRead(totals, "order_aggregate", tplan.Select(tplan.Project(tplan.Output(totals, "total", tplan.Int8()), atLeast.Expr())).From(f.items).Where(tplan.Any(f.id.Expr(), ids.Expr())).OrderBy(tplan.AscExpr(tplan.CountAll())).WithList(tplan.ReadListSpec{Orders: []tplan.RowOrder{{Name: "constant", Terms: []tplan.RowTerm{tplan.AscExpr(atLeast.Expr())}}}, Pages: tplan.RowPages{Offset: true, MaxLimit: 1, MaxOffset: 2}, ExactCount: true}))
 			verifyListSnapshot(t, db, f)
 			// Winner proof is retained by fixed and bounded shapes and removed by the count.
 			def := f.out.Definition()
@@ -57,12 +58,12 @@ func TestReadListResultSemanticsBothDrivers(t *testing.T) {
 			require.Greater(t, strings.Index(afterSQL, `AS "result" WHERE`), strings.Index(afterSQL, "DISTINCT ON"))
 			err := runRowPlan(t, db, pool, driver, f.reg.SQLAuthority(), f.role, 1, q.LogConfig{}, func(ctx context.Context, s q.Session[itemScope]) error {
 				expected := []listEntry{{1, new(int64(11)), new(int32(3))}, {2, new(int64(13)), new(int32(-2))}, {3, nil, nil}, {4, nil, nil}}
-				all, total, err := winners.Bind(s).List(ctx, q.RowChoice{Order: "rank"})
+				all, total, err := winners.Bind(s).List(ctx, tplan.RowChoice{Order: "rank"})
 				require.NoError(t, err)
 				require.Equal(t, expected, all)
 				require.EqualValues(t, 4, total)
 				var combined []listEntry
-				choice := q.RowChoice{Order: "rank", Page: q.FirstPage, Limit: 1}
+				choice := tplan.RowChoice{Order: "rank", Page: tplan.FirstPage, Limit: 1}
 				for range 6 {
 					page, err := winners.Bind(s).Page(ctx, choice)
 					require.NoError(t, err)
@@ -72,28 +73,28 @@ func TestReadListResultSemanticsBothDrivers(t *testing.T) {
 					combined = append(combined, page...)
 					cursor, err := winners.CursorFrom("rank", page[0])
 					require.NoError(t, err)
-					choice.Page, choice.After = q.AfterPage, cursor
+					choice.Page, choice.After = tplan.AfterPage, cursor
 				}
 				require.Equal(t, expected, combined) // no losing note becomes a second winner
 				total, err = nullable.Bind(s).Count(ctx, nil)
 				require.NoError(t, err)
 				require.EqualValues(t, 3, total) // NULL is a group
-				groups, n, err := grouped.Bind(s).List(ctx, q.RowChoice{Order: "label", Page: q.FirstPage, Limit: 1}, q.BindValue(atLeast, int64(0)))
+				groups, n, err := grouped.Bind(s).List(ctx, tplan.RowChoice{Order: "label", Page: tplan.FirstPage, Limit: 1}, tplan.BindValue(atLeast, int64(0)))
 				require.NoError(t, err)
 				require.EqualValues(t, 3, n)
 				require.Equal(t, []listGroup{{nil, 0}}, groups)
 				cursor, err := grouped.CursorFrom("label", groups[0])
 				require.NoError(t, err)
-				groups, n, err = grouped.Bind(s).List(ctx, q.RowChoice{Order: "label", Page: q.AfterPage, Limit: 2, After: cursor}, q.BindValue(atLeast, int64(0)))
+				groups, n, err = grouped.Bind(s).List(ctx, tplan.RowChoice{Order: "label", Page: tplan.AfterPage, Limit: 2, After: cursor}, tplan.BindValue(atLeast, int64(0)))
 				require.NoError(t, err)
 				require.EqualValues(t, 3, n)
 				require.Equal(t, []listGroup{{new("a"), 2}, {new("b"), 2}}, groups)
-				n, err = grouped.Bind(s).Count(ctx, nil, q.BindValue(atLeast, int64(3)))
+				n, err = grouped.Bind(s).Count(ctx, nil, tplan.BindValue(atLeast, int64(3)))
 				require.NoError(t, err)
 				require.Zero(t, n)
 				want := []labelRow{{new("b")}, {new("a")}, {nil}}
 				var got []labelRow
-				dc := q.RowChoice{Order: "label", Page: q.FirstPage, Limit: 1}
+				dc := tplan.RowChoice{Order: "label", Page: tplan.FirstPage, Limit: 1}
 				for range 5 {
 					page, n, err := distinct.Bind(s).List(ctx, dc)
 					require.NoError(t, err)
@@ -104,14 +105,14 @@ func TestReadListResultSemanticsBothDrivers(t *testing.T) {
 					got = append(got, page...)
 					cursor, err := distinct.CursorFrom("label", page[0])
 					require.NoError(t, err)
-					dc.Page, dc.After = q.AfterPage, cursor
+					dc.Page, dc.After = tplan.AfterPage, cursor
 				}
 				require.Equal(t, want, got)
-				scalar, n, err := aggregate.Bind(s).List(ctx, q.RowChoice{}, q.BindValue(ids, []int64{}))
+				scalar, n, err := aggregate.Bind(s).List(ctx, tplan.RowChoice{}, tplan.BindValue(ids, []int64{}))
 				require.NoError(t, err)
 				require.EqualValues(t, 1, n)
 				require.Equal(t, []totalRow{{0}}, scalar)
-				scalar, n, err = orderOnly.Bind(s).List(ctx, q.RowChoice{Order: "constant", Page: q.OffsetPage, Limit: 1}, q.BindValue(ids, []int64{}), q.BindValue(atLeast, int64(7)))
+				scalar, n, err = orderOnly.Bind(s).List(ctx, tplan.RowChoice{Order: "constant", Page: tplan.OffsetPage, Limit: 1}, tplan.BindValue(ids, []int64{}), tplan.BindValue(atLeast, int64(7)))
 				require.NoError(t, err)
 				require.EqualValues(t, 1, n)
 				require.Equal(t, []totalRow{{7}}, scalar)
@@ -129,8 +130,8 @@ func TestReadListMinimumSummaryGrantsBothDrivers(t *testing.T) {
 		t.Run(driver, func(t *testing.T) {
 			f := newListFixture(t, db, driver)
 			out := q.DefineView(f.reg, q.ViewSpec[listGroup]{Name: "groups"})
-			boundSlot := q.Input("projected", q.Int8())
-			plan := q.DefineRead(out, "minimal", q.Select(q.Project(q.Output(out, "label", q.Text()), f.label.Expr()), q.Project(q.Output(out, "hits", q.Int8()), boundSlot.Expr())).From(f.items).WithList(q.ReadListSpec{ExactCount: true}))
+			boundSlot := tplan.Input("projected", tplan.Int8())
+			plan := tplan.DefineRead(out, "minimal", tplan.Select(tplan.Project(tplan.Output(out, "label", tplan.Text()), f.label.Expr()), tplan.Project(tplan.Output(out, "hits", tplan.Int8()), boundSlot.Expr())).From(f.items).WithList(tplan.ReadListSpec{ExactCount: true}))
 			def := out.Definition()
 			key := "minimal.scoped.list.count"
 			shape := def.StatementShapes[key]
@@ -157,14 +158,14 @@ func TestReadListMinimumSummaryGrantsBothDrivers(t *testing.T) {
 			})
 			require.NoError(t, err)
 			err = runRowPlan(t, db, pool, driver, f.reg.SQLAuthority(), f.role, 1, q.LogConfig{}, func(ctx context.Context, s q.Session[itemScope]) error {
-				_, err := plan.Bind(s).Page(ctx, q.RowChoice{}, q.BindValue(boundSlot, int64(1)))
+				_, err := plan.Bind(s).Page(ctx, tplan.RowChoice{}, tplan.BindValue(boundSlot, int64(1)))
 				return err
 			})
 			require.Error(t, err)
 			require.Equal(t, "42501", q.SQLState(err))
 			_, err = db.ExecContext(t.Context(), "GRANT SELECT(label) ON "+f.schema+".items TO "+f.role)
 			require.NoError(t, err)
-			grouped := q.DefineRead(out, "group_minimal", q.Select(q.Project(q.Output(out, "label", q.Text()), f.label.Expr()), q.Project(q.Output(out, "hits", q.Int8()), q.CountOf(f.nid.Expr()))).From(f.items).LeftJoin(f.notes, q.Eq(f.parent.Expr(), f.id.Expr())).GroupBy(f.label.Expr()).WithList(q.ReadListSpec{ExactCount: true}))
+			grouped := tplan.DefineRead(out, "group_minimal", tplan.Select(tplan.Project(tplan.Output(out, "label", tplan.Text()), f.label.Expr()), tplan.Project(tplan.Output(out, "hits", tplan.Int8()), tplan.CountOf(f.nid.Expr()))).From(f.items).LeftJoin(f.notes, tplan.Eq(f.parent.Expr(), f.id.Expr())).GroupBy(f.label.Expr()).WithList(tplan.ReadListSpec{ExactCount: true}))
 			groupShape := out.Definition().StatementShapes["group_minimal.scoped.list.count"]
 			for _, grant := range groupShape.Privileges {
 				if grant.Table == `"`+f.schema+`"."notes"` {

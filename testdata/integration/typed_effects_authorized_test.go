@@ -11,6 +11,7 @@ import (
 
 	q "github.com/0xJean/tabula"
 	"github.com/0xJean/tabula/pgxdriver"
+	"github.com/0xJean/tabula/plan"
 	"github.com/0xJean/tabula/sqlcheck"
 	"github.com/0xJean/tabula/stdsql"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -74,45 +75,45 @@ func TestTypedLockRoutineAuthorized(t *testing.T) {
 			auth := reg.SQLAuthority()
 			run := authorizedEffectRunner(t, driver, db, pool, f.role, auth, q.StatementPolicy{}, nil, false)
 			ro := authorizedEffectRunner(t, driver, db, pool, f.role, auth, q.StatementPolicy{}, nil, true)
-			id := q.BindValue(f.id, int64(1))
+			id := plan.BindValue(f.id, int64(1))
 			require.NoError(t, run(ctx, func(c context.Context, s session) error {
-				first, err := f.routines["small"].Bind(s).One(c, q.BindValue(f.small, int32(9)))
+				first, err := f.routines["small"].Bind(s).One(c, plan.BindValue(f.small, int32(9)))
 				require.NoError(t, err)
 				require.EqualValues(t, 109, first.ID)
-				second, err := f.routines["large"].Bind(s).One(c, q.BindValue(f.id, int64(9)))
+				second, err := f.routines["large"].Bind(s).One(c, plan.BindValue(f.id, int64(9)))
 				require.NoError(t, err)
 				require.EqualValues(t, 209, second.ID)
-				_, err = f.routines["large"].Bind(s).One(ctx, q.BindValue(f.id, int64(9)))
+				_, err = f.routines["large"].Bind(s).One(ctx, plan.BindValue(f.id, int64(9)))
 				require.ErrorIs(t, err, q.ErrCallbackContext)
 				for _, n := range []int64{0, 1, 3} {
-					rows, err := f.routines["series"].Bind(s).All(c, q.BindValue(f.id, n))
+					rows, err := f.routines["series"].Bind(s).All(c, plan.BindValue(f.id, n))
 					require.NoError(t, err)
 					require.Len(t, rows, int(n))
 					for i, row := range rows {
 						require.EqualValues(t, i+1, row.ID)
 					}
 				}
-				inserted, err := f.routines["add_one"].Bind(s).One(c, q.BindValue(f.id, int64(7)))
+				inserted, err := f.routines["add_one"].Bind(s).One(c, plan.BindValue(f.id, int64(7)))
 				require.NoError(t, err)
 				require.EqualValues(t, 7, inserted.ID)
-				many, err := f.routines["add_set"].Bind(s).All(c, q.BindValue(f.id, int64(2)))
+				many, err := f.routines["add_set"].Bind(s).All(c, plan.BindValue(f.id, int64(2)))
 				require.NoError(t, err)
 				require.Equal(t, []lockResult{{1}, {2}}, many)
 				for _, lock := range f.statusLocks {
-					visible, err := lock.Bind(s).Find(c, q.RowChoice{})
+					visible, err := lock.Bind(s).Find(c, plan.RowChoice{})
 					require.NoError(t, err)
 					require.Equal(t, []lockResult{{1}}, visible)
 				}
-				held, err := f.row[q.Wait].Bind(s).Find(c, q.RowChoice{}, id)
+				held, err := f.row[plan.Wait].Bind(s).Find(c, plan.RowChoice{}, id)
 				require.NoError(t, err)
 				require.Equal(t, []lockResult{{1}}, held)
 				require.NoError(t, run(ctx, func(other context.Context, s session) error {
-					got, err := f.row[q.SkipLocked].Bind(s).Find(other, q.RowChoice{}, id)
+					got, err := f.row[plan.SkipLocked].Bind(s).Find(other, plan.RowChoice{}, id)
 					require.Empty(t, got)
 					return err
 				}))
 				err = run(ctx, func(other context.Context, s session) error {
-					_, err := f.row[q.NoWait].Bind(s).Find(other, q.RowChoice{}, id)
+					_, err := f.row[plan.NoWait].Bind(s).Find(other, plan.RowChoice{}, id)
 					return err
 				})
 				require.Equal(t, "55P03", q.SQLState(err))
@@ -120,13 +121,13 @@ func TestTypedLockRoutineAuthorized(t *testing.T) {
 			}))
 			checkTransactionLocks(ctx, t, run, func(ctx context.Context, s session, name string, key int64, pair [2]int32) (bool, error) {
 				if name == "attempt" || name == "big" {
-					return f.advisory[name].Bind(s).Acquire(ctx, q.BindValue(f.id, key))
+					return f.advisory[name].Bind(s).Acquire(ctx, plan.BindValue(f.id, key))
 				}
-				return f.advisory[name].Bind(s).Acquire(ctx, q.BindValue(f.small, pair[0]), q.BindValue(f.part, pair[1]))
+				return f.advisory[name].Bind(s).Acquire(ctx, plan.BindValue(f.small, pair[0]), plan.BindValue(f.part, pair[1]))
 			})
 			checkRestricted := func(ctx context.Context, s session) {
 				t.Helper()
-				_, err := f.row[q.Wait].Bind(s).Find(ctx, q.RowChoice{}, id)
+				_, err := f.row[plan.Wait].Bind(s).Find(ctx, plan.RowChoice{}, id)
 				require.ErrorIs(t, err, q.ErrReadOnly)
 				require.Empty(t, q.SQLState(err))
 				_, err = f.routines["add_one"].Bind(s).One(ctx, id)
@@ -169,25 +170,25 @@ func TestTypedLockRoutineAuthorized(t *testing.T) {
 			require.NoError(t, db.QueryRowContext(ctx, "SELECT count(*) FROM "+f.schema+".entries").Scan(&count))
 			require.Equal(t, 3, count)
 
-			setting := q.Input("setting", q.Text())
+			setting := plan.Input("setting", plan.Text())
 			texts := q.DefineView(reg, q.ViewSpec[struct {
 				Value string `db:"value"`
 			}]{Name: "groups"})
-			current := q.DeclareRoutine(q.RoutineSpec[string]{Schema: "pg_catalog", Name: "current_setting", Result: q.Text(), Cardinality: q.RoutineOne, ReadOnly: true}, q.Parameter("setting", q.Text()))
-			get := q.DefineRoutine(texts, "setting", current, q.Arg(q.FormalOf(current, "setting", q.Text()), setting.Expr()))
+			current := plan.DeclareRoutine(plan.RoutineSpec[string]{Schema: "pg_catalog", Name: "current_setting", Result: plan.Text(), Cardinality: plan.RoutineOne, ReadOnly: true}, plan.Parameter("setting", plan.Text()))
+			get := plan.DefineRoutine(texts, "setting", current, plan.Arg(plan.FormalOf(current, "setting", plan.Text()), setting.Expr()))
 			guard, err := q.NewSessionGuard(q.SessionGuardConfig{VariablePrefixes: []string{"demo"}, ForbidVariableReads: true})
 			require.NoError(t, err)
 			guarded := authorizedEffectRunner(t, driver, db, pool, f.role, auth, q.StatementPolicy{}, guard, false)
 			err = guarded(ctx, func(c context.Context, s session) error {
-				_, err := get.Bind(s).One(c, q.BindValue(setting, "demo.scope"))
+				_, err := get.Bind(s).One(c, plan.BindValue(setting, "demo.scope"))
 				return err
 			})
 			require.ErrorIs(t, err, q.ErrForbiddenStatement)
 
 			// A changed catalog declaration fails readiness. PostgreSQL's actual
 			// read-only transaction also preserves its error and SQLSTATE.
-			drift := q.DeclareRoutine(q.RoutineSpec[int64]{Schema: f.schema, Name: "add_one", Result: q.Int8(), Cardinality: q.RoutineOne, ReadOnly: true, SecurityDefiner: true}, q.Parameter("id", q.Int8()))
-			drifted := q.DefineRoutine(f.view, "drift", drift, q.Arg(q.FormalOf(drift, "id", q.Int8()), f.id.Expr()))
+			drift := plan.DeclareRoutine(plan.RoutineSpec[int64]{Schema: f.schema, Name: "add_one", Result: plan.Int8(), Cardinality: plan.RoutineOne, ReadOnly: true, SecurityDefiner: true}, plan.Parameter("id", plan.Int8()))
+			drifted := plan.DefineRoutine(f.view, "drift", drift, plan.Arg(plan.FormalOf(drift, "id", plan.Int8()), f.id.Expr()))
 			missing, err := sqlcheck.CheckReadiness(ctx, db, f.role, effectReadiness(t, f.view.Definition(), "drift.call"))
 			require.NoError(t, err)
 			require.Len(t, missing, 1)
@@ -207,7 +208,7 @@ func TestTypedLockRoutineAuthorized(t *testing.T) {
 			_, err = db.ExecContext(ctx, "REVOKE UPDATE(note) ON "+f.table+" FROM "+f.role)
 			require.NoError(t, err)
 			err = run(ctx, func(c context.Context, s session) error {
-				_, err := f.row[q.Wait].Bind(s).Find(c, q.RowChoice{}, id)
+				_, err := f.row[plan.Wait].Bind(s).Find(c, plan.RowChoice{}, id)
 				return err
 			})
 			require.Equal(t, "42501", q.SQLState(err))

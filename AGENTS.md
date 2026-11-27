@@ -18,7 +18,7 @@ Tabula is a general-purpose PostgreSQL descriptor engine for Go. This policy app
 1. **Joins require explicit operands.** A typed join declares its kind, relation occurrences and matching condition. A cross join explicitly requests a product. Keep relationships out of struct tags. Preloading, lazy loading and automatic path selection are prohibited.
 2. **No DDL or AutoMigrate.** Migrations define schema changes. Tabula verifies schema, grants and row-level security through `sqlcheck`.
 3. **No hidden global state.** Pass registries, scopes, observations and error policies explicitly. Avoid implicit clocks and lifecycle hooks.
-4. **Zero third-party dependencies in core.** `tabula`, `tabula/pgtype`, `tabula/stdsql`, `tabula/sqlcheck`, `tabula/postgresfixture` and `tabula/internal/*` depend only on the Go standard library. Driver code belongs in `pqdriver` or the separate `pgxdriver` module.
+4. **Zero third-party dependencies in core.** `tabula`, `tabula/plan`, `tabula/pgtype`, `tabula/stdsql`, `tabula/sqlcheck`, `tabula/postgresfixture` and `tabula/internal/*` depend only on the Go standard library. Driver code belongs in `pqdriver` or the separate `pgxdriver` module.
 
 ## 2. Repository & Module Boundaries
 
@@ -50,6 +50,6 @@ Tabula is a general-purpose PostgreSQL descriptor engine for Go. This policy app
 
 ## 5. Documentation & Releases
 
-- Any public API, tag option, error sentinel, CLI flag, or behavior change must update GoDoc comments plus the affected docs ([README.md](README.md), [CHANGELOG.md](CHANGELOG.md), [docs/COOKBOOK.md](docs/COOKBOOK.md), [docs/MIGRATION.md](docs/MIGRATION.md), [docs/LOGGING.md](docs/LOGGING.md), [SECURITY.md](SECURITY.md)) in the same commit.
+- Any public API, tag option, error sentinel, CLI flag, or behavior change must update GoDoc comments plus the affected docs ([README.md](README.md), [CHANGELOG.md](CHANGELOG.md), [docs/CHOOSING-AN-API.md](docs/CHOOSING-AN-API.md), [docs/COOKBOOK.md](docs/COOKBOOK.md), [docs/MIGRATION.md](docs/MIGRATION.md), [docs/LOGGING.md](docs/LOGGING.md), [SECURITY.md](SECURITY.md)) in the same commit.
 - Never push to `origin` or create/push release tags unless explicitly asked by the user.
 - Releases must go through [scripts/release.sh](scripts/release.sh) (`plan` → `prepare` → commit manifests → `verify` → atomic `publish` of `main`, `vX.Y.Z`, and `pgxdriver/vX.Y.Z`).

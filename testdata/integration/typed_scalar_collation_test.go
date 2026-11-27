@@ -9,6 +9,7 @@ import (
 
 	q "github.com/0xJean/tabula"
 	pg "github.com/0xJean/tabula/pgtype"
+	tplan "github.com/0xJean/tabula/plan"
 	"github.com/stretchr/testify/require"
 )
 
@@ -41,10 +42,10 @@ ORDER BY (c.collname='tr-x-icu') DESC,c.oid LIMIT 1`).Scan(&schema, &name, &prov
 			t.Run(driver+"/"+collation, func(t *testing.T) {
 				reg := q.NewRegistry(q.RegistryConfig[struct{}]{})
 				table := q.DefinePlanSource(reg, q.TableSpec[item, int64]{Name: tableName, RelationScope: q.Global()})
-				src := q.MapTable(table).As("i")
+				src := tplan.MapTable(table).As("i")
 				view := q.DefineView(reg, q.ViewSpec[scalarValue[string]]{Name: "entries"})
-				label := q.FieldOf(src.Rel(), "label", pg.Text())
-				plan := q.DefineRead(view, "lower", q.Select(q.Project(q.Output(view, "value", pg.Text()), q.Lower(label.Expr()))).From(src))
+				label := tplan.FieldOf(src.Rel(), "label", pg.Text())
+				plan := tplan.DefineRead(view, "lower", tplan.Select(tplan.Project(tplan.Output(view, "value", pg.Text()), tplan.Lower(label.Expr()))).From(src))
 				run := authorizedEffectRunner(t, driver, db, pool, "", reg.SQLAuthority(), q.StatementPolicy{}, nil, false)
 				require.NoError(t, run(t.Context(), func(ctx context.Context, s session) error {
 					rows, err := plan.Bind(s).Find(ctx)

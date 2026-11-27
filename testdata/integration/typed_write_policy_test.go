@@ -9,6 +9,7 @@ import (
 
 	q "github.com/0xJean/tabula"
 	"github.com/0xJean/tabula/pgxdriver"
+	"github.com/0xJean/tabula/plan"
 	"github.com/0xJean/tabula/sqlcheck"
 	"github.com/stretchr/testify/require"
 )
@@ -29,16 +30,16 @@ INSERT INTO `+schema+`.items VALUES(1,1)`)
 			reg := q.NewRegistry(q.RegistryConfig[struct{}]{Deny: q.DenyLegacySQL})
 			items := q.DefinePlanSource(reg, q.TableSpec[item, int64]{Name: schema + ".items", RelationScope: q.Global()})
 			notes := q.DefinePlanSource(reg, q.TableSpec[item, int64]{Name: schema + ".notes", RelationScope: q.Global(), WriteMode: q.WriteInsertOnly})
-			i, n := q.MapTable(items).As("i"), q.MapTable(notes).As("n")
-			id, rank := q.FieldOf(i.Rel(), "id", q.Int8()), q.FieldOf(i.Rel(), "rank", q.Int4())
-			noteID, noteRank := q.FieldOf(n.Rel(), "id", q.Int8()), q.FieldOf(n.Rel(), "rank", q.Int4())
-			key, value := q.Input("key", q.Int8()), q.Input("rank", q.Int4())
+			i, n := plan.MapTable(items).As("i"), plan.MapTable(notes).As("n")
+			id, rank := plan.FieldOf(i.Rel(), "id", plan.Int8()), plan.FieldOf(i.Rel(), "rank", plan.Int4())
+			noteID, noteRank := plan.FieldOf(n.Rel(), "id", plan.Int8()), plan.FieldOf(n.Rel(), "rank", plan.Int4())
+			key, value := plan.Input("key", plan.Int8()), plan.Input("rank", plan.Int4())
 			out := q.DefineView(reg, q.ViewSpec[lockResult]{Name: "entries"})
-			effect := q.EffectCTE("added", q.InsertInto(n).Values(q.Assign(noteID, key.Expr()), q.Assign(noteRank, value.Expr())))
-			readAfterWrite := q.DefineReturning(out, "append_and_read", q.Select(q.Project(q.Output(out, "id", q.Int8()), id.Expr())).From(i).With(effect))
-			upsert := q.DefineWrite(i, "upsert", q.InsertInto(i).Values(q.Assign(id, key.Expr()), q.Assign(rank, value.Expr())).
-				OnConflict(q.ConflictColumns(id.Column())).DoUpdate(q.Assign(rank, value.Expr())))
-			bindings := []q.Binding{q.BindValue(key, int64(1)), q.BindValue(value, int32(7))}
+			effect := plan.EffectCTE("added", plan.InsertInto(n).Values(plan.Assign(noteID, key.Expr()), plan.Assign(noteRank, value.Expr())))
+			readAfterWrite := plan.DefineReturning(out, "append_and_read", plan.Select(plan.Project(plan.Output(out, "id", plan.Int8()), id.Expr())).From(i).With(effect))
+			upsert := plan.DefineWrite(i, "upsert", plan.InsertInto(i).Values(plan.Assign(id, key.Expr()), plan.Assign(rank, value.Expr())).
+				OnConflict(plan.ConflictColumns(id.Column())).DoUpdate(plan.Assign(rank, value.Expr())))
+			bindings := []plan.Binding{plan.BindValue(key, int64(1)), plan.BindValue(value, int32(7))}
 			policy := q.StatementPolicy{Read: []string{"select"}, Write: []string{"with", "insert"}, RequireReturning: true}
 			invoke := func(policy q.StatementPolicy, readOnly bool, body func(context.Context, session) error) error {
 				t.Helper()

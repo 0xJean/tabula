@@ -10,6 +10,7 @@ import (
 
 	q "github.com/0xJean/tabula"
 	"github.com/0xJean/tabula/pgxdriver"
+	tplan "github.com/0xJean/tabula/plan"
 	"github.com/0xJean/tabula/stdsql"
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
@@ -27,7 +28,7 @@ func TestReadListSnapshotAndLateFailureBothDrivers(t *testing.T) {
 		for _, isolation := range []string{"committed", "repeatable", "cancelled"} {
 			t.Run(driver+"/"+isolation, func(t *testing.T) {
 				f := newListFixture(t, db, driver)
-				plan := q.DefineTableRead(f.items, "snapshot", q.SelectColumns(f.id.Column()), q.Select().OrderBy(q.Asc(f.id)).WithList(q.ReadListSpec{ExactCount: true}))
+				plan := tplan.DefineTableRead(f.items, "snapshot", tplan.SelectColumns(f.id.Column()), tplan.Select().OrderBy(tplan.Asc(f.id)).WithList(tplan.ReadListSpec{ExactCount: true}))
 				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
 				var keys []string
@@ -47,7 +48,7 @@ func TestReadListSnapshotAndLateFailureBothDrivers(t *testing.T) {
 					}
 				})
 				body := func(ctx context.Context, s q.Session[itemScope]) error {
-					page, total, err := plan.Bind(s).List(ctx, q.RowChoice{})
+					page, total, err := plan.Bind(s).List(ctx, tplan.RowChoice{})
 					require.True(t, injected)
 					if isolation == "cancelled" {
 						require.Error(t, err)

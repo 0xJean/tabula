@@ -6,16 +6,17 @@ import (
 	"strings"
 
 	"github.com/0xJean/tabula/internal/pgstmt"
+	"github.com/0xJean/tabula/internal/planrt"
 )
 
 // Fixed descriptor operations and typed plans use the same driver credential.
 // Only declaration code can attach a shape. Observation metadata looked up by
 // SQL text never carries a shape.
-func (d *descriptor[T, S]) fixedShape(key, query string, method CallMethod, effects ShapeEffects) *compiledShape {
-	return &compiledShape{
-		authority: d.reg.statementIssuer, key: key, sql: query,
-		tableName: d.name, action: key, observationKey: d.name + "." + key,
-		fixedMethod: method, shape: StatementShape{Effects: effects},
+func (d *descriptor[T, S]) fixedShape(key, query string, method CallMethod, effects ShapeEffects) *planrt.CompiledShape {
+	return &planrt.CompiledShape{
+		Authority: d.reg.statementIssuer, Key: key, SQL: query,
+		TableName: d.name, Action: key, ObservationKey: d.name + "." + key,
+		FixedMethod: uint8(method), Effects: uint8(effects),
 	}
 }
 
@@ -47,7 +48,7 @@ func (t *Table[T, K, S]) registerFixedStatements(stmts, owners map[string]string
 			addReads("unscoped_", false)
 		}
 	}
-	t.fixed = make(map[string]*compiledShape, len(stmts))
+	t.fixed = make(map[string]*planrt.CompiledShape, len(stmts))
 	for key, query := range stmts {
 		method, effects := CallScan, EffectRead
 		op := strings.TrimPrefix(key, "unscoped_")
@@ -134,7 +135,7 @@ func (e fixedExecutor) call(method CallMethod, query string, args []any) (Author
 	if shape == nil {
 		return AuthorizedStatement{}, ErrLegacySQL
 	}
-	if shape.sql != query || shape.fixedMethod != method {
+	if shape.SQL != query || shape.FixedMethod != uint8(method) {
 		return AuthorizedStatement{}, ErrStatementAuthority
 	}
 	return AuthorizedStatement{method: method, shape: shape, owner: e.owner, args: args, secret: e.secret, quiet: e.meta.quiet, allSecret: e.meta.secret}, nil
@@ -183,10 +184,10 @@ func (t *Table[T, K, S]) checkFixedIdentifiers() error {
 	columns := make(map[string]bool, len(t.cols))
 	for _, col := range t.cols {
 		tokens, err := pgstmt.ScanFragment(col.name)
-		if err != nil || len(tokens) != 1 || !typedIdent(catalogIdentifier(tokens[0])) {
+		if err != nil || len(tokens) != 1 || !planrt.Ident(planrt.CatalogIdentifier(tokens[0])) {
 			return fmt.Errorf("%w: expected a column identifier", ErrLegacySQL)
 		}
-		name := catalogIdentifier(tokens[0])
+		name := planrt.CatalogIdentifier(tokens[0])
 		if columns[name] {
 			return fmt.Errorf("%w: duplicate physical column %s", ErrLegacySQL, name)
 		}
@@ -201,7 +202,7 @@ func (t *Table[T, K, S]) checkFixedIdentifiers() error {
 	}
 	for len(terms) > 0 {
 		col := terms[0]
-		if !columns[catalogIdentifier(col)] {
+		if !columns[planrt.CatalogIdentifier(col)] {
 			return fmt.Errorf("%w: default order needs a declared column", ErrLegacySQL)
 		}
 		terms = terms[1:]
@@ -225,9 +226,9 @@ func (t *Table[T, K, S]) checkFixedIdentifiers() error {
 func fixedRelationName(t []pgstmt.Span) bool {
 	switch len(t) {
 	case 1:
-		return typedIdent(catalogIdentifier(t[0]))
+		return planrt.Ident(planrt.CatalogIdentifier(t[0]))
 	case 3:
-		return t[1].Text == "." && typedIdent(catalogIdentifier(t[0])) && typedIdent(catalogIdentifier(t[2]))
+		return t[1].Text == "." && planrt.Ident(planrt.CatalogIdentifier(t[0])) && planrt.Ident(planrt.CatalogIdentifier(t[2]))
 	default:
 		return false
 	}

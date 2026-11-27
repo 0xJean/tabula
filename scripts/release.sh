@@ -77,6 +77,10 @@ tmp=$(mktemp -d)
 trap 'chmod -R u+w "$tmp" && rm -rf "$tmp"' EXIT
 if [[ $mode == verify || $mode == publish ]]; then
   python3 -IB scripts/neutrality.py check
+  grep -Fq "## Install $version" README.md || die "README.md must document '## Install $version' before release."
+  for mod_pkg in "$module" "$module/pgxdriver" "$module/oteltabula"; do
+    grep -Fq "go get ${mod_pkg}@${version}" README.md || die "README.md must document 'go get ${mod_pkg}@${version}' before release."
+  done
   changelog_section 1 > "$tmp/changelog" || die 'The target needs one nonempty changelog section.'
   python3 -IB scripts/neutrality.py text CHANGELOG.md "$tmp/changelog"
   if [[ -z "$notes_file" ]]; then
