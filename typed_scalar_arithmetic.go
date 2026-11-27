@@ -14,6 +14,7 @@ func Times[V any](a, b Expr[V]) Expr[V] { return TimesAs(a.kind, a, b) }
 func Divide[V any](a, b Expr[V]) Expr[V] { return DivideAs(a.kind, a, b) }
 
 // PlusAs selects a checked native addition overload and its exact result type.
+// Native date + time and time + date return timestamp without time zone.
 func PlusAs[R, A, B any](result PGType[R], a Expr[A], b Expr[B]) Expr[R] {
 	return arithmetic(result, "+", a.scalarOperand(), b.scalarOperand())
 }
@@ -62,6 +63,8 @@ func arithmeticResult(op string, a, b catalogType) string {
 		case "date/int4", "int4/date":
 			return "date"
 		case "timestamp/interval", "interval/timestamp", "date/interval", "interval/date":
+			return "timestamp"
+		case "date/time", "time/date":
 			return "timestamp"
 		case "timestamptz/interval", "interval/timestamptz":
 			return "timestamptz"

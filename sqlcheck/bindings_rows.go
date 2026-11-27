@@ -205,6 +205,9 @@ func (r RoleStatements) Readiness(role string) (ReadinessNeeds, error) {
 			n.Keys = append(n.Keys, key)
 		}
 		n.Comparisons = append(n.Comparisons, s.Comparisons...)
+		n.UniqueMatches = append(n.UniqueMatches, cloneUniqueMatches(s.UniqueMatches)...)
+		n.Defaults = append(n.Defaults, cloneDefaults(s.Defaults)...)
+		n.Conflicts = append(n.Conflicts, cloneConflicts(s.Conflicts)...)
 		privileges = append(privileges, s.Privileges...)
 		n.SchemaUsage = append(n.SchemaUsage, s.SchemaUsage...)
 		n.ForceRLS = append(n.ForceRLS, s.ForceRLS...)

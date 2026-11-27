@@ -16,8 +16,10 @@ import (
 type statementLock struct {
 	checkCallback func(context.Context) error
 	sync.Mutex
-	closed atomic.Bool
-	cursor *rowCursor
+	closed           atomic.Bool
+	cursor           *rowCursor
+	operation        *operationLease
+	operationFailure atomic.Pointer[operationFailure]
 }
 
 type rowCursor struct {
@@ -30,6 +32,7 @@ func (m *statementLock) close() {
 	m.Lock()
 	defer m.Unlock()
 	m.closed.Store(true)
+	m.abandonOperations(nil)
 	m.closeCursor(tabula.ErrSessionClosed)
 }
 

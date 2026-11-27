@@ -103,14 +103,21 @@ func (q AuthorizedSQL) ObservationContext(ctx context.Context) context.Context {
 // Open validates a compiled call for the receiving session. Drivers pass their
 // own session pointer. The returned parameters are in PostgreSQL bind order.
 func (a SQLAuthority) Open(owner any, method CallMethod, call AuthorizedStatement) (AuthorizedSQL, error) {
-	if a.IsZero() || method != call.method || call.shape == nil || call.shape.authority != a.issuer || !eligibleOwner(owner) || call.owner != owner {
-		return AuthorizedSQL{}, ErrStatementAuthority
+	if err := a.checkCall(owner, method, call); err != nil {
+		return AuthorizedSQL{}, err
 	}
 	s := call.shape
 	return AuthorizedSQL{
 		Query: s.sql, Key: s.observationKey, Args: slices.Clone(call.args), Effects: s.shape.Effects,
 		SecretArgs: slices.Clone(call.secret), table: s.tableName, action: s.action, quiet: call.quiet, allSecret: call.allSecret,
 	}, nil
+}
+
+func (a SQLAuthority) checkCall(owner any, method CallMethod, call AuthorizedStatement) error {
+	if a.IsZero() || method != call.method || call.shape == nil || call.shape.authority != a.issuer || !eligibleOwner(owner) || call.owner != owner {
+		return ErrStatementAuthority
+	}
+	return nil
 }
 
 // AuthorizedSession is the driver channel used for registered queries. Every

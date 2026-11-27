@@ -1,8 +1,6 @@
 package sqlcheck
 
 import (
-	"context"
-	"database/sql"
 	"fmt"
 	"slices"
 	"strings"
@@ -52,22 +50,4 @@ func proofReadinessItems(keys []tabula.KeyRequirement, comparisons []tabula.Comp
 		items = append(items, item)
 	}
 	return items, nil
-}
-
-func checkShapeProof(ctx context.Context, tx *sql.Tx, shape *tabula.StatementShape) error {
-	if len(shape.Keys) == 0 && len(shape.Comparisons) == 0 {
-		return nil
-	}
-	var role string
-	if err := tx.QueryRowContext(ctx, "SELECT CURRENT_USER").Scan(&role); err != nil {
-		return err
-	}
-	missing, err := checkReadiness(ctx, tx, role, []ReadinessNeeds{{Keys: shape.Keys, Comparisons: shape.Comparisons}})
-	if err != nil {
-		return err
-	}
-	if len(missing) > 0 {
-		return fmt.Errorf("sqlcheck: result key proof: %v", missing)
-	}
-	return nil
 }

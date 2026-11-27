@@ -154,7 +154,9 @@ func TestTypedLockRoutineSQL(t *testing.T) {
 			for key := range view.Statements {
 				require.Empty(t, check(key))
 			}
-			failures, err := sqlcheck.VerifyViewStatements(ctx, db, f.reg.DefinedViews(), f.role)
+			_, err := sqlcheck.VerifyViewStatements(ctx, db, f.reg.DefinedViews(), f.role)
+			require.ErrorIs(t, err, sqlcheck.ErrDescribeRequired)
+			failures, err := sqlcheck.VerifyStatementsUsing(ctx, pgxdriver.SQLVerifier(pool), sqlcheck.ViewsToDefinitions(f.reg.DefinedViews()), f.role)
 			require.NoError(t, err)
 			require.Empty(t, failures)
 			advisory := f.flags.Definition()

@@ -233,19 +233,21 @@ func (r *Runner[S]) runTx(
 		raw.proof = r.opts.SessionKey.Sign(raw)
 	}
 
-	if err := invoke(txCtx, sess, raw); err != nil {
+	callbackErr := invoke(txCtx, sess, raw)
+	sess.close()
+	if err := errors.Join(callbackErr, sess.mu.operationError()); err != nil {
 		return err
 	}
-	sess.close()
 
 	if runOpts.BeforeCommit != nil {
 		stepSess := r.newBoundSession(tx, scope, unscoped, readOnly)
 		defer stepSess.close()
 		stepCtx := r.callbackContext(txCtx, stepSess.mu)
-		if err := runOpts.BeforeCommit(stepCtx, stepSess); err != nil {
+		stepErr := runOpts.BeforeCommit(stepCtx, stepSess)
+		stepSess.close()
+		if err := errors.Join(stepErr, stepSess.mu.operationError()); err != nil {
 			return err
 		}
-		stepSess.close()
 	}
 
 	if err := ctx.Err(); err != nil {
@@ -386,10 +388,11 @@ func (r *Runner[S]) WithinSharedOptions(ctx context.Context, opts pgx.TxOptions,
 	}
 	defer state.closeAll()
 	txCtx := r.callbackContext(ctx, &state.mu)
-	if err := fn(txCtx, &Shared[S]{state: state}); err != nil {
+	callbackErr := fn(txCtx, &Shared[S]{state: state})
+	state.closeAll()
+	if err := errors.Join(callbackErr, state.mu.operationError()); err != nil {
 		return err
 	}
-	state.closeAll()
 	if err := ctx.Err(); err != nil {
 		return err
 	}

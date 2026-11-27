@@ -61,7 +61,7 @@ func compileReadList(q ReadSelect, sources []rowSource) (*readListPlan, error) {
 		return nil, fmt.Errorf("tabula: WithList may be declared only once")
 	}
 	spec := q.list
-	if spec.ExactCount && q.lock.declared {
+	if spec.ExactCount && q.hasRowLocks() {
 		return nil, fmt.Errorf("tabula: exact counts require an unlocked read")
 	}
 	p := &readListPlan{exact: spec.ExactCount, page: rowPagePlan{pages: spec.Pages, orders: make(map[string]*rowOrdering)}}
@@ -89,7 +89,7 @@ func compileReadList(q ReadSelect, sources []rowSource) (*readListPlan, error) {
 				return nil, err
 			}
 		}
-		if spec.Pages.Keyset {
+		if spec.Pages.Keyset && !q.composed() {
 			_, _, err := readResultProof(q, sources, o.terms)
 			if err != nil {
 				return nil, fmt.Errorf("tabula: keyset order %q: %w", order.Name, err)
@@ -116,6 +116,9 @@ func compileReadList(q ReadSelect, sources []rowSource) (*readListPlan, error) {
 }
 
 func readOuter(sources []rowSource, q ReadSelect) map[*occurrence]bool {
+	if q.composed() {
+		return q.queryOuterPhysical()
+	}
 	outer := make(map[*occurrence]bool)
 	for i, join := range q.joins {
 		if join.kind == "LEFT JOIN" {
@@ -126,6 +129,15 @@ func readOuter(sources []rowSource, q ReadSelect) map[*occurrence]bool {
 }
 
 func (q ReadSelect) checkCountStability() error {
+	for _, part := range q.countExpressions() {
+		if expressionHasVolatile(part) {
+			return fmt.Errorf("tabula: exact count cardinality cannot depend on a volatile expression")
+		}
+	}
+	return nil
+}
+
+func (q ReadSelect) countExpressions() []expressionPart {
 	var parts []expressionPart
 	for _, p := range q.where {
 		parts = append(parts, p.part)
@@ -133,11 +145,13 @@ func (q ReadSelect) checkCountStability() error {
 	for _, p := range q.having {
 		parts = append(parts, p.part)
 	}
-	for _, p := range q.list.Optional {
-		parts = append(parts, p.When.part)
+	if q.list != nil {
+		for _, p := range q.list.Optional {
+			parts = append(parts, p.When.part)
+		}
 	}
 	for _, join := range q.joins {
-		if join.kind != "CROSS JOIN" {
+		if join.on.part != nil {
 			parts = append(parts, join.on.part)
 		}
 	}
@@ -154,12 +168,7 @@ func (q ReadSelect) checkCountStability() error {
 	for _, v := range q.distinctOn {
 		parts = append(parts, v.part)
 	}
-	for _, part := range parts {
-		if expressionHasVolatile(part) {
-			return fmt.Errorf("tabula: exact count cardinality cannot depend on a volatile expression")
-		}
-	}
-	return nil
+	return parts
 }
 
 func expressionHasVolatile(part expressionPart) bool {

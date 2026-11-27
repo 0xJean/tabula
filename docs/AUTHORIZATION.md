@@ -155,6 +155,10 @@ Consumers can also supply ordinary named statements under each execution role. B
 
 `tabula verify-roles --config workload.json` uses `SET LOCAL ROLE`, `PREPARE` and a generic `EXPLAIN EXECUTE` with inferred parameter types. Existing descriptor-based `VerifyStatements` and `VerifyViewStatements` remain available. Database commands below take `--dsn` or read `TABULA_DSN`. The CLI exits 0 on success, 1 for findings and 2 for input or operational errors.
 
+For result-bearing writes, pass `pgxdriver.SQLVerifier(pool)` to `sqlcheck.VerifyRoleStatementsUsing` or `VerifyStatementsUsing`. The backend describes the original statement without execution, including modifying CTEs and multiple row-lock clauses. It verifies role setup, catalog facts, parameter and result descriptions, and EXPLAIN on one connection, then rolls back. The runtime driver can remain `stdsql`. The portable `database/sql` verification path and CLI return `ErrDescribeRequired` when non-executing description is necessary; do not substitute a `LIMIT 0` query around a modifying statement.
+
+`RoleStatements.Readiness` includes structural write requirements. `UniqueMatches` verifies immediate unique keys with non-NULL columns for write-source matching. `Defaults` checks actual sequence dependencies, including every physical column omitted from an INSERT; identity generation has separate PostgreSQL semantics. `Conflicts` checks catalog eligibility, while statement verification also checks the actual generic EXPLAIN arbiter list. These checks complement execution tests for triggers, default functions and policies. Logical domain results need catalog origin or independently established cast evidence; a base wire OID alone does not establish a domain.
+
 ## Using a reader role in a shared transaction
 
 For a job that reads shared rows then writes scoped rows atomically, give the login permission to switch to two roles. Grant the reader only the required schema usage, reads and reviewed functions. Check its inherited privileges, ownership and executable functions as well as direct table grants. Grant scoped writes to the writer and enforce scope with the application's RLS policies.
@@ -348,6 +352,16 @@ parameter or mutable handle hides them, set `SQLBinding.Definition` and
 `Prefix` to select a registered shape or a dotted key prefix. A `List` site
 includes the matching count for each selected data shape.
 
+Typed writes follow the same owner and plan binding. `DefineWrite`,
+`DefineReturning`, `DefineTableReturning`, `DefineUpdateReturning` and
+`DefineDeleteReturning` register complete families, including their `Try`
+partners. `Exec` selects one statement; `ExecBatch` and `AllBatch` select only
+the declared row-count forms. `All` and `Iter` select a non-batch result, while
+the finite mutation methods select their assignment and filter alternatives.
+The output view owns a returned mutation's shapes even when it writes another
+physical relation. Intermediate write builders and common tables are not
+separate execution sites; the final shape carries every nested effect and grant.
+
 `BindRolesWithDefinitions` expands the registered keys from the live registry
 or a parsed SQL snapshot. A `Count` call adds only the count variants. A
 `Find` call adds only data variants. Each statement supplies its physical
@@ -398,3 +412,9 @@ plain summary needs join, filter, scope and live-row columns; grouped summaries
 also need group and HAVING inputs. DISTINCT summaries retain values determining
 the distinct classes. Cursor operators use qualified native implementations and
 record their function privileges without requiring internal sort support grants.
+
+## Signed write method policies
+
+`StatementPolicy.AllowAuthorizedWriteCTE` permits a registered write CTE whose outer result is SELECT. Include `with` and each physical DML command in the write allowlist. An upsert requires both INSERT and UPDATE in that list. `AllowAuthorizedWriteRoutine` permits a registered write routine's SELECT-shaped call through Returning; its exact signature and EXECUTE requirement remain part of the immutable shape.
+
+Both flags default to false. They are checked against the original registry-issued call, receiving session and method. Editing a SQL snapshot or `AuthorizedSQL` cannot enable them. SQL text APIs retain their normal command checks, and both drivers still enforce callback ownership, read-only state, session guards and database privileges. A custom driver calls `StatementGuard.CheckAuthorized` for its registered path before performing I/O.

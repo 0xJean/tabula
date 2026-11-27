@@ -144,17 +144,28 @@ func newAggregate[R any](fn string, result PGType[R], args ...scalarOperand) Exp
 }
 
 func (a aggregateCall) validate(outer map[*occurrence]bool) error {
+	return a.validatePhase(outer, false)
+}
+
+func (a aggregateCall) validatePhase(outer map[*occurrence]bool, window bool) error {
 	if a.err != nil {
 		return a.err
 	}
 	if !a.valid || a.result.goType == nil {
 		return fmt.Errorf("tabula: invalid field or PostgreSQL overload for %s", a.fn)
 	}
+	if window && (a.distinct || len(a.order) != 0) {
+		return fmt.Errorf("tabula: window aggregates cannot use DISTINCT or aggregate-local ORDER BY")
+	}
+	var argumentVisitor func(expressionPart) error
+	if window {
+		argumentVisitor = func(expressionPart) error { return nil }
+	}
 	for _, arg := range a.args {
 		if arg.kind.goType == nil {
 			return fmt.Errorf("tabula: %s requires declared arguments", a.fn)
 		}
-		if err := checkRowExpr(arg.part, nil); err != nil {
+		if err := checkRowExpr(arg.part, argumentVisitor); err != nil {
 			return err
 		}
 	}
@@ -187,7 +198,7 @@ func (a aggregateCall) validate(outer map[*occurrence]bool) error {
 		if err := checkRowBool(*a.filter); err != nil {
 			return err
 		}
-		if err := checkRowExpr(a.filter.part, nil); err != nil {
+		if err := checkRowExpr(a.filter.part, argumentVisitor); err != nil {
 			return err
 		}
 	}
@@ -249,7 +260,11 @@ func aggregateJSONInput(t catalogType) bool {
 }
 
 func (a aggregateCall) render(c *typedCompiler) (string, error) {
-	if err := a.validate(nil); err != nil {
+	return a.renderCall(c, false)
+}
+
+func (a aggregateCall) renderCall(c *typedCompiler, window bool) (string, error) {
+	if err := a.validatePhase(nil, window); err != nil {
 		return "", err
 	}
 	parts := make([]string, len(a.args))
@@ -328,6 +343,11 @@ func (a aggregateCall) signature() string {
 }
 
 func checkAggregateNulls(p expressionPart, outer map[*occurrence]bool) error {
+	if w, ok := p.(windowExpression); ok {
+		if err := w.validate(outer); err != nil {
+			return err
+		}
+	}
 	if a, ok := p.(aggregateRoot); ok {
 		return a.aggregateRoot().validate(outer)
 	}

@@ -168,7 +168,17 @@ func (src rowSource) where(c *typedCompiler, predicates []Pred) ([]string, error
 		if err != nil {
 			return nil, err
 		}
-		term := col + " " + src.liveOp
+		op := src.liveOp
+		if op == "= FALSE" {
+			op, err = c.comparisonOperator(src.deleted.kind, "=")
+			op += " FALSE"
+		} else {
+			op, err = c.comparisonOperator(src.deleted.kind, op)
+		}
+		if err != nil {
+			return nil, err
+		}
+		term := col + " " + op
 		if src.liveValue.input != nil {
 			value, err := src.liveValue.input.render(c)
 			if err != nil {
@@ -248,7 +258,14 @@ func compileRowFamilyChoices[T, S any](d *descriptor[T, S], name string, sources
 	reachable func([]shapeAlternative) bool,
 	render func(*typedCompiler, string, []Pred) (string, StatementShape, error),
 ) (*rowFamily, error) {
-	if d == nil || d.entry == nil || len(sources) == 0 || !rowLabel(name) {
+	return compileSourceFamily(d, name, sources, spec, forms, reachable, false, render)
+}
+
+func compileSourceFamily[T, S any](d *descriptor[T, S], name string, sources []rowSource, spec RowFilter, forms []string,
+	reachable func([]shapeAlternative) bool, graph bool,
+	render func(*typedCompiler, string, []Pred) (string, StatementShape, error),
+) (*rowFamily, error) {
+	if d == nil || d.entry == nil || !graph && len(sources) == 0 || !rowLabel(name) {
 		return nil, fmt.Errorf("tabula: a registered owner, matching source and named row plan are required")
 	}
 	family := &rowFamily{scope: Global(), shapes: make(map[rowVariant]*compiledShape), meta: statementMeta("", spec.Observe)}
@@ -316,7 +333,12 @@ func compileRowFamilyChoices[T, S any](d *descriptor[T, S], name string, sources
 		if filters != "" {
 			key += ".where." + filters
 		}
-		c, err := newTypedCompiler(scope == "scoped", occurrences...)
+		var c *typedCompiler
+		if graph {
+			c, err = newQueryCompiler(scope == "scoped", d.reg.statementIssuer, sources)
+		} else {
+			c, err = newTypedCompiler(scope == "scoped", occurrences...)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -328,6 +350,9 @@ func compileRowFamilyChoices[T, S any](d *descriptor[T, S], name string, sources
 		shape, err := c.finishShape(key, query, scopeType, meta)
 		if err != nil {
 			return nil, err
+		}
+		if graph {
+			shape.effects = statementEffects{bits: meta.Effects}
 		}
 		for _, live := range family.live {
 			if pos, ok := shape.layout.positions[live.input]; ok {

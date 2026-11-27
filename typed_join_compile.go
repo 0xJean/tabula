@@ -38,8 +38,8 @@ func (q ReadSelect) render(c *typedCompiler, owner *registration, indexes []int,
 			outer[sources[i+1].rel] = true
 		}
 	}
-	if q.lock.declared && (aggregate || q.distinct || len(q.distinctOn) > 0 || outer[q.lock.target]) {
-		return "", StatementShape{}, fmt.Errorf("tabula: row locks require ungrouped rows on a preserved occurrence")
+	if err := q.checkRowLocks(c, aggregate, outer); err != nil {
+		return "", StatementShape{}, err
 	}
 	if err := q.checkDistinct(groups, aggregate, sources); err != nil {
 		return "", StatementShape{}, err
@@ -102,6 +102,11 @@ func (q ReadSelect) render(c *typedCompiler, owner *registration, indexes []int,
 		}
 		query += " HAVING " + strings.Join(terms, " AND ")
 	}
+	window, err := q.windowClause(c)
+	if err != nil {
+		return "", StatementShape{}, err
+	}
+	query += window
 	if len(q.order) > 0 {
 		order, err := (&rowOrdering{terms: q.order}).orderSQL(c)
 		if err != nil {
@@ -119,13 +124,11 @@ func (q ReadSelect) render(c *typedCompiler, owner *registration, indexes []int,
 		return "", StatementShape{}, err
 	}
 	meta.Result = result
-	if q.lock.declared {
-		lock, err := q.lock.clause(c, &meta)
-		if err != nil {
-			return "", StatementShape{}, err
-		}
-		query += lock
+	lock, err := q.rowLockClauses(c, &meta)
+	if err != nil {
+		return "", StatementShape{}, err
 	}
+	query += lock
 	return query, meta, nil
 }
 

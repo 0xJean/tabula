@@ -3,6 +3,19 @@
 All notable changes are listed here. The project follows semantic versioning; before
 v1.0 a minor version may contain breaking changes.
 
+## v0.4.4 — 2026-11-27
+
+- Compose explicit query blocks through exported result identities, correlated scalar and quantified subqueries, derived/LATERAL sources, all six set operations, read/recursive common tables, parallel UNNEST and ARRAY subqueries. Inputs retain one identity and binding across nested blocks. [Query composition](docs/QUERY-COMPOSITION.md)
+- Add native window functions, explicit frames and exclusions, and multiple row-lock clauses. Registered pages and counts operate on final query results and retain genuine key, comparison and stability premises. Add `Host`, `HashTextExtended` and the symmetric date/time addition overloads. [Windows and locks](docs/WINDOWS.md)
+- Register typed INSERT, UPDATE and DELETE plans with defaults, conflicts, finite batches, matching sources, returned rows and modifying common tables. Returning streams drain after an early break and preserve operation rollback guarantees. Minimum grants follow each actual target, expression and returned field. [Typed writes](docs/TYPED-WRITES.md)
+- Establish shared lexical query, result-identity and write-effect contracts for composable statements. The implementation follows [the M3 design](docs/DESIGN-M3.md).
+- Add the optional `OperationSession` capability in both transaction drivers. Its sealed callback child isolates operation failures with a savepoint; incomplete operations, cleanup failures and cancellation discovered after a successful callback prevent the runner from committing.
+- Add the standard-library `sqlcheck.Verifier` contract and `pgxdriver.SQLVerifier` protocol backend. Parse/Describe checks statement result metadata without executing writes or sequence defaults.
+- Add `ErrUnobservedWrite` for a failure discovered while draining a write result after its consumer stops. Both drivers roll back the operation, reject later calls and return the original error from the enclosing runner, joined with any callback error.
+- Add opt-in `StatementPolicy` exceptions for signed modifying CTEs and write routines. The policy checks immutable effects and each physical write command; direct SQL, session guards and read-only enforcement retain their existing boundaries.
+- Record portable write-source uniqueness, database-default, conflict-arbiter and logical result-lineage requirements. Write effects distinguish an upsert's command pair from independent writes, and track RETURNING per physical target.
+- Verify registered statements through `VerifyStatementsUsing` and `VerifyRoleStatementsUsing`. Write results require non-executing description; native domain origins, omitted INSERT defaults and the generic plan's actual conflict indexes are checked on the same verification connection.
+
 ## v0.4.3 — 2026-11-27
 
 - Typed scalar expressions cover conditionals, arithmetic, casts, text, regular expressions, time, JSON, arrays, encoding, hashing and UUID generation. Use them in projections, predicates and conditional updates. Assignment targets require UPDATE. Evaluating a value or predicate requires SELECT on the columns it reads. [Scalar expressions](docs/EXPRESSIONS.md)

@@ -5,6 +5,7 @@ package integration_test
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"testing"
 	"time"
 
@@ -30,6 +31,8 @@ func TestScalarNativePrivileges(t *testing.T) {
 		}
 		run := authorizedEffectRunner(t, f.driver, f.db, f.pool, role, f.reg.SQLAuthority(), q.StatementPolicy{}, nil, false)
 		i, big, text := q.Input("i", pg.Int4()), q.Input("big", pg.Int8()), q.Input("text", pg.Text())
+		address := q.Input("address", pg.Inet())
+		day, clock := q.Input("day", pg.Date()), q.Input("clock", pg.Time())
 		for _, c := range []struct {
 			fn   string
 			expr q.Expr[string]
@@ -42,6 +45,21 @@ func TestScalarNativePrivileges(t *testing.T) {
 			{"pg_catalog.array_remove(anycompatiblearray,anycompatible)", q.Cast(pg.Text(), q.NullIf(i.Expr(), i.Expr())), []q.Binding{q.BindValue(i, int32(1))}},
 			{"pg_catalog.gen_random_uuid()", q.Cast(pg.Text(), q.GenRandomUUID()), nil},
 			{"pg_catalog.count()", q.Cast(pg.Text(), q.CountAll()), nil},
+			{"pg_catalog.host(inet)", q.Host(address.Expr()), []q.Binding{q.BindValue(address, netip.MustParseAddr("192.0.2.7"))}},
+			{"pg_catalog.hashtextextended(text,int8)", q.Cast(pg.Text(), q.HashTextExtended(text.Expr(), big.Expr())), []q.Binding{q.BindValue(text, "items"), q.BindValue(big, int64(-7))}},
+			{"pg_catalog.datetime_pl(date,time)", q.Cast(pg.Text(), q.PlusAs(pg.Timestamp(), day.Expr(), clock.Expr())), []q.Binding{q.BindValue(day, time.Date(2020, 2, 3, 0, 0, 0, 0, time.UTC)), q.BindValue(clock, "00:00:00")}},
+			{"pg_catalog.timedate_pl(time,date)", q.Cast(pg.Text(), q.PlusAs(pg.Timestamp(), clock.Expr(), day.Expr())), []q.Binding{q.BindValue(day, time.Date(2020, 2, 3, 0, 0, 0, 0, time.UTC)), q.BindValue(clock, "00:00:00")}},
+			{"pg_catalog.row_number()", q.Cast(pg.Text(), q.Over(q.RowNumber(), q.WindowSpec{})), nil},
+			{"pg_catalog.rank()", q.Cast(pg.Text(), q.Over(q.Rank(), q.WindowSpec{})), nil},
+			{"pg_catalog.dense_rank()", q.Cast(pg.Text(), q.Over(q.DenseRank(), q.WindowSpec{})), nil},
+			{"pg_catalog.percent_rank()", q.Cast(pg.Text(), q.Over(q.PercentRank(), q.WindowSpec{})), nil},
+			{"pg_catalog.cume_dist()", q.Cast(pg.Text(), q.Over(q.CumeDist(), q.WindowSpec{})), nil},
+			{"pg_catalog.ntile(integer)", q.Cast(pg.Text(), q.Over(q.NTile(i.Expr()), q.WindowSpec{})), []q.Binding{q.BindValue(i, int32(2))}},
+			{"pg_catalog.lag(anycompatible,integer,anycompatible)", q.Cast(pg.Text(), q.Over(q.Lag(i.Expr(), i.Expr(), i.Expr()), q.WindowSpec{})), []q.Binding{q.BindValue(i, int32(1))}},
+			{"pg_catalog.lead(anycompatible,integer,anycompatible)", q.Cast(pg.Text(), q.Over(q.Lead(i.Expr(), i.Expr(), i.Expr()), q.WindowSpec{})), []q.Binding{q.BindValue(i, int32(1))}},
+			{"pg_catalog.first_value(anyelement)", q.Cast(pg.Text(), q.Over(q.FirstValue(i.Expr()), q.WindowSpec{})), []q.Binding{q.BindValue(i, int32(1))}},
+			{"pg_catalog.last_value(anyelement)", q.Cast(pg.Text(), q.Over(q.LastValue(i.Expr()), q.WindowSpec{})), []q.Binding{q.BindValue(i, int32(1))}},
+			{"pg_catalog.nth_value(anyelement,integer)", q.Cast(pg.Text(), q.Over(q.NthValue(i.Expr(), i.Expr()), q.WindowSpec{})), []q.Binding{q.BindValue(i, int32(1))}},
 		} {
 			p := scalarPlan(f, pg.Text(), c.expr)
 			execute := func() error {

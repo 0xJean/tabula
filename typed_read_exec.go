@@ -123,7 +123,9 @@ func readPairBindings(values []Binding, shapes ...*compiledShape) ([][]Binding, 
 	required := make(map[*typedInput]bool)
 	for _, shape := range shapes {
 		for _, input := range shape.layout.order {
-			required[input] = false
+			if input.fixed == nil {
+				required[input] = false
+			}
 		}
 	}
 	for _, value := range values {
@@ -142,7 +144,8 @@ func readPairBindings(values []Binding, shapes ...*compiledShape) ([][]Binding, 
 	result := make([][]Binding, len(shapes))
 	for i, shape := range shapes {
 		for _, input := range shape.layout.order {
-			if !required[input] {
+			// Private Take values are filled by each layout's bind operation.
+			if input.fixed == nil && !required[input] {
 				return nil, fmt.Errorf("tabula: missing binding for %q", input.name)
 			}
 		}

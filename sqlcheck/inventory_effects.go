@@ -33,7 +33,7 @@ func typedPlanSiteKind(receiver, method string) string {
 	if effectPlanReceiver(receiver, method) != "" {
 		return "typed_plan"
 	}
-	if receiver == tabulaPkgPath && rowDeclaration(method) || rowExecutionMethod(receiver, method) {
+	if receiver == tabulaPkgPath && rowDeclaration(method) || rowExecutionMethod(receiver, method) || writePlanReceiver(receiver, method) != "" {
 		return "typed_rows"
 	}
 	return ""
@@ -41,6 +41,9 @@ func typedPlanSiteKind(receiver, method string) string {
 
 func (site SQLSite) matchesTypedShape(key, plan string, shape tabula.StatementShape, d tabula.Definition) bool {
 	if site.Kind == "typed_rows" {
+		if writePlanReceiver(site.Receiver, site.Method) != "" {
+			return site.matchesWriteShape(key, plan, shape)
+		}
 		if singleRowMethod(site.Method) {
 			return matchesSingleRow(key, plan, site.Method, shape, d)
 		}

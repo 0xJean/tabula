@@ -71,3 +71,7 @@ the statement snapshot. Run the upgraded readiness and statement verifier before
 admitting these plans, and after key or collation changes. Deferrable primary keys,
 unprotected inherited scans and nondeterministic ordering cannot establish a
 cursor boundary. [Result key verification](docs/AUTHORIZATION.md#result-key-verification)
+
+### Registered write policy exceptions
+
+The optional `AllowAuthorizedWriteCTE` and `AllowAuthorizedWriteRoutine` method-policy flags apply only to opaque registered calls. Each checks the original issuer, receiving session and method, then the compiled write effects. They do not authorize SQL text or an edited SQL view. Write CTEs require every physical DML command in the write allowlist; routine calls retain their exact signature and EXECUTE requirement. Database role privileges, session-escape guards, read-only transactions and Direct restrictions still apply.

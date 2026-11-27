@@ -44,9 +44,11 @@ func quoteIdent(ident string) string {
 // exposing the raw transaction. Overlapping statements or savepoint requests
 // on the transaction return tabula.ErrSessionBusy, including inside Each.
 type Session[S any] struct {
-	authority  tabula.SQLAuthority
-	statements tabula.StatementGuard
-	mu         *statementLock // shared by handles on the same transaction
+	authority     tabula.SQLAuthority
+	statements    tabula.StatementGuard
+	mu            *statementLock // shared by handles on the same transaction
+	operation     *operationLease
+	checkCallback func(context.Context) error
 	readQueries
 	tx       *sql.Tx
 	scope    S
@@ -54,6 +56,7 @@ type Session[S any] struct {
 	readOnly bool
 	readRole bool
 	denied   error
+	key      tabula.SessionKey
 	proof    tabula.SessionProof
 	obs      *tabula.Observer
 	scopeLog func(S) string
@@ -175,7 +178,7 @@ func (s *Session[S]) tryLock() error {
 	if !locked {
 		return tabula.ErrSessionBusy
 	}
-	if s.mu.cursor != nil {
+	if s.mu.cursor != nil || s.mu.operation != s.operation {
 		s.mu.Unlock()
 		return tabula.ErrSessionBusy
 	}
@@ -183,20 +186,32 @@ func (s *Session[S]) tryLock() error {
 }
 
 func (s *Session[S]) checkContext(ctx context.Context) error {
-	if s.mu == nil || s.mu.checkCallback == nil {
+	if s.mu == nil {
 		return nil
 	}
 	if err := s.checkState(); err != nil {
 		return err
 	}
-	return s.mu.checkCallback(ctx)
+	if s.checkCallback != nil {
+		return s.checkCallback(ctx)
+	}
+	if s.mu.checkCallback != nil {
+		return s.mu.checkCallback(ctx)
+	}
+	return nil
 }
 
 func (s *Session[S]) checkState() error {
 	if s.mu == nil || s.mu.closed.Load() {
 		return tabula.ErrSessionClosed
 	}
-	return s.denied
+	if s.operation != nil && s.operation.closed.Load() {
+		return tabula.ErrSessionClosed
+	}
+	if s.denied != nil {
+		return s.denied
+	}
+	return s.mu.operationError()
 }
 
 func (s *Session[S]) applyScope(ctx context.Context) error {
@@ -253,24 +268,7 @@ func (s *Session[S]) exec(ctx context.Context, query string, args []any) (int64,
 	if err := s.check("Exec", query); err != nil {
 		return 0, err
 	}
-	if err := s.tryLock(); err != nil {
-		return 0, err
-	}
-	defer s.mu.Unlock()
-	if err := s.applyScope(ctx); err != nil {
-		return 0, err
-	}
-	tagged := s.obs.TagSQL(ctx, query)
-	opCtx, done := s.obs.Start(ctx, s.scopeLabel(), query, args)
-	res, err := s.tx.ExecContext(opCtx, tagged, args...)
-	if err != nil {
-		err = wrapReadOnlyErr(err)
-		done(0, err)
-		return 0, err
-	}
-	n, err := res.RowsAffected()
-	done(n, err)
-	return n, err
+	return s.execChecked(ctx, query, args)
 }
 
 func (s *Session[S]) scan(ctx context.Context, method, query string, args []any, dest ...any) error {
@@ -280,18 +278,7 @@ func (s *Session[S]) scan(ctx context.Context, method, query string, args []any,
 	if err := s.check(method, query); err != nil {
 		return err
 	}
-	if err := s.tryLock(); err != nil {
-		return err
-	}
-	defer s.mu.Unlock()
-	if err := s.applyScope(ctx); err != nil {
-		return err
-	}
-	tagged := s.obs.TagSQL(ctx, query)
-	opCtx, done := s.obs.Start(ctx, s.scopeLabel(), query, args)
-	err := wrapReadOnlyErr(s.tx.QueryRowContext(opCtx, tagged, args...).Scan(dest...))
-	done(-1, err)
-	return err
+	return s.scanChecked(ctx, query, args, dest...)
 }
 
 func (s *Session[S]) returning(ctx context.Context, query string, args []any, dest ...any) error {
@@ -314,22 +301,7 @@ func (s *Session[S]) each(ctx context.Context, method, query string, args []any,
 	if err := s.check(method, query); err != nil {
 		return err
 	}
-	if err := s.tryLock(); err != nil {
-		return err
-	}
-	defer s.mu.Unlock()
-	if err := s.applyScope(ctx); err != nil {
-		return err
-	}
-	tagged := s.obs.TagSQL(ctx, query)
-	opCtx, done := s.obs.Start(ctx, s.scopeLabel(), query, args)
-	rows, err := s.tx.QueryContext(opCtx, tagged, args...)
-	if err != nil {
-		err = wrapReadOnlyErr(err)
-		done(0, err)
-		return err
-	}
-	return s.mu.each(rows, decode, done)
+	return s.eachChecked(ctx, query, args, decode)
 }
 
 // Scan executes a single-row query on the direct read-only queryer.
@@ -385,6 +357,7 @@ func (s *Session[S]) Savepoint(ctx context.Context, name string, fn func(context
 	execSP := func(spCtx context.Context, stmt string) error {
 		s.mu.Lock()
 		defer s.mu.Unlock()
+		s.mu.abandonOperations(s.operation)
 		if err := s.checkState(); err != nil {
 			return err
 		}

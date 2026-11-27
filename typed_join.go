@@ -8,8 +8,9 @@ import (
 	"strings"
 )
 
-// ReadSource identifies a physical occurrence in an explicit SELECT. FromTable
-// and RowsFrom provide sources. Use RowsFrom to specify a scope or soft-delete
+// ReadSource identifies a physical or query-result occurrence in an explicit
+// SELECT. FromTable, RowsFrom and QuerySource provide sources. Use RowsFrom to
+// specify a scope or soft-delete
 // column with a custom PostgreSQL type.
 type ReadSource interface {
 	readSource() (rowSource, error)
@@ -57,6 +58,10 @@ type ReadSelect struct {
 	group         []GroupField
 	order         []RowTerm
 	lock          RowLock
+	locks         []RowLock
+	tables        []CommonTable
+	set           *querySet
+	limit         *queryLimit
 	unscoped      bool
 	forms         ReadForms
 	distinct      bool
@@ -66,10 +71,11 @@ type ReadSelect struct {
 	listRepeated  bool
 }
 
-// Select projects expressions into the declared output view in field order.
+// Select projects expressions into a final output view or intermediate exports.
+// Without From, it selects self-contained expressions and subqueries.
 func Select(fields ...Projection) ReadSelect { return ReadSelect{project: slices.Clone(fields)} }
 
-// From names the first physical occurrence.
+// From names the first physical or query-result occurrence.
 func (q ReadSelect) From(source ReadSource) ReadSelect {
 	q.from = source
 	return q
@@ -129,6 +135,7 @@ func (q ReadSelect) WithForms(forms ReadForms) ReadSelect {
 // Lock applies a row lock to one eligible occurrence of an ungrouped read.
 func (q ReadSelect) Lock(lock RowLock) ReadSelect {
 	q.lock = lock
+	q.locks = nil
 	return q
 }
 
@@ -167,6 +174,9 @@ func TryDefineRead[T, S any](out *View[T, S], name string, query ReadSelect, obs
 }
 
 func compileReadPlan[T, S any](owner *descriptor[T, S], indexes []int, name string, query ReadSelect, observe []StatementOption) (*ReadPlan[T, S], error) {
+	if query.composed() {
+		return compileQueryPlan(owner, indexes, name, query, observe)
+	}
 	if owner == nil || isNilBound(query.from) {
 		return nil, fmt.Errorf("tabula: DefineRead requires a view and a FROM occurrence")
 	}
@@ -189,7 +199,7 @@ func compileReadPlan[T, S any](owner *descriptor[T, S], indexes []int, name stri
 		}
 		sources = append(sources, right)
 	}
-	single, err := newSingleRead(query.forms, len(query.order) > 0, !query.lock.declared)
+	single, err := newSingleRead(query.forms, len(query.order) > 0, !query.hasRowLocks())
 	if err != nil {
 		return nil, err
 	}

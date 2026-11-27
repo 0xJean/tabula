@@ -80,10 +80,19 @@ func (s *Session[S]) openAuthorized(ctx context.Context, owner any, method tabul
 	if err != nil {
 		return tabula.AuthorizedSQL{}, err
 	}
-	if s.readOnly && q.Effects&(tabula.EffectWrite|tabula.EffectRowLock) != 0 {
+	if (s.readOnly || s.readRole) && q.Effects&(tabula.EffectWrite|tabula.EffectRowLock) != 0 {
 		return tabula.AuthorizedSQL{}, tabula.ErrReadOnly
 	}
 	if err := authorizedBindArgs(q.Args); err != nil {
+		return tabula.AuthorizedSQL{}, err
+	}
+	if err := s.statements.CheckAuthorized(s.authority, owner, method, call); err != nil {
+		return tabula.AuthorizedSQL{}, err
+	}
+	if err := s.checkReadOnly(q.Query); err != nil {
+		return tabula.AuthorizedSQL{}, err
+	}
+	if err := s.readQueries.check(q.Query); err != nil {
 		return tabula.AuthorizedSQL{}, err
 	}
 	return q, nil
@@ -99,7 +108,7 @@ func (s *Session[S]) execAuthorized(ctx context.Context, owner any, call tabula.
 	if err != nil {
 		return 0, err
 	}
-	return s.exec(q.ObservationContext(ctx), q.Query, q.Args)
+	return s.execChecked(q.ObservationContext(ctx), q.Query, q.Args)
 }
 
 // ScanAuthorized decodes one result of a registered read or write. A write
@@ -109,15 +118,15 @@ func (s *Session[S]) ScanAuthorized(ctx context.Context, call tabula.AuthorizedS
 }
 
 func (s *Session[S]) scanAuthorized(ctx context.Context, owner any, call tabula.AuthorizedStatement, dest ...any) error {
-	method, policy := tabula.CallScan, "Scan"
+	method := tabula.CallScan
 	if call.Method() == tabula.CallReturning {
-		method, policy = tabula.CallReturning, "Returning"
+		method = tabula.CallReturning
 	}
 	q, err := s.openAuthorized(ctx, owner, method, call)
 	if err != nil {
 		return err
 	}
-	return s.scan(q.ObservationContext(ctx), policy, q.Query, q.Args, dest...)
+	return s.scanChecked(q.ObservationContext(ctx), q.Query, q.Args, dest...)
 }
 
 // EachAuthorized streams a registered read or multirow write. A returning
@@ -127,15 +136,15 @@ func (s *Session[S]) EachAuthorized(ctx context.Context, call tabula.AuthorizedS
 }
 
 func (s *Session[S]) eachAuthorized(ctx context.Context, owner any, call tabula.AuthorizedStatement, visit func(func(...any) error) error) error {
-	method, policy := tabula.CallEach, "Each"
+	method := tabula.CallEach
 	if call.Method() == tabula.CallReturningEach {
-		method, policy = tabula.CallReturningEach, "Returning"
+		method = tabula.CallReturningEach
 	}
 	q, err := s.openAuthorized(ctx, owner, method, call)
 	if err != nil {
 		return err
 	}
-	return s.each(q.ObservationContext(ctx), policy, q.Query, q.Args, visit)
+	return s.eachChecked(q.ObservationContext(ctx), q.Query, q.Args, visit)
 }
 
 // ExecAuthorized verifies a registered mutation for this raw-session instance.

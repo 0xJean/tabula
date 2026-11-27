@@ -26,8 +26,8 @@ func requireReadComparison(c *typedCompiler, kind catalogType, operation string)
 	case "bool", "int2", "int4", "int8", "oid", "float4", "float8", "bpchar", "bytea":
 		suffix = operation
 	}
-	if name == "text" && operation == "eq" {
-		suffix = "eq"
+	if name == "text" && (operation == "eq" || operation == "ne") {
+		suffix = operation
 	}
 	c.requireNative("pg_catalog." + name + suffix + "(" + arg + "," + arg + ")")
 	return nil

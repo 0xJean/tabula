@@ -284,8 +284,8 @@ func (p buildPackage) inventory(
 						if call := identCalls[node]; call != nil {
 							site.Definition, site.QueryKey = source.rowPlan(call, 0)
 							expr = call
-							if len(call.Args) > 1 {
-								expr = call.Args[1]
+							if _, keyArg := planOwnerArguments(fnName); len(call.Args) > keyArg {
+								expr = call.Args[keyArg]
 							}
 						}
 						addSite(owner, site, expr)
