@@ -734,7 +734,11 @@ const (
 
 type DefaultRequirement struct {
 	Relation string
-	Columns  []string
+	Columns  []string // explicitly selected DEFAULT columns
+	// IncludesOmitted adds all physical columns absent from InsertColumns.
+	// Only INSERT declarations set it; an empty InsertColumns means DEFAULT VALUES.
+	IncludesOmitted bool     `json:",omitzero"`
+	InsertColumns   []string `json:",omitempty"`
 }
     DefaultRequirement records columns whose database defaults are used by a
     write. Verification distinguishes identity generation from sequence defaults
@@ -2945,8 +2949,9 @@ type UniqueMatchRequirement struct {
 	Columns  []string
 }
     UniqueMatchRequirement records a physical write-source uniqueness premise.
-    Columns must be covered by an immediate, valid unique index and be NOT NULL.
-    A table name or an application assertion is not evidence of uniqueness.
+    Columns must contain a complete immediate, valid unique index key whose
+    columns are NOT NULL. A table name or an application assertion is not
+    evidence of uniqueness.
 
 type UpsertPlan[T, K, S any] struct {
 	// Has unexported fields.
@@ -3872,6 +3877,11 @@ func VerifyRoleStatements(ctx context.Context, db *sql.DB, work RoleStatements) 
     VerifyRoleStatements prepares and explains each role's SQL in a rolled-back
     transaction. Findings identify the role and statement and are sorted.
 
+func VerifyRoleStatementsUsing(ctx context.Context, verifier Verifier, work RoleStatements) (findings []string, err error)
+    VerifyRoleStatementsUsing prepares, describes and explains each role's SQL
+    through a non-executing verification backend. Result-bearing writes require
+    Describe; they are never wrapped in a SELECT probe. Findings are sorted.
+
 func VerifySchema(ctx context.Context, db *sql.DB, defs []tabula.Definition, families map[string][]string) ([]string, error)
     VerifySchema inspects PostgreSQL columns on db for every Definition in defs
     (supporting tables, partitioned tables, regular views, and materialized
@@ -3880,7 +3890,14 @@ func VerifySchema(ctx context.Context, db *sql.DB, defs []tabula.Definition, fam
 func VerifyStatements(ctx context.Context, db *sql.DB, defs []tabula.Definition, role string) ([]string, error)
     VerifyStatements prepares and explains every statement of defs as role
     (empty means the connection's own role) inside one rolled-back transaction
-    and returns one line per failing statement, sorted.
+    and returns one line per failing statement, sorted. A result-bearing write
+    returns ErrDescribeRequired; use VerifyStatementsUsing with a protocol
+    backend.
+
+func VerifyStatementsUsing(ctx context.Context, verifier Verifier, defs []tabula.Definition, role string) ([]string, error)
+    VerifyStatementsUsing verifies every registered statement through verifier.
+    An empty role retains the connection's own role. A database/sql verifier can
+    check legacy reads, but typed write results require a Describe backend.
 
 func VerifyViewSchema(ctx context.Context, db *sql.DB, views []tabula.ViewDefinition, families map[string][]string) ([]string, error)
     VerifyViewSchema verifies column alignment for views (including PostgreSQL
@@ -4096,8 +4113,8 @@ type MissingRequirement struct {
 }
     MissingRequirement identifies one unmet capability. Column is set for a
     named column grant or its owned sequence. Kind is ROLE, SCHEMA, TABLE,
-    COLUMN, SEQUENCE, FUNCTION, KEY or COMPARISON. A missing role produces only
-    the ROLE/EXISTS finding.
+    COLUMN, SEQUENCE, FUNCTION, KEY, COMPARISON, UNIQUE or CONFLICT. A missing
+    role produces only the ROLE/EXISTS finding.
 
 func CheckReadiness(ctx context.Context, db *sql.DB, role string, needs ...ReadinessNeeds) ([]MissingRequirement, error)
     CheckReadiness checks the union of all needs for role in one catalog query.
@@ -4184,13 +4201,16 @@ type RLSMatrix struct {
 type ReadinessNeeds struct {
 	Privileges      PrivilegeNeeds
 	SchemaUsage     []string
-	AnyColumnSelect []string                       // SELECT on at least one column of each relation
-	AnyColumnUpdate []string                       // UPDATE on at least one column of each locked relation
-	Routines        []tabula.RoutineRequirement    // exact function catalog contracts
-	ForceRLS        []string                       // both ENABLE and FORCE ROW LEVEL SECURITY
-	SequenceUsage   []string                       // named sequences in addition to column-owned sequences
-	Keys            []tabula.KeyRequirement        // immediate primary-key premises
-	Comparisons     []tabula.ComparisonRequirement // native ordering and deterministic collations
+	AnyColumnSelect []string                        // SELECT on at least one column of each relation
+	AnyColumnUpdate []string                        // UPDATE on at least one column of each locked relation
+	Routines        []tabula.RoutineRequirement     // exact function catalog contracts
+	ForceRLS        []string                        // both ENABLE and FORCE ROW LEVEL SECURITY
+	SequenceUsage   []string                        // named sequences in addition to column-owned sequences
+	Keys            []tabula.KeyRequirement         // immediate primary-key premises
+	Comparisons     []tabula.ComparisonRequirement  // native ordering and deterministic collations
+	UniqueMatches   []tabula.UniqueMatchRequirement // immediate unique write-source premises
+	Defaults        []tabula.DefaultRequirement     // actual default sequence dependencies, including omitted physical columns
+	Conflicts       []tabula.ConflictRequirement    // native conflict-arbiter catalog premises
 }
     ReadinessNeeds describes minimum capabilities for one role. Privileges
     accepts the result of CollectPrivilegeNeeds. Relations and function

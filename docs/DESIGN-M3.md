@@ -177,6 +177,8 @@ Derived/common-table projections can preserve a base key only through an injecti
 
 Snapshot metadata adds only cloneable structural facts needed for column lineage, result-key premises, conflict arbiters, evaluation boundaries and effect edges. Do not persist server-local OIDs, query values or hidden native parameter adapters. Logical identities and shape keys remain stable. Verify exact parameter OIDs, physical OIDs/modifiers, named constraints, native function signatures, deterministic collations and RLS/FORCE. A newer metadata feature requires a verifier that knows it; an old checker must not be reported as full validation.
 
+`DefaultRequirement.IncludesOmitted` marks an INSERT and `InsertColumns` records its actual target list. The verifier takes the catalog complement, including unmapped physical columns, and unions explicit DEFAULT columns. An empty target list represents DEFAULT VALUES. UPDATE DEFAULT retains only its explicit column list. Resolve sequence dependencies through the active `pg_attrdef` dependency edges, rather than sequence ownership or parsed default text; identity columns do not require caller sequence USAGE. Keep arbitrary default-function execution tests separate.
+
 ## Safe result description for writes
 
 The current database/sql verifier obtains SELECT result OIDs with a zero-row read wrapper. It cannot wrap DML RETURNING as a subquery. More importantly, putting LIMIT 0 on a modifying CTE still runs the modification. Rolling it back does not undo every possible sequence or function effect. M3 must never use that technique to describe write results.

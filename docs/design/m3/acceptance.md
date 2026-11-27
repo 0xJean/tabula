@@ -35,7 +35,7 @@ This is the required implementation matrix. Except for the separately recorded S
 
 | Area | Required cases and observations |
 | --- | --- |
-| VALUES and defaults | Explicit/omitted/default/serial/identity/generated columns; unknown target; duplicate target; correct UPDATE-only/INSERT-only failures before I/O; no wide SELECT inference. |
+| VALUES and defaults | Explicit/omitted/default/serial/identity/generated columns; narrow mapped source omitting a physical serial or identity column; serial ownership with a constant replacement default; unknown target; duplicate target; correct UPDATE-only/INSERT-only failures before I/O; no wide SELECT inference. |
 | INSERT SELECT | Zero/one/many input rows; exact output-target types; nullable input; SELECT source plus INSERT target grants; ByRLS no scope slots; ByScopeColumn target generated once per row. |
 | Conflicts | Targetless DoNothing with INSERT-only grants; selected columns/constraint; EXCLUDED reads; conditional DoUpdate; duplicate proposed rows; partial predicates under force_generic_plan; revoked predicate-column SELECT; invalid/deferrable/exclusion arbiter. |
 | Assignment and matching | Literal/bound/column/CASE/subquery values; UPDATE-only target with no SELECT on overwritten column; RHS-only SELECT; unique FROM proof; ambiguous multi-match refusal; DELETE predicate-only existence; joined RETURNING with and without matching proof. |
@@ -55,6 +55,7 @@ This is the required implementation matrix. Except for the separately recorded S
 3. A database/sql-only backend facing a new write-result shape returns ErrDescribeRequired. It must not execute a rollback-only probe, assume declared result OIDs are server evidence, or call the read LIMIT 0 wrapper. Existing read and no-result write verification remains compatible.
 4. Protocol backend checks parameter OIDs and ordered result names/wire OIDs on the same connection and role as catalogs and EXPLAIN. Include domains, enums, arrays and nested result exports. Explicitly test domain flattening in RowDescription, physical domain/origin verification, mismatched logical domains with the same base type, and rejection when computed logical identity lacks proof. Incorrect metadata fails without row execution. Role reset, statement cleanup and context cancellation are tested.
 5. Independent of runtime driver, actual write executions in disposable tests decode every result and verify affected data. Describe does not replace runtime sequence, trigger, RLS or function tests.
+6. Catalog write prerequisites preserve source-snapshot ownership. Omitted INSERT columns are discovered from the physical catalog, UPDATE DEFAULT uses its exact list, and actual generic-plan conflict arbiters must match the declared target. Failed capability or savepoint cleanup stops the verification workload and closes its transaction; cancellation cannot suppress bounded rollback.
 
 ## Inventory, compatibility and privacy
 

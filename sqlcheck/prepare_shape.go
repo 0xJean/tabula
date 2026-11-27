@@ -11,52 +11,6 @@ import (
 	"github.com/0xJean/tabula"
 )
 
-func checkShapeTypes(ctx context.Context, tx *sql.Tx, name, query string, params int, s *tabula.StatementShape) error {
-	if len(s.Inputs) != params {
-		return fmt.Errorf("prepared statement has %d inputs, expected %d", params, len(s.Inputs))
-	}
-	for i, in := range s.Inputs {
-		var matches bool
-		err := tx.QueryRowContext(ctx, `SELECT parameter_types[$2] IS NOT DISTINCT FROM pg_catalog.to_regtype($3)
-FROM pg_catalog.pg_prepared_statements WHERE name = $1`, name, i+1, in.Type).Scan(&matches)
-		if err != nil {
-			return err
-		}
-		if !matches {
-			return fmt.Errorf("prepared input %q at $%d differs from %s", in.Name, i+1, in.Type)
-		}
-	}
-	for _, col := range s.PhysicalColumns {
-		var matches bool
-		err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT FROM pg_catalog.pg_attribute AS a
-WHERE attrelid = pg_catalog.to_regclass($1) AND attname = $2 AND attnum > 0 AND NOT attisdropped
-  AND a.atttypid = pg_catalog.to_regtype($3) AND ($4::integer IS NULL OR a.atttypmod = $4))`, col.Relation, col.Name, col.Type, col.TypeMod).Scan(&matches)
-		if err != nil {
-			return err
-		}
-		if !matches {
-			if col.TypeMod != nil {
-				return fmt.Errorf("physical column %s.%s differs from %s with type modifier %d", col.Relation, col.Name, col.Type, *col.TypeMod)
-			}
-			return fmt.Errorf("physical column %s.%s differs from %s", col.Relation, col.Name, col.Type)
-		}
-	}
-	if err := checkShapeProof(ctx, tx, s); err != nil {
-		return err
-	}
-	if len(s.Result) == 0 {
-		return nil
-	}
-	if s.Effects&tabula.EffectRowLock != 0 {
-		var err error
-		query, err = lockProjectionQuery(query)
-		if err != nil {
-			return err
-		}
-	}
-	return checkReadResult(ctx, tx, query, params, s.Result)
-}
-
 // A LIMIT 0 source supplies the real PostgreSQL tuple descriptor without
 // evaluating target rows or expressions. The outer join yields one NULL row
 // whose field types we can inspect, including domains and extension types.

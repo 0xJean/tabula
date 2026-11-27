@@ -155,6 +155,10 @@ Consumers can also supply ordinary named statements under each execution role. B
 
 `tabula verify-roles --config workload.json` uses `SET LOCAL ROLE`, `PREPARE` and a generic `EXPLAIN EXECUTE` with inferred parameter types. Existing descriptor-based `VerifyStatements` and `VerifyViewStatements` remain available. Database commands below take `--dsn` or read `TABULA_DSN`. The CLI exits 0 on success, 1 for findings and 2 for input or operational errors.
 
+For result-bearing writes, pass `pgxdriver.SQLVerifier(pool)` to `sqlcheck.VerifyRoleStatementsUsing` or `VerifyStatementsUsing`. The backend describes the original statement without execution, including modifying CTEs and multiple row-lock clauses. It verifies role setup, catalog facts, parameter and result descriptions, and EXPLAIN on one connection, then rolls back. The runtime driver can remain `stdsql`. The portable `database/sql` verification path and CLI return `ErrDescribeRequired` when non-executing description is necessary; do not substitute a `LIMIT 0` query around a modifying statement.
+
+`RoleStatements.Readiness` includes structural write requirements. `UniqueMatches` verifies immediate unique keys with non-NULL columns for write-source matching. `Defaults` checks actual sequence dependencies, including every physical column omitted from an INSERT; identity generation has separate PostgreSQL semantics. `Conflicts` checks catalog eligibility, while statement verification also checks the actual generic EXPLAIN arbiter list. These checks complement execution tests for triggers, default functions and policies. Logical domain results need catalog origin or independently established cast evidence; a base wire OID alone does not establish a domain.
+
 ## Using a reader role in a shared transaction
 
 For a job that reads shared rows then writes scoped rows atomically, give the login permission to switch to two roles. Grant the reader only the required schema usage, reads and reviewed functions. Check its inherited privileges, ownership and executable functions as well as direct table grants. Grant scoped writes to the writer and enforce scope with the application's RLS policies.

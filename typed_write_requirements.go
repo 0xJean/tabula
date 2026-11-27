@@ -3,7 +3,8 @@ package tabula
 import "slices"
 
 // UniqueMatchRequirement records a physical write-source uniqueness premise.
-// Columns must be covered by an immediate, valid unique index and be NOT NULL.
+// Columns must contain a complete immediate, valid unique index key whose
+// columns are NOT NULL.
 // A table name or an application assertion is not evidence of uniqueness.
 type UniqueMatchRequirement struct {
 	Relation string
@@ -15,7 +16,11 @@ type UniqueMatchRequirement struct {
 // and does not infer arbitrary default-function privileges from SQL text.
 type DefaultRequirement struct {
 	Relation string
-	Columns  []string
+	Columns  []string // explicitly selected DEFAULT columns
+	// IncludesOmitted adds all physical columns absent from InsertColumns.
+	// Only INSERT declarations set it; an empty InsertColumns means DEFAULT VALUES.
+	IncludesOmitted bool     `json:",omitzero"`
+	InsertColumns   []string `json:",omitempty"`
 }
 
 // ConflictRequirement records the target of a native conflict-inference clause.
@@ -45,6 +50,7 @@ func cloneWriteRequirements(s *StatementShape) {
 	s.Defaults = slices.Clone(s.Defaults)
 	for i := range s.Defaults {
 		s.Defaults[i].Columns = slices.Clone(s.Defaults[i].Columns)
+		s.Defaults[i].InsertColumns = slices.Clone(s.Defaults[i].InsertColumns)
 	}
 	s.Conflicts = slices.Clone(s.Conflicts)
 	for i := range s.Conflicts {

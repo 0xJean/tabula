@@ -19,18 +19,21 @@ import (
 type ReadinessNeeds struct {
 	Privileges      PrivilegeNeeds
 	SchemaUsage     []string
-	AnyColumnSelect []string                       // SELECT on at least one column of each relation
-	AnyColumnUpdate []string                       // UPDATE on at least one column of each locked relation
-	Routines        []tabula.RoutineRequirement    // exact function catalog contracts
-	ForceRLS        []string                       // both ENABLE and FORCE ROW LEVEL SECURITY
-	SequenceUsage   []string                       // named sequences in addition to column-owned sequences
-	Keys            []tabula.KeyRequirement        // immediate primary-key premises
-	Comparisons     []tabula.ComparisonRequirement // native ordering and deterministic collations
+	AnyColumnSelect []string                        // SELECT on at least one column of each relation
+	AnyColumnUpdate []string                        // UPDATE on at least one column of each locked relation
+	Routines        []tabula.RoutineRequirement     // exact function catalog contracts
+	ForceRLS        []string                        // both ENABLE and FORCE ROW LEVEL SECURITY
+	SequenceUsage   []string                        // named sequences in addition to column-owned sequences
+	Keys            []tabula.KeyRequirement         // immediate primary-key premises
+	Comparisons     []tabula.ComparisonRequirement  // native ordering and deterministic collations
+	UniqueMatches   []tabula.UniqueMatchRequirement // immediate unique write-source premises
+	Defaults        []tabula.DefaultRequirement     // actual default sequence dependencies, including omitted physical columns
+	Conflicts       []tabula.ConflictRequirement    // native conflict-arbiter catalog premises
 }
 
 // MissingRequirement identifies one unmet capability. Column is set for a named
 // column grant or its owned sequence. Kind is ROLE, SCHEMA, TABLE, COLUMN,
-// SEQUENCE, FUNCTION, KEY or COMPARISON. A missing role produces only the
+// SEQUENCE, FUNCTION, KEY, COMPARISON, UNIQUE or CONFLICT. A missing role produces only the
 // ROLE/EXISTS finding.
 type MissingRequirement struct {
 	Kind, Object, Column, Privilege string
@@ -56,6 +59,8 @@ type readinessItem struct {
 	Routine                          *readinessRoutine
 	KeyColumns                       []string
 	WithSchema, WithName, WithColumn string
+	Constraint                       string
+	ConflictUpdate                   bool
 }
 
 type readinessRoutine struct {
@@ -160,7 +165,11 @@ func readinessItems(n ReadinessNeeds) ([]readinessItem, error) {
 	if err != nil {
 		return nil, err
 	}
-	return append(out, proofs...), nil
+	writes, err := writeReadinessItems(n)
+	if err != nil {
+		return nil, err
+	}
+	return append(append(out, proofs...), writes...), nil
 }
 
 func routineItem(r tabula.RoutineRequirement) (readinessItem, error) {

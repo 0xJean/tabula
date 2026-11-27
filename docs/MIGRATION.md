@@ -10,6 +10,10 @@ Both transaction drivers implement `WithinOperation`. Use its callback session a
 
 `pgxdriver.SQLVerifier(pool)` supplies a separate read-only verification transaction and protocol description. It is usable even when application statements run through `database/sql`. `Describe` does not execute the described SQL, and its server OIDs are verification-local evidence rather than portable snapshot identifiers. Every caller must roll back the verification transaction when finished.
 
+Pass that backend to `sqlcheck.VerifyRoleStatementsUsing` or `VerifyStatementsUsing`; these entry points manage the verification transaction and its rollback. Existing `VerifyRoleStatements` and `VerifyStatements` keep their `*sql.DB` signatures. They return `ErrDescribeRequired` for result-bearing writes, including modifying CTEs, instead of running a result probe. Nested locking reads also require protocol description when a safe outer read probe cannot preserve their semantics. Count-only writes still use PREPARE and EXPLAIN without execution.
+
+Refresh snapshots for `UniqueMatches`, `Defaults`, `Conflicts` and `ResultLineage`, and use the upgraded verifier. Defaults include the physical columns omitted from an INSERT, even when the source struct omits them. Identity generation and an owned sequence whose default has been replaced by a constant do not add sequence USAGE. Conflict inference is checked against the actual generic plan's arbiter indexes. A domain's matching base wire type is insufficient: catalog origin or an independently verified outer cast must establish a write result's logical type.
+
 The planned `StatementPolicy` additions retain zero-value behavior. Use keyed configuration literals: adding public fields requires converting positional literals to named fields. The complete API and snapshot migration notes will accompany the candidate implementation.
 
 ## From v0.4.2 to v0.4.3

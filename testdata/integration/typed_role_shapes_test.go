@@ -8,12 +8,13 @@ import (
 	"testing"
 
 	"github.com/0xJean/tabula"
+	"github.com/0xJean/tabula/pgxdriver"
 	"github.com/0xJean/tabula/sqlcheck"
 	"github.com/stretchr/testify/require"
 )
 
 func TestRegisteredEffectRoleRequirements(t *testing.T) {
-	db, _ := databases(t)
+	db, pool := databases(t)
 	f := newEffectFixture(t, db, tabula.NewRegistry(tabula.RegistryConfig[struct{}]{}))
 	ctx := t.Context()
 	exec := func(query string) {
@@ -65,7 +66,9 @@ func TestRegisteredEffectRoleRequirements(t *testing.T) {
 	findings, err = sqlcheck.CheckPolicyCoverage(ctx, db, work)
 	require.NoError(t, err)
 	require.Empty(t, findings)
-	findings, err = sqlcheck.VerifyRoleStatements(ctx, db, work)
+	_, err = sqlcheck.VerifyRoleStatements(ctx, db, work)
+	require.ErrorIs(t, err, sqlcheck.ErrDescribeRequired)
+	findings, err = sqlcheck.VerifyRoleStatementsUsing(ctx, pgxdriver.SQLVerifier(pool), work)
 	require.NoError(t, err)
 	require.Empty(t, findings)
 	const alias = `label FOR UPDATE OF "i"`
@@ -80,7 +83,7 @@ func TestRegisteredEffectRoleRequirements(t *testing.T) {
 	require.Len(t, findings, 1)
 	require.Contains(t, findings[0], "result types")
 	exec("REVOKE UPDATE(note) ON " + f.table + " FROM " + f.role)
-	findings, err = sqlcheck.VerifyRoleStatements(ctx, db, work)
+	findings, err = sqlcheck.VerifyRoleStatementsUsing(ctx, pgxdriver.SQLVerifier(pool), work)
 	require.NoError(t, err)
 	require.Len(t, findings, len(f.row))
 	for _, finding := range findings {

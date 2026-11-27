@@ -94,22 +94,5 @@ func (r RoleStatements) validate() error {
 // VerifyRoleStatements prepares and explains each role's SQL in a rolled-back
 // transaction. Findings identify the role and statement and are sorted.
 func VerifyRoleStatements(ctx context.Context, db *sql.DB, work RoleStatements) ([]string, error) {
-	if err := work.validate(); err != nil {
-		return nil, err
-	}
-	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = tx.Rollback() }()
-	var findings []string
-	for role, stmts := range work {
-		for _, s := range stmts {
-			if err := prepareShape(ctx, tx, s.SQL, role, s.Shape); err != nil {
-				findings = append(findings, fmt.Sprintf("%s/%s: %v", role, s.Name, err))
-			}
-		}
-	}
-	slices.Sort(findings)
-	return findings, ctx.Err()
+	return VerifyRoleStatementsUsing(ctx, sqlVerifier{db}, work)
 }
