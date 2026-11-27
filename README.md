@@ -48,9 +48,9 @@ Window functions keep their input rows and expose explicit partitions, orders an
 
 `InsertInto`, `UpdateOf` and `DeleteFrom` declare typed writes with defaults, conflicts, matching sources and returned rows. Register count results with `DefineWrite` or row results with `DefineReturning`; batch and returning operations use a guarded operation savepoint. Verify write results with the non-executing `pgxdriver.SQLVerifier` backend, including when execution uses `stdsql`. [Typed writes](docs/TYPED-WRITES.md)
 
-## Install v0.4.4
+## Install v0.5.0
 
-Run `go get github.com/0xJean/tabula@v0.4.4` in your application module with Go 1.26 or later. For the native driver and telemetry modules, use the matching version with `go get github.com/0xJean/tabula/pgxdriver@v0.4.4` and/or `go get github.com/0xJean/tabula/oteltabula@v0.4.4`.
+Run `go get github.com/0xJean/tabula@v0.5.0` in your application module with Go 1.26 or later. For the native driver and telemetry modules, use the matching version with `go get github.com/0xJean/tabula/pgxdriver@v0.5.0` and/or `go get github.com/0xJean/tabula/oteltabula@v0.5.0`.
 
 ## Read a row by primary key
 

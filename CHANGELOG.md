@@ -3,7 +3,7 @@
 All notable changes are listed here. The project follows semantic versioning; before
 v1.0 a minor version may contain breaking changes.
 
-## v0.5.0 — Unreleased
+## v0.5.0 — 2026-11-27
 
 - Add a named-parameter (`@name`) struct-scanning SQL tier in core package `tabula`: `DefineSQL`, `DefineSQLExec`, `DefineSQLReturning` and `DefineSQLList` (with `TryDefine*` partners, `SQLSpec`, `SQLListSpec`, `SQLFilter` and `NoArgs`). All four compile against `*Registry[S]`, issue signed `SQLAuthority` calls compatible with `DenyLegacySQL: true` on `stdsql` and `pgxdriver`, reuse `View` struct decoding and `db:"...,secret"` redaction, and fail closed at initialization on raw `$1` placeholders, undeclared or unused `Args` fields, multi-statements, session-escape attempts and missing scope declarations. [Named-parameter SQL](docs/COOKBOOK.md#named-parameter-sql-with-struct-scanning)
 - Add `ScopeParam(name)` to bind session scope `S` automatically to `@<name>` on `DefineSQL*` statements (failing closed on unscoped sessions), alongside `ScopeByRLS()` and `ScopeGlobal()`.
