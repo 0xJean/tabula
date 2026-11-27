@@ -559,6 +559,151 @@ func TestTypeFamiliesDerivationAndCustomRegistration(t *testing.T) {
 	require.ErrorContains(t, err, "no registered PostgreSQL type family")
 }
 
+func TestDefineSQLIntegerDirectionFamilies(t *testing.T) {
+	type narrowStatus int16
+	type mappedRank int32
+	type intDirRow struct {
+		I8       int8            `db:"i8"`
+		I16      int16           `db:"i16"`
+		I16Ptr   *int16          `db:"i16_ptr"`
+		NullI16  sql.NullInt16   `db:"null_i16"`
+		NullByte sql.NullByte    `db:"null_byte"`
+		GenI16   sql.Null[int16] `db:"gen_i16"`
+		I32      int32           `db:"i32"`
+		I32Ptr   *int32          `db:"i32_ptr"`
+		NullI32  sql.NullInt32   `db:"null_i32"`
+		GenI32   sql.Null[int32] `db:"gen_i32"`
+		U8       uint8           `db:"u8"`
+		U16      uint16          `db:"u16"`
+		U32      uint32          `db:"u32"`
+		I64      int64           `db:"i64"`
+		NullI64  sql.NullInt64   `db:"null_i64"`
+		U64      uint64          `db:"u64"`
+		ArrI16   []int16         `db:"arr_i16,array"`
+		ArrI32   []int32         `db:"arr_i32,array"`
+		Custom   narrowStatus    `db:"custom"`
+		Mapped   mappedRank      `db:"mapped"`
+	}
+	type intDirArgs struct {
+		I8       int8            `db:"i8"`
+		I16      int16           `db:"i16"`
+		I16Ptr   *int16          `db:"i16_ptr"`
+		NullI16  sql.NullInt16   `db:"null_i16"`
+		NullByte sql.NullByte    `db:"null_byte"`
+		GenI16   sql.Null[int16] `db:"gen_i16"`
+		I32      int32           `db:"i32"`
+		I32Ptr   *int32          `db:"i32_ptr"`
+		NullI32  sql.NullInt32   `db:"null_i32"`
+		GenI32   sql.Null[int32] `db:"gen_i32"`
+		U8       uint8           `db:"u8"`
+		U16      uint16          `db:"u16"`
+		U32      uint32          `db:"u32"`
+		I64      int64           `db:"i64"`
+		NullI64  sql.NullInt64   `db:"null_i64"`
+		U64      uint64          `db:"u64"`
+		ArrI16   []int16         `db:"arr_i16,array"`
+		ArrI16P  []*int16        `db:"arr_i16_ptr,array"`
+		ArrI32   []int32         `db:"arr_i32,array"`
+		Custom   narrowStatus    `db:"custom"`
+		Mapped   mappedRank      `db:"mapped"`
+	}
+
+	reg := tabula.NewRegistry(tabula.RegistryConfig[int16]{
+		ArrayColumn: func(ft reflect.Type) (func(any) any, error) {
+			return func(p any) any { return p }, nil
+		},
+		TypeFamilies: []tabula.TypeFamily{
+			tabula.TypeFamilyOf[narrowStatus]("smallint"),
+		},
+		DefaultTypes: []tabula.TypeDefault{
+			tabula.TypeMapping(tabula.CatalogType[mappedRank]("pg_catalog", "int4", nil)),
+		},
+	})
+
+	q := tabula.DefineSQL[intDirRow, intDirArgs](reg, tabula.SQLSpec{
+		Name: "ints.directions",
+		SQL: `SELECT i8, i16, i16_ptr, null_i16, null_byte, gen_i16, i32, i32_ptr, null_i32, gen_i32,
+ u8, u16, u32, i64, null_i64, u64, arr_i16, arr_i32, custom, mapped
+FROM public.items
+WHERE scope_id = @scope_id
+  AND i8 = @i8 AND i16 = @i16 AND i16_ptr = @i16_ptr AND null_i16 = @null_i16 AND null_byte = @null_byte AND gen_i16 = @gen_i16
+  AND i32 = @i32 AND i32_ptr = @i32_ptr AND null_i32 = @null_i32 AND gen_i32 = @gen_i32
+  AND u8 = @u8 AND u16 = @u16 AND u32 = @u32 AND i64 = @i64 AND null_i64 = @null_i64 AND u64 = @u64
+  AND arr_i16 = @arr_i16 AND arr_i16 = @arr_i16_ptr AND arr_i32 = @arr_i32
+  AND custom = @custom AND mapped = @mapped`,
+		Scope: tabula.ScopeParam("scope_id"),
+	})
+
+	wideInt := []string{"smallint", "integer", "bigint"}
+	wideIntArr := []string{"smallint[]", "integer[]", "bigint[]"}
+	oidInt := []string{"oid", "smallint", "integer", "bigint"}
+
+	// Verify both live Definition and snapshot round-trip preserve asymmetric Input vs Result families.
+	snap := sqlcheck.RenderAllSnapshot(reg.Defined(), reg.DefinedViews())
+	parsed, err := sqlcheck.ParseSnapshot(snap)
+	require.NoError(t, err)
+	require.Len(t, parsed, 1)
+
+	for _, shape := range []tabula.StatementShape{
+		q.Definition().StatementShapes["sql"],
+		parsed[0].StatementShapes["sql"],
+	} {
+		resByName := map[string][]string{}
+		for _, f := range shape.Result {
+			resByName[f.Name] = f.AllowedTypes
+		}
+		// Result direction keeps strict narrowing bounds.
+		for _, k := range []string{"i8", "i16", "i16_ptr", "null_i16", "null_byte", "gen_i16"} {
+			require.Equal(t, []string{"smallint"}, resByName[k], "result %s", k)
+		}
+		for _, k := range []string{"i32", "i32_ptr", "null_i32", "gen_i32", "u8", "u16"} {
+			require.Equal(t, []string{"smallint", "integer"}, resByName[k], "result %s", k)
+		}
+		for _, k := range []string{"i64", "null_i64", "u64"} {
+			require.Equal(t, wideInt, resByName[k], "result %s", k)
+		}
+		require.Equal(t, oidInt, resByName["u32"])
+		require.Equal(t, []string{"smallint[]"}, resByName["arr_i16"])
+		require.Equal(t, []string{"smallint[]", "integer[]"}, resByName["arr_i32"])
+		require.Equal(t, []string{"smallint"}, resByName["custom"])
+		require.Equal(t, []string{`"pg_catalog"."int4"`}, resByName["mapped"])
+
+		inByName := map[string][]string{}
+		for _, in := range shape.Inputs {
+			inByName[in.Name] = in.AllowedTypes
+		}
+		// Input direction allows lossless widening, including ScopeParam, Null[T] and array elements.
+		for _, k := range []string{
+			"scope_id", "i8", "i16", "i16_ptr", "null_i16", "null_byte", "gen_i16",
+			"i32", "i32_ptr", "null_i32", "gen_i32", "u8", "u16", "i64", "null_i64", "u64",
+		} {
+			require.Equal(t, wideInt, inByName[k], "input %s", k)
+		}
+		require.Equal(t, oidInt, inByName["u32"])
+		for _, k := range []string{"arr_i16", "arr_i16_ptr", "arr_i32"} {
+			require.Equal(t, wideIntArr, inByName[k], "input %s", k)
+		}
+		// Custom TypeFamilies and DefaultTypes remain unchanged on input.
+		require.Equal(t, []string{"smallint"}, inByName["custom"])
+		require.Equal(t, []string{`"pg_catalog"."int4"`}, inByName["mapped"])
+	}
+
+	// ScopeID fallback deriving from a struct scope returning int16 also uses Input direction.
+	type wrappedScope struct{ id int16 }
+	regWrapped := tabula.NewRegistry(tabula.RegistryConfig[wrappedScope]{
+		ScopeID: func(s wrappedScope) any { return s.id },
+	})
+	type idRow struct {
+		ID int64 `db:"id"`
+	}
+	qw := tabula.DefineSQL[idRow, tabula.NoArgs](regWrapped, tabula.SQLSpec{
+		Name:  "ints.wrapped_scope",
+		SQL:   "SELECT id FROM public.items WHERE group_id = @group_id",
+		Scope: tabula.ScopeParam("group_id"),
+	})
+	require.Equal(t, wideInt, qw.Definition().StatementShapes["sql"].Inputs[0].AllowedTypes)
+}
+
 func FuzzDefineSQL(f *testing.F) {
 	seeds := []string{
 		"SELECT id FROM public.items WHERE id = @id",

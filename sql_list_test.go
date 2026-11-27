@@ -197,3 +197,42 @@ func TestDefineSQLListKeysetDefaultTypesEncoder(t *testing.T) {
 	require.Equal(t, defaultEncodedKey{raw: "beta"}, page.Items[0].Key)
 	require.Equal(t, []any{"enc:alpha", int64(1), 6}, sess.lastSQL.Args)
 }
+
+func TestDefineSQLListKeysetInputIntegerWidening(t *testing.T) {
+	type statusRow struct {
+		ID     int64 `db:"id"`
+		Status int16 `db:"status"`
+		Rank   int32 `db:"rank"`
+	}
+	reg := tabula.NewRegistry(tabula.RegistryConfig[struct{}]{
+		Deny: tabula.DenyLegacySQL,
+	})
+	list := tabula.DefineSQLList[statusRow, tabula.NoArgs](reg, tabula.SQLListSpec{
+		Name:   "items.by_status",
+		Select: "SELECT id, status, rank FROM public.items",
+		Order: tabula.QueryOrderSpec{
+			Default:          "status",
+			DefaultDirection: tabula.SortAsc,
+			Sorts: []tabula.QuerySort{
+				{Key: "status", Expr: "status", Column: "status"},
+				{Key: "rank", Expr: "rank", Column: "rank"},
+			},
+			TieBreaker: []tabula.QuerySortTerm{{Expr: "id", Column: "id"}},
+		},
+		MaxLimit: 20,
+		Keyset:   true,
+	})
+
+	shapes := list.Definition().StatementShapes
+	// Result fields keep strict narrowing bounds.
+	statusAfter := shapes["keyset.status.after"]
+	require.Equal(t, []string{"smallint"}, statusAfter.Result[1].AllowedTypes)
+	require.Equal(t, []string{"smallint", "integer"}, statusAfter.Result[2].AllowedTypes)
+	// Keyset after_* cursor inputs propagate Input direction (lossless widening).
+	require.Equal(t, "after_status", statusAfter.Inputs[0].Name)
+	require.Equal(t, []string{"smallint", "integer", "bigint"}, statusAfter.Inputs[0].AllowedTypes)
+
+	rankAfter := shapes["keyset.rank.after"]
+	require.Equal(t, "after_rank", rankAfter.Inputs[0].Name)
+	require.Equal(t, []string{"smallint", "integer", "bigint"}, rankAfter.Inputs[0].AllowedTypes)
+}
