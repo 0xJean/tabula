@@ -136,15 +136,21 @@ func walkFields(
 ) error {
 	for i := range rt.NumField() {
 		f := rt.Field(i)
-		if !f.IsExported() {
-			continue
-		}
 		index := append(slices.Clone(prefixIdx), i)
 		tag, tagged := f.Tag.Lookup("db")
-		switch {
-		case tag == "-":
+		if tag == "-" {
 			continue
-		case !tagged && len(prefixIdx) == 0 && f.Anonymous && f.Type.Kind() == reflect.Struct:
+		}
+		if !f.IsExported() {
+			if !tagged && f.Anonymous && f.Type.Kind() == reflect.Struct {
+				if err := walkFields(f.Type, index, namePrefix, nested, visit, fail); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		switch {
+		case !tagged && f.Anonymous && f.Type.Kind() == reflect.Struct:
 			if err := walkFields(f.Type, index, namePrefix, nested, visit, fail); err != nil {
 				return err
 			}

@@ -116,10 +116,21 @@ func (s *fakeAuthSession[S]) EachAuthorized(_ context.Context, call tabula.Autho
 				switch p := d.(type) {
 				case *int64:
 					*p = row[i].(int64)
+				case *int:
+					*p = row[i].(int)
 				case *string:
 					*p = row[i].(string)
 				case *bool:
 					*p = row[i].(bool)
+				case *time.Time:
+					*p = row[i].(time.Time)
+				case **time.Time:
+					if row[i] == nil {
+						*p = nil
+					} else {
+						v := row[i].(time.Time)
+						*p = &v
+					}
 				case **string:
 					if row[i] == nil {
 						*p = nil
@@ -127,6 +138,8 @@ func (s *fakeAuthSession[S]) EachAuthorized(_ context.Context, call tabula.Autho
 						v := row[i].(string)
 						*p = &v
 					}
+				case *[]string:
+					*p = row[i].([]string)
 				case sql.Scanner:
 					if err := p.Scan(row[i]); err != nil {
 						return err
@@ -702,6 +715,343 @@ WHERE scope_id = @scope_id
 		Scope: tabula.ScopeParam("group_id"),
 	})
 	require.Equal(t, wideInt, qw.Definition().StatementShapes["sql"].Inputs[0].AllowedTypes)
+}
+
+type unitWrappedScope struct {
+	raw string
+}
+
+type unitWrappedScopeCodec struct {
+	p *unitWrappedScope
+}
+
+func (c *unitWrappedScopeCodec) Scan(src any) error {
+	switch v := src.(type) {
+	case string:
+		c.p.raw = v
+		return nil
+	case []byte:
+		c.p.raw = string(v)
+		return nil
+	default:
+		return errors.New("unexpected wrapped scope scan type")
+	}
+}
+
+func (c *unitWrappedScopeCodec) Value() (driver.Value, error) {
+	return c.p.raw, nil
+}
+
+func TestDefineSQLSharedTableRowTags(t *testing.T) {
+	type auditCols struct {
+		CreatedAt time.Time `db:"created_at,once"`
+	}
+	type sharedItem struct {
+		ID        int64            `db:"id,key,serial"`
+		ScopeID   unitWrappedScope `db:"scope_id,scope"`
+		Code      string           `db:"code,once"`
+		Name      string           `db:"name"`
+		Version   int              `db:"version,version"`
+		DeletedAt *time.Time       `db:"deleted_at,deleted"`
+		Note      string           `db:"note,once,zero"`
+		Tags      []string         `db:"tags,once,array"`
+		Meta      map[string]any   `db:"meta,once,json"`
+		Token     string           `db:"token,once,secret"`
+		auditCols
+	}
+	type embeddedListRow struct {
+		sharedItem
+		Extra *string `db:"extra"`
+	}
+	type joinPairRow struct {
+		Left  sharedItem `db:"l_"`
+		Right sharedItem `db:"r_"`
+	}
+	type codeArgs struct {
+		Code string `db:"code"`
+	}
+
+	key := tabula.NewSessionKey()
+	reg := tabula.NewRegistry(tabula.RegistryConfig[unitWrappedScope]{
+		SessionKey: key,
+		Deny:       tabula.DenyLegacySQL,
+		ScopeID:    func(s unitWrappedScope) any { return s.raw },
+		ScopeWrap:  func(p *unitWrappedScope) any { return &unitWrappedScopeCodec{p: p} },
+		ArrayColumn: func(ft reflect.Type) (func(any) any, error) {
+			return func(p any) any { return p }, nil
+		},
+		TypeFamilies: []tabula.TypeFamily{
+			tabula.TypeFamilyOf[unitWrappedScope]("uuid"),
+		},
+	})
+
+	// Same struct works on Define, DefineSQL, DefineSQLReturning, DefineSQLList,
+	// embedded row structs, and prefixed nested JOIN structs.
+	tbl := tabula.Define(reg, tabula.TableSpec[sharedItem, int64]{
+		Name: "public.items",
+	})
+	require.Equal(t, "public.items", tbl.Name())
+
+	const cols = "id, scope_id, code, name, version, deleted_at, note, tags, meta, token, created_at"
+	qRead := tabula.DefineSQL[sharedItem, codeArgs](reg, tabula.SQLSpec{
+		Name:  "items.shared_read",
+		SQL:   "SELECT " + cols + " FROM public.items WHERE scope_id = @scope_id AND code = @code",
+		Scope: tabula.ScopeParam("scope_id"),
+	})
+	qRet := tabula.DefineSQLReturning[sharedItem, codeArgs](reg, tabula.SQLSpec{
+		Name:  "items.shared_ret",
+		SQL:   "UPDATE public.items SET name = 'x' WHERE scope_id = @scope_id AND code = @code RETURNING " + cols,
+		Scope: tabula.ScopeParam("scope_id"),
+	})
+	qList := tabula.DefineSQLList[embeddedListRow, tabula.NoArgs](reg, tabula.SQLListSpec{
+		Name:      "items.shared_list",
+		Select:    "SELECT " + cols + ", 'extra'::text AS extra FROM public.items",
+		Where:     "scope_id = @scope_id",
+		CountBase: "SELECT count(*) FROM public.items",
+		Scope:     tabula.ScopeParam("scope_id"),
+		Order: tabula.QueryOrderSpec{
+			Default:          "id",
+			DefaultDirection: tabula.SortAsc,
+			Sorts: []tabula.QuerySort{
+				{Key: "id", Expr: "id", Column: "id"},
+				{Key: "scope", Expr: "scope_id", Column: "scope_id"},
+			},
+			TieBreaker: []tabula.QuerySortTerm{{Expr: "id", Column: "id"}},
+		},
+		MaxLimit: 50,
+		Keyset:   true,
+	})
+	qJoin := tabula.DefineSQL[joinPairRow, tabula.NoArgs](reg, tabula.SQLSpec{
+		Name:  "items.shared_join",
+		SQL:   "SELECT l.id AS l_id, r.id AS r_id FROM public.items l JOIN public.items r ON r.id = l.id WHERE l.scope_id = @scope_id",
+		Scope: tabula.ScopeParam("scope_id"),
+	})
+
+	// Verify StatementShape types, ScopeWrap type family, and secret preservation.
+	readShape := qRead.Definition().StatementShapes["sql"]
+	require.Equal(t, []string{"uuid"}, readShape.Inputs[0].AllowedTypes)
+	require.Len(t, readShape.Result, 11)
+	require.Equal(t, "scope_id", readShape.Result[1].Name)
+	require.Equal(t, []string{"uuid"}, readShape.Result[1].AllowedTypes)
+	require.Equal(t, "created_at", readShape.Result[10].Name)
+
+	// Verify embedded list row exposes all embedded fields plus Extra.
+	listShape := qList.Definition().StatementShapes["page"]
+	require.Len(t, listShape.Result, 12)
+	require.Equal(t, "scope_id", listShape.Result[1].Name)
+	require.Equal(t, []string{"uuid"}, listShape.Result[1].AllowedTypes)
+	require.Equal(t, "created_at", listShape.Result[10].Name)
+	require.Equal(t, "extra", listShape.Result[11].Name)
+	require.Equal(t, []string{"uuid"}, qList.Definition().StatementShapes["keyset.scope.after"].Inputs[1].AllowedTypes)
+
+	// Verify prefixed JOIN row exposes 22 distinct columns without cross-field role conflict.
+	require.Len(t, qJoin.Definition().StatementShapes["sql"].Result, 22)
+	require.Equal(t, "l_created_at", qJoin.Definition().StatementShapes["sql"].Result[10].Name)
+	require.Equal(t, "r_created_at", qJoin.Definition().StatementShapes["sql"].Result[21].Name)
+
+	// Verify runtime scan populates every field via ScopeWrap, json, zero, array, and embedded auditCols.
+	now := time.Date(2026, 11, 28, 12, 0, 0, 0, time.UTC)
+	scopeVal := unitWrappedScope{raw: "11111111-1111-1111-1111-111111111111"}
+	sess := &fakeAuthSession[unitWrappedScope]{
+		scope:     scopeVal,
+		authority: reg.SQLAuthority(),
+		eachRows: [][]any{{
+			int64(7),
+			scopeVal.raw,
+			"A-1",
+			"Alpha",
+			3,
+			nil,
+			nil,
+			[]string{"red", "blue"},
+			`{"k":"v"}`,
+			"sec-1",
+			now,
+		}},
+	}
+	sess.proof = key.Sign(sess)
+
+	got, err := qRead.Bind(sess).One(t.Context(), codeArgs{Code: "A-1"})
+	require.NoError(t, err)
+	require.Equal(t, sharedItem{
+		ID:        7,
+		ScopeID:   scopeVal,
+		Code:      "A-1",
+		Name:      "Alpha",
+		Version:   3,
+		DeletedAt: nil,
+		Note:      "",
+		Tags:      []string{"red", "blue"},
+		Meta:      map[string]any{"k": "v"},
+		Token:     "sec-1",
+		auditCols: auditCols{CreatedAt: now},
+	}, got)
+	require.Equal(t, []any{scopeVal.raw, "A-1"}, sess.lastSQL.Args)
+
+	retGot, err := qRet.Bind(sess).One(t.Context(), codeArgs{Code: "A-1"})
+	require.NoError(t, err)
+	require.Equal(t, got, retGot)
+
+	sess.eachRows = [][]any{{
+		int64(7),
+		scopeVal.raw,
+		"A-1",
+		"Alpha",
+		3,
+		now,
+		"hello",
+		[]string{"red"},
+		`{"n":1}`,
+		"sec-2",
+		now,
+		"note-extra",
+	}}
+	listRows, err := qList.Bind(sess).All(t.Context(), tabula.NoArgs{}, tabula.QueryOrder{Sort: "id", Direction: tabula.SortAsc})
+	require.NoError(t, err)
+	require.Len(t, listRows, 1)
+	require.Equal(t, scopeVal, listRows[0].ScopeID)
+	require.NotNil(t, listRows[0].DeletedAt)
+	require.Equal(t, now, *listRows[0].DeletedAt)
+	require.NotNil(t, listRows[0].Extra)
+	require.Equal(t, "note-extra", *listRows[0].Extra)
+
+	// Verify invalid row tag combinations and unknown options are still rejected.
+	type badUnknown struct {
+		ID int64 `db:"id,bogus"`
+	}
+	_, err = tabula.TryDefineSQL[badUnknown, tabula.NoArgs](reg, tabula.SQLSpec{
+		Name: "bad.unknown", SQL: "SELECT id FROM public.items", Scope: tabula.ScopeGlobal(),
+	})
+	require.ErrorContains(t, err, "option bogus is unknown")
+
+	type badDupRole struct {
+		ID int64 `db:"id,key,key"`
+	}
+	_, err = tabula.TryDefineSQL[badDupRole, tabula.NoArgs](reg, tabula.SQLSpec{
+		Name: "bad.dup_role", SQL: "SELECT id FROM public.items", Scope: tabula.ScopeGlobal(),
+	})
+	require.ErrorContains(t, err, "cannot combine with")
+
+	type badTwoRoles struct {
+		ID int64 `db:"id,key,scope"`
+	}
+	_, err = tabula.TryDefineSQL[badTwoRoles, tabula.NoArgs](reg, tabula.SQLSpec{
+		Name: "bad.two_roles", SQL: "SELECT id FROM public.items", Scope: tabula.ScopeGlobal(),
+	})
+	require.ErrorContains(t, err, "cannot combine with")
+
+	type badRoleSecret struct {
+		ID int64 `db:"id,key,secret"`
+	}
+	_, err = tabula.TryDefineSQL[badRoleSecret, tabula.NoArgs](reg, tabula.SQLSpec{
+		Name: "bad.role_secret", SQL: "SELECT id FROM public.items", Scope: tabula.ScopeGlobal(),
+	})
+	require.ErrorContains(t, err, "cannot combine with")
+
+	type badRoleJSON struct {
+		Meta map[string]any `db:"meta,scope,json"`
+	}
+	_, err = tabula.TryDefineSQL[badRoleJSON, tabula.NoArgs](reg, tabula.SQLSpec{
+		Name: "bad.role_json", SQL: "SELECT meta FROM public.items", Scope: tabula.ScopeGlobal(),
+	})
+	require.ErrorContains(t, err, "cannot combine with")
+
+	type badSerialNoKey struct {
+		ID int64 `db:"id,serial"`
+	}
+	_, err = tabula.TryDefineSQL[badSerialNoKey, tabula.NoArgs](reg, tabula.SQLSpec{
+		Name: "bad.serial_no_key", SQL: "SELECT id FROM public.items", Scope: tabula.ScopeGlobal(),
+	})
+	require.ErrorContains(t, err, "serial requires an integer key column")
+
+	type badSerialNonInt struct {
+		ID string `db:"id,key,serial"`
+	}
+	_, err = tabula.TryDefineSQL[badSerialNonInt, tabula.NoArgs](reg, tabula.SQLSpec{
+		Name: "bad.serial_str", SQL: "SELECT id FROM public.items", Scope: tabula.ScopeGlobal(),
+	})
+	require.ErrorContains(t, err, "serial requires an integer key column")
+
+	type badVersionNonInt struct {
+		Ver string `db:"ver,version"`
+	}
+	_, err = tabula.TryDefineSQL[badVersionNonInt, tabula.NoArgs](reg, tabula.SQLSpec{
+		Name: "bad.ver_str", SQL: "SELECT ver FROM public.items", Scope: tabula.ScopeGlobal(),
+	})
+	require.ErrorContains(t, err, "version column must be an integer")
+
+	type badJSONZero struct {
+		Meta string `db:"meta,json,zero"`
+	}
+	_, err = tabula.TryDefineSQL[badJSONZero, tabula.NoArgs](reg, tabula.SQLSpec{
+		Name: "bad.json_zero", SQL: "SELECT meta FROM public.items", Scope: tabula.ScopeGlobal(),
+	})
+	require.ErrorContains(t, err, "cannot combine with zero")
+
+	type badPrefixed struct {
+		Item badUnknown `db:"p_"`
+	}
+	_, err = tabula.TryDefineSQL[badPrefixed, tabula.NoArgs](reg, tabula.SQLSpec{
+		Name: "bad.prefixed", SQL: "SELECT id AS p_id FROM public.items", Scope: tabula.ScopeGlobal(),
+	})
+	require.ErrorContains(t, err, "row column p_id: option bogus is unknown")
+
+	// Verify compileSQLArgs still strictly rejects every table lifecycle option.
+	type simpleRow struct {
+		ID int64 `db:"id"`
+	}
+	for _, tc := range []struct {
+		name string
+		fn   func() error
+	}{
+		{"key", func() error {
+			type a struct {
+				ID int64 `db:"id,key"`
+			}
+			_, err := tabula.TryDefineSQL[simpleRow, a](reg, tabula.SQLSpec{Name: "arg.key", SQL: "SELECT id FROM public.items WHERE id = @id", Scope: tabula.ScopeGlobal()})
+			return err
+		}},
+		{"scope", func() error {
+			type a struct {
+				ID int64 `db:"id,scope"`
+			}
+			_, err := tabula.TryDefineSQL[simpleRow, a](reg, tabula.SQLSpec{Name: "arg.scope", SQL: "SELECT id FROM public.items WHERE id = @id", Scope: tabula.ScopeGlobal()})
+			return err
+		}},
+		{"deleted", func() error {
+			type a struct {
+				ID int64 `db:"id,deleted"`
+			}
+			_, err := tabula.TryDefineSQL[simpleRow, a](reg, tabula.SQLSpec{Name: "arg.deleted", SQL: "SELECT id FROM public.items WHERE id = @id", Scope: tabula.ScopeGlobal()})
+			return err
+		}},
+		{"version", func() error {
+			type a struct {
+				ID int64 `db:"id,version"`
+			}
+			_, err := tabula.TryDefineSQL[simpleRow, a](reg, tabula.SQLSpec{Name: "arg.version", SQL: "SELECT id FROM public.items WHERE id = @id", Scope: tabula.ScopeGlobal()})
+			return err
+		}},
+		{"once", func() error {
+			type a struct {
+				ID int64 `db:"id,once"`
+			}
+			_, err := tabula.TryDefineSQL[simpleRow, a](reg, tabula.SQLSpec{Name: "arg.once", SQL: "SELECT id FROM public.items WHERE id = @id", Scope: tabula.ScopeGlobal()})
+			return err
+		}},
+		{"serial", func() error {
+			type a struct {
+				ID int64 `db:"id,serial"`
+			}
+			_, err := tabula.TryDefineSQL[simpleRow, a](reg, tabula.SQLSpec{Name: "arg.serial", SQL: "SELECT id FROM public.items WHERE id = @id", Scope: tabula.ScopeGlobal()})
+			return err
+		}},
+	} {
+		t.Run("args_rejects_"+tc.name, func(t *testing.T) {
+			err := tc.fn()
+			require.ErrorContains(t, err, `unsupported option "`+tc.name+`"`)
+		})
+	}
 }
 
 func FuzzDefineSQL(f *testing.F) {

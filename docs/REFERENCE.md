@@ -1620,7 +1620,11 @@ type SQLSpec struct {
 }
     SQLSpec declares a named-parameter SQL statement compiled against a
     Registry. Parameters use @name placeholders bound from fields of Args with
-    matching `db:"name[,json|zero|array|secret]"` tags.
+    matching `db:"name[,json|zero|array|secret]"` tags. Result Row structs
+    (directly or via anonymous struct embedding) also accept table lifecycle
+    options (`key`, `scope`, `deleted`, `version`, `once`, `serial`) as
+    read-scan no-ops so table structs declared for Define can be shared directly
+    with DefineSQL*.
 
 type ScalarAggregates struct {
 	Max, Min, Sum, Avg []string

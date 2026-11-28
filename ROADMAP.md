@@ -56,7 +56,7 @@ Items keep the red lines in [docs/DESIGN.md](docs/DESIGN.md).
 - **Table-level grant granularity**: `GranularityTable` across `ReadCatalog`, `CheckGrantManifest`,
   `MinimizeGrants`, `cmd/tabula --granularity=table`, and `ReadinessNeeds.TableSelect/Insert/Update/Delete`.
 
-## v0.6 — released (`v0.6.0`)
+## v0.6 — released (`v0.6.0`–`v0.6.1`)
 
 - **API surface convergence (`github.com/0xJean/tabula/plan`)**: extract the Typed Plan AST
   and scalar/aggregate/window expression DSL into a dedicated stdlib-only core subpackage

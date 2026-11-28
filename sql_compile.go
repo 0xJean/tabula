@@ -17,7 +17,10 @@ type NoArgs struct{}
 
 // SQLSpec declares a named-parameter SQL statement compiled against a Registry.
 // Parameters use @name placeholders bound from fields of Args with matching
-// `db:"name[,json|zero|array|secret]"` tags.
+// `db:"name[,json|zero|array|secret]"` tags. Result Row structs (directly or
+// via anonymous struct embedding) also accept table lifecycle options
+// (`key`, `scope`, `deleted`, `version`, `once`, `serial`) as read-scan no-ops
+// so table structs declared for Define can be shared directly with DefineSQL*.
 type SQLSpec struct {
 	// Name uniquely identifies this statement in the Registry and snapshots.
 	Name string
@@ -76,28 +79,24 @@ func compileSQLRow[Row, S any](r *Registry[S], name string, fail func(string, ..
 	v := &View[Row, S]{descriptor: newDescriptor[Row](r, name)}
 	var result []ShapeField
 	if err := walkFields(rt, nil, "", v.isNestedStruct, func(f reflect.StructField, idx []int, prefix, tag string) error {
-		parts := strings.Split(tag, ",")
-		rawName := parts[0]
-		if rawName == "" {
-			return fail("row field %s: db tag has no column name", f.Name)
-		}
-		colName := prefix + rawName
-		options := map[string]bool{}
-		for _, opt := range parts[1:] {
-			switch opt {
-			case "json", "zero", "array", "secret":
-				options[opt] = true
-			default:
-				return fail("row column %s: unsupported option %q", colName, opt)
+		parsed, err := parseColumnTag(tag)
+		if err != nil {
+			if strings.HasPrefix(err.Error(), "db tag") {
+				return fail("row field %s: %s", f.Name, err.Error())
 			}
+			rawName, _, _ := strings.Cut(tag, ",")
+			if prefix != "" {
+				return fail("row column %s: %s", prefix+rawName, strings.TrimPrefix(err.Error(), "column "+rawName+": "))
+			}
+			return fail("row %s", err.Error())
 		}
-		switch {
-		case options["json"] && options["zero"]:
-			return fail("row column %s: option json cannot combine with zero", colName)
-		case options["array"] && options["json"]:
-			return fail("row column %s: option array cannot combine with json", colName)
-		case options["array"] && options["zero"]:
-			return fail("row column %s: option array cannot combine with zero", colName)
+		colName := prefix + parsed.name
+		options := parsed.options
+		if options["serial"] && (parsed.role != keyRole || !integer(f.Type)) {
+			return fail("row column %s: serial requires an integer key column", colName)
+		}
+		if parsed.role == versionRole && !integer(f.Type) {
+			return fail("row column %s: version column must be an integer", colName)
 		}
 		wrap, err := r.resolve(f.Type, options["json"], options["zero"], options["array"])
 		if err != nil {
