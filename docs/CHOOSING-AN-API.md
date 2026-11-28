@@ -34,6 +34,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/0xJean/tabula"
 	"github.com/0xJean/tabula/pgxdriver"
@@ -87,8 +88,16 @@ func NewRunner(pool *pgxpool.Pool, role string) (*pgxdriver.Runner[ScopeID], err
 }
 
 func VerifyAtStartup(ctx context.Context, pool *pgxpool.Pool, role string) error {
-	// Verify all registered statements against PostgreSQL without executing writes.
-	return sqlcheck.VerifyStatementsUsing(ctx, pgxdriver.SQLVerifier(pool), role, Registry.Defined(), Registry.DefinedViews())
+	// Verify all registered table and DefineSQL* statements against PostgreSQL without executing writes.
+	defs := append(Registry.Defined(), sqlcheck.ViewsToDefinitions(Registry.DefinedViews())...)
+	findings, err := sqlcheck.VerifyStatementsUsing(ctx, pgxdriver.SQLVerifier(pool), defs, role)
+	if err != nil {
+		return err
+	}
+	if len(findings) > 0 {
+		return fmt.Errorf("sqlcheck: %s", strings.Join(findings, "; "))
+	}
+	return nil
 }
 ```
 

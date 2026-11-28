@@ -9,7 +9,7 @@ matching sources, modifying common tables, returned rows and finite batches.
 
 ## Named-parameter SQL with struct scanning
 
-Register explicit PostgreSQL statements using `@name` placeholders and typed `[Row, Args]` structs. These declarations share the same `Registry`, `SQLAuthority` (`DenyLegacySQL`), `SessionGuard`, observability redaction (`db:",secret"`), and `sqlcheck` verification chain as typed plans while keeping boilerplate minimal.
+Register explicit PostgreSQL statements using `@name` placeholders and typed `[Row, Args]` structs. These declarations share the same `Registry`, `SQLAuthority` (`DenyLegacySQL`), `SessionGuard`, observability redaction (`db:",secret"`), and `sqlcheck` verification chain as typed plans while keeping boilerplate minimal. Result `Row` structs (directly or via anonymous struct embedding) may also reuse table structs declared for `Define`: table lifecycle tag options (`key`, `scope`, `deleted`, `version`, `once`, `serial`) are validated with the same rules as `Define` and treated as read-scan no-ops, while `Args` accepts only `json`, `zero`, `array` and `secret`.
 
 ```go
 type GroupID int64
