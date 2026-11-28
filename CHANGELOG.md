@@ -3,6 +3,11 @@
 All notable changes are listed here. The project follows semantic versioning; before
 v1.0 a minor version may contain breaking changes.
 
+## v0.6.1 — 2026-11-28
+
+- Allow `DefineSQL`, `DefineSQLReturning` and `DefineSQLList` result `Row` structs (directly, via multi-level or unexported anonymous struct embedding, or under prefixed nested structs) to share table descriptors' `db` lifecycle options (`key`, `scope`, `deleted`, `version`, `once`, `serial`) as read-scan no-ops. Validation matches `Table` (`parseColumnTag`: duplicate roles, incompatible option combinations, unknown options, non-integer `version`, and non-key or non-integer `serial` remain rejected), while `Args` parameter structs continue to allow only `json`, `zero`, `array` and `secret`. Verified with custom `ScopeWrap` + `TypeFamilies` scope structs across `stdsql`, `pgxdriver` and `sqlcheck.VerifyStatementsUsing`.
+- Fix the `VerifyAtStartup` starter example in [Choosing an API](docs/CHOOSING-AN-API.md) to match `sqlcheck.VerifyStatementsUsing(ctx, verifier, defs, role)` over combined table and `DefineSQL*` view definitions, and cover the starter snippet with compile and PostgreSQL runtime integration tests.
+
 ## v0.6.0 — 2026-11-27
 
 - **Breaking (pre-v1.0 API convergence)**: Extract the Typed Plan AST and scalar/aggregate/window/write expression DSL from root `package tabula` into a dedicated stdlib-only core subpackage `github.com/0xJean/tabula/plan` (`package plan`). Root `package tabula` retains `Registry`, `Table` CRUD, `View`, `DefineSQL*`, `SQLAuthority`, `SessionGuard`, `PGType`/`CatalogType`/`Varchar`/`ArrayOf`/`ArrayOfNullable`/`TypeDefault`/`TypeMapping`, `RelationScope`, `StatementShape` metadata, errors, retry, logging and telemetry interfaces—reducing root `tabula`'s exported function surface by roughly two-thirds while preserving unforgeable `SQLAuthority` verification through an internal sealed bridge with zero global state. [Migration guide](docs/MIGRATION.md#from-v05-to-v06)

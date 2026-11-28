@@ -25,9 +25,9 @@ Start with the lightest tier that fits the query. All three share one `*tabula.R
 
 See [Choosing an API](docs/CHOOSING-AN-API.md) for a one-page task matrix and copy-pasteable starter binding, [Integration guide](docs/INTEGRATION.md) for every task and CLI command, [Authorization & sqlcheck](docs/AUTHORIZATION.md) for role-bound verification and table- or column-level grant auditing, [Migration guide](docs/MIGRATION.md) for upgrades, [Changelog](CHANGELOG.md) for release history, and [Go API & CLI reference](docs/REFERENCE.md) for the exact revision reference.
 
-## Install v0.6.0
+## Install v0.6.1
 
-Run `go get github.com/0xJean/tabula@v0.6.0` in your application module with Go 1.26 or later. For the native driver and telemetry modules, use the matching version with `go get github.com/0xJean/tabula/pgxdriver@v0.6.0` and/or `go get github.com/0xJean/tabula/oteltabula@v0.6.0`.
+Run `go get github.com/0xJean/tabula@v0.6.1` in your application module with Go 1.26 or later. For the native driver and telemetry modules, use the matching version with `go get github.com/0xJean/tabula/pgxdriver@v0.6.1` and/or `go get github.com/0xJean/tabula/oteltabula@v0.6.1`.
 
 ## Read a row by primary key
 
